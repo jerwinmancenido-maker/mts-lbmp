@@ -1,0 +1,16 @@
+{
+  "phase": "Phase 4 - Receive",
+  "screen": "Receive > New",
+  "device": "NB80 APK WebView",
+  "timestamp": "2026-07-04T05:10:00+08:00",
+  "result": "pass",
+  "checks": {
+    "receiveItemsVisible": true,
+    "photoNoPhotoVisible": true,
+    "oldDrPhotoMissingVisible": false,
+    "productBarcodeFieldVisible": false,
+    "note": "The visible product field copy is now compact and says the side scanner fills the same product/SKU/barcode field."
+  },
+  "screenshot": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/033-phase4-receive-new-after-dr-photo-label.png",
+  "nextAction": "Continue Phase 4 Receive checks in order."
+}

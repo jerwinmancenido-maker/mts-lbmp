@@ -1,0 +1,51 @@
+{
+  "createdAt": "2026-07-03T21:00:35.178Z",
+  "findings": [
+    {
+      "step": "Open app as admin on NB80",
+      "status": "pass",
+      "url": "http://127.0.0.1:3000/app?demo=admin"
+    },
+    {
+      "step": "Open Receive landing",
+      "status": "pass",
+      "text": "‹\nLBMP\nSystem Admin • Receive • All branches\nSynced 5:00 AM\n\nRECEIVING COUNTER\n\nWhat do you want to do?\n\nChoose one clear task. Records contains saved receiving, drafts, cancelled drafts, edits, DR photos, and audit trail.\n\nNew\nReceive items\nRecords\nSaved, drafts, audit\nIntake Tasks\n0 wall QR\nCompanies\nList or add\nProducts\nList or add",
+      "screenshot": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/027-phase4-receive-landing.png"
+    },
+    {
+      "step": "Open New Receiving",
+      "status": "fail",
+      "text": "‹\nLBMP\nSystem Admin • Receive • All branches\nSynced 5:00 AM\n\nRECEIVING COUNTER\n\nWhat do you want to do?\n\nChoose one clear task. Records contains saved receiving, drafts, cancelled drafts, edits, DR photos, and audit trail.\n\nNew\nReceive items\nRecords\nSaved, drafts, audit\nIntake Tasks\n0 wall QR\nCompanies\nList or add\nProducts\nList or add",
+      "screenshot": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/028-phase4-receive-new.png"
+    },
+    {
+      "step": "Branch field present",
+      "status": "fail"
+    },
+    {
+      "step": "Customer autocomplete input",
+      "status": "fail",
+      "reason": "Input not found by placeholder."
+    },
+    {
+      "step": "Drop-off person input",
+      "status": "fail"
+    },
+    {
+      "step": "Receiver input",
+      "status": "fail"
+    },
+    {
+      "step": "Product input",
+      "status": "fail"
+    },
+    {
+      "step": "Add Item button present",
+      "status": "fail"
+    },
+    {
+      "step": "Save button present",
+      "status": "fail"
+    }
+  ]
+}

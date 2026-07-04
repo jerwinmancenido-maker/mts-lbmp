@@ -1,0 +1,165 @@
+{
+  "createdAt": "2026-07-03T21:02:53.241Z",
+  "findings": [
+    {
+      "step": "Open New Receiving via Home > Receive > New",
+      "status": "pass",
+      "screenshot": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/031-phase4-new-receiving-open.png",
+      "text": "‹\nLBMP\nSystem Admin • Receive • All branches\nSynced 5:02 AM\nReceive Items\nBack\nRecords\nSave Draft\n\nNew receiving started.\n\nBranch\nSelect branch\nDaet\nNaga\nDR Number\nDR Photo\nMissing\nAdd\nRead\nItems\n0\nCustomer\n\nNo customer yet\n\nHide\nDelivery Area\nArea / Address Summary\nAddress Details\nPeople\n\nNo drop-off / No receiver\n\nHide\nDrop-off Person\nReceiver / Consignee\nDelivery Type\nDeliver to consignee\nCustomer pickup at branch\nHold at branch\nReturn cargo\nAdd Item\n\nType the product, SKU, or barcode. The side scanner fills this same field.\n\nHide\nProduct / SKU / Barcode\nQty\nUnit\npcs\npackage\nbundle\nsack\nbox\nroll\nlength\nkg\nset\ncustom\nCondition\nGood\nDamaged\nWet\nIncomplete\nFor Checking\nOther\nUnit Price\nAdd Weight / Size\nItem Image\nAdd Item\nClear\nItems Added\n\nItems are auto-saved after they are added.\n\n0 items\nPayment at Receiving\n\nOperational collection only. Default is unpaid.\n\nDue PHP 0.00\nUnpaid\n\nNew receiving started.\n\nAdd Item First\nNo DR number - 0 items - 1 receipt"
+    },
+    {
+      "step": "Redundant labels check",
+      "status": "check",
+      "matched": [
+        "/DR Photo\\s+Missing/i"
+      ]
+    },
+    {
+      "step": "Input inventory",
+      "status": "pass",
+      "inputInfo": [
+        {
+          "i": 0,
+          "tag": "INPUT",
+          "placeholder": "Search packages, trips, payments...",
+          "value": "",
+          "label": null,
+          "type": null
+        },
+        {
+          "i": 1,
+          "tag": "SELECT",
+          "placeholder": null,
+          "value": "",
+          "label": null,
+          "type": null
+        },
+        {
+          "i": 2,
+          "tag": "INPUT",
+          "placeholder": "DR number",
+          "value": "",
+          "label": null,
+          "type": null
+        },
+        {
+          "i": 3,
+          "tag": "INPUT",
+          "placeholder": null,
+          "value": "",
+          "label": null,
+          "type": "file"
+        },
+        {
+          "i": 4,
+          "tag": "INPUT",
+          "placeholder": null,
+          "value": "",
+          "label": null,
+          "type": "file"
+        },
+        {
+          "i": 5,
+          "tag": "INPUT",
+          "placeholder": "Type customer name",
+          "value": "",
+          "label": null,
+          "type": null
+        },
+        {
+          "i": 6,
+          "tag": "INPUT",
+          "placeholder": "Example: Legazpi City, Albay",
+          "value": "",
+          "label": null,
+          "type": null
+        },
+        {
+          "i": 7,
+          "tag": "INPUT",
+          "placeholder": "Type drop-off name",
+          "value": "",
+          "label": null,
+          "type": null
+        },
+        {
+          "i": 8,
+          "tag": "INPUT",
+          "placeholder": "Type receiver name",
+          "value": "",
+          "label": null,
+          "type": null
+        },
+        {
+          "i": 9,
+          "tag": "SELECT",
+          "placeholder": null,
+          "value": "Deliver to consignee",
+          "label": null,
+          "type": null
+        },
+        {
+          "i": 10,
+          "tag": "INPUT",
+          "placeholder": "Type product, SKU, or scan barcode",
+          "value": "",
+          "label": null,
+          "type": null
+        },
+        {
+          "i": 11,
+          "tag": "INPUT",
+          "placeholder": null,
+          "value": "1",
+          "label": null,
+          "type": null
+        },
+        {
+          "i": 12,
+          "tag": "SELECT",
+          "placeholder": null,
+          "value": "pcs",
+          "label": null,
+          "type": null
+        },
+        {
+          "i": 13,
+          "tag": "SELECT",
+          "placeholder": null,
+          "value": "Good",
+          "label": null,
+          "type": null
+        },
+        {
+          "i": 14,
+          "tag": "INPUT",
+          "placeholder": "Auto if history exists",
+          "value": "",
+          "label": null,
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "step": "Customer autocomplete",
+      "status": "pass",
+      "snippet": "‹\nLBMP\nSystem Admin • Receive • All branches\nSynced 5:02 AM\nReceive Items\nBack\nRecords\nSave Draft\n\nNew receiving started.\n\nBranch\nSelect branch\nDaet\nNaga\nDR Number\nDR Photo\nMissing\nAdd\nRead\nItems\n0\nCustomer\n\nQA-CUSTOMER-001\n\nHide\nQA-CUSTOMER-001 Retail Group\nActive\nDelivery Area\nArea / Address Summary\nAddress Details\nPeople\n\nNo drop-off / No receiver\n\nHide\nDrop-off Person\nReceiver / Consignee\nDelivery Type\nDeliver to consignee\nCustomer pickup at branch\nHold at branch\nReturn cargo\nAdd Item\n\nType the product, SKU, or barcode. The side scanner fills this same field.\n\nHide\nProduct / SKU / Barcode\nQty\nUnit\npcs\npackage\nbundle\nsack\nbox\nroll\nlength\nkg\nset\ncustom\nCondition\nGood\nDamaged\nWet\nIncomplete\nFor Checking\nOther\nUnit Price\nAdd Weight / Size\nItem Image\nAdd Item\nClear\nItems Added\n\nItems are auto-saved after they are added.\n\n0 items\nPayment at Receiving\n\nOperational collection only. Default is unpaid.\n\nDue PHP 0.00\nUnpaid\n\nNew receiving started.\n\nAdd Item First\nNo DR number - 0 items - 1 receipt"
+    },
+    {
+      "step": "Receiver autocomplete",
+      "status": "pass",
+      "snippet": "‹\nLBMP\nSystem Admin • Receive • All branches\nSynced 5:02 AM\nReceive Items\nBack\nRecords\nSave Draft\n\nNew receiving started.\n\nBranch\nSelect branch\nDaet\nNaga\nDR Number\nDR Photo\nMissing\nAdd\nRead\nItems\n0\nCustomer\n\nQA-CUSTOMER-001\n\nHide\nQA-CUSTOMER-001 Retail Group\nActive\nDelivery Area\nArea / Address Summary\nAddress Details\nPeople\n\nNo drop-off / Branch\n\nHide\nDrop-off Person\nReceiver / Consignee\n\nNo saved receiver found. Add this receiver below.\n\nDelivery Type\nDeliver to consignee\nCustomer pickup at branch\nHold at branch\nReturn cargo\nAdd Item\n\nType the product, SKU, or barcode. The side scanner fills this same field.\n\nHide\nProduct / SKU / Barcode\nQty\nUnit\npcs\npackage\nbundle\nsack\nbox\nroll\nlength\nkg\nset\ncustom\nCondition\nGood\nDamaged\nWet\nIncomplete\nFor Checking\nOther\nUnit Price\nAdd Weight / Size\nItem Image\nAdd Item\nClear\nItems Added\n\nItems are auto-saved after they are added.\n\n0 items\nPayment at Receiving\n\nOperational collection only. Default is unpaid.\n\nDue PHP 0.00\nUnpaid\n\nNew receiving started.\n\nAdd Item First\nNo DR number - 0 items - 1 receipt"
+    },
+    {
+      "step": "Product autocomplete from product/barcode field",
+      "status": "pass",
+      "screenshot": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/032-phase4-product-field-after-type.png",
+      "snippet": "‹\nLBMP\nSystem Admin • Receive • All branches\nSynced 5:02 AM\nReceive Items\nBack\nRecords\nSave Draft\n\nNew receiving started.\n\nBranch\nSelect branch\nDaet\nNaga\nDR Number\nDR Photo\nMissing\nAdd\nRead\nItems\n0\nCustomer\n\nQA-CUSTOMER-001\n\nHide\nQA-CUSTOMER-001 Retail Group\nActive\nDelivery Area\nArea / Address Summary\nAddress Details\nPeople\n\nNo drop-off / Branch\n\nHide\nDrop-off Person\nReceiver / Consignee\n\nNo saved receiver found. Add this receiver below.\n\nDelivery Type\nDeliver to consignee\nCustomer pickup at branch\nHold at branch\nReturn cargo\nAdd Item\n\nType the product, SKU, or barcode. The side scanner fills this same field.\n\nHide\nProduct / SKU / Barcode\nQA-ITEM-001 Flat bar\nQA-BARCODE-0001 / QA Brand 1 / Hardware / length / PHP 1,351.00\nQty\nUnit\npcs\npackage\nbundle\nsack\nbox\nroll\nlength\nkg\nset\ncustom\nCondition\nGood\nDamaged\nWet\nIncomplete\nFor Checking\nOther\nUnit Price\nAdd Weight / Size\nItem Image\nAdd Item\nClear\nItems Added\n\nItems are auto-saved after they are added.\n\n0 items\nPayment at Receiving\n\nOperational collection only. Default is unpaid.\n\nDue PHP 0.00\nUnpaid\n\nNew receiving started.\n\nAdd Item First\nNo DR number - 0 items - 1 receipt"
+    },
+    {
+      "step": "No redundant Scan button in Add Item",
+      "status": "pass",
+      "scanButtonCount": 0
+    }
+  ]
+}

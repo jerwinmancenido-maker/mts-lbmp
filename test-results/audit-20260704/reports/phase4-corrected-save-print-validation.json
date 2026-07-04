@@ -1,0 +1,21 @@
+{
+  "phase": "Phase 4 - Receive",
+  "screen": "Receive > New > Add Item > Save > Print",
+  "device": "NB80 APK WebView",
+  "timestamp": "2026-07-04T05:26:00+08:00",
+  "result": "pass",
+  "checks": {
+    "typedProductDoesNotCountBeforeAddItem": true,
+    "saveDisabledBeforeVisibleItem": true,
+    "itemAppearsAfterAddItem": true,
+    "saveEnabledAfterVisibleItem": true,
+    "reviewScreenOpened": true,
+    "officialReceivingNumberGenerated": true,
+    "printReceiptVisibleAfterSave": true,
+    "paperChoiceVisible": true,
+    "serverErrorShown": false
+  },
+  "recordNumber": "RR-2026-07-000626",
+  "screenshot": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/038-phase4-corrected-save-print-visible-nb80.png",
+  "nextAction": "Write Receive staff manual chapter, then continue Phase 5 Print audit."
+}

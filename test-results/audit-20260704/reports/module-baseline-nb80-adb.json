@@ -1,0 +1,86 @@
+[
+  {
+    "id": "dashboard",
+    "label": "Dashboard",
+    "file": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/002-dashboard-nb80-adb.png",
+    "text": "‹ LBMP System Admin • Dashboard • All branches Synced 4:21 AM Cargo Waiting 0 Without Price 0 Customer Pending 0 Active Trips 0 Delivered 0 Failed Delivery 0 Payments PHP 23,330,113 Expenses Review 128 Est. Profit PHP 4,056,893 Cargo Waiting No records found for this tile. Notification Center Expens",
+    "ok": true
+  },
+  {
+    "id": "receiving",
+    "label": "Receive",
+    "file": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/003-receive-nb80-adb.png",
+    "text": "‹ LBMP System Admin • Receive • All branches Synced 4:21 AM RECEIVING COUNTER What do you want to do? Choose one clear task. Records contains saved receiving, drafts, cancelled drafts, edits, DR photos, and audit trail. New Receive items Records Saved, drafts, audit Intake Tasks 0 wall QR Companies ",
+    "ok": true
+  },
+  {
+    "id": "packages",
+    "label": "Cargo",
+    "file": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/004-cargo-nb80-adb.png",
+    "text": "‹ LBMP System Admin • Cargo • All branches Synced 4:21 AM CARGO What do you want to do? Find cargo, fix missing details, view movement, and print documents. Action Needed Price, size, issues 2 Waiting Ready for loading 248 Moving Loaded or transit Delivery Arrived / ready Issues Failed or exception ",
+    "ok": true
+  },
+  {
+    "id": "trips",
+    "label": "Trips",
+    "file": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/005-trips-nb80-adb.png",
+    "text": "‹ LBMP System Admin • Trips • All branches Synced 4:21 AM TRIPS What do you want to do? Create a trip, open the trip list, or manage saved trucks. Create Trip Start truck movement 237 Trip List 237 active / 250 total 28 Trucks 28 saved trucks",
+    "ok": true
+  },
+  {
+    "id": "delivery",
+    "label": "Deliver",
+    "file": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/006-deliver-nb80-adb.png",
+    "text": "‹ LBMP System Admin • Deliver • All branches Synced 4:21 AM DELIVERY What do you want to do? Verify arrived cargo, deliver to receiver, collect payment, or handle failed delivery. Verify Arrived 0 to verify 47 Deliver 47 ready 110 Collect 110 unpaid 63 Failed / Return 63 issue",
+    "ok": true
+  },
+  {
+    "id": "payments",
+    "label": "Payments",
+    "file": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/007-payments-nb80-adb.png",
+    "text": "‹ LBMP System Admin • Payments • All branches Syncing PAYMENTS What do you want to do? Record collections, check unpaid packages, review payment history, or prepare billing follow-up. Record Payment Collect money 153 Unpaid 153 packages 500 History 500 records Billing Invoices / reminders",
+    "ok": true
+  },
+  {
+    "id": "expenses",
+    "label": "Expenses",
+    "file": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/008-expenses-nb80-adb.png",
+    "text": "‹ LBMP System Admin • Expenses • All branches Synced 4:21 AM EXPENSES What do you want to do? Submit operating expenses, review submitted records, or check expense categories. Add Expense Submit receipt 250 Submitted 250 records 84 Needs Review 84 submitted 12 Categories 12 saved",
+    "ok": true
+  },
+  {
+    "id": "customer",
+    "label": "Customers",
+    "file": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/009-customers-nb80-adb.png",
+    "text": "‹ LBMP System Admin • Customers • All branches Syncing CUSTOMERS What do you want to do? Open customer accounts, check balances, prepare billing, or send shipment messages. 81 Customer List 81 customers Add Customer Use Receive / Companies Billing 0 pending Messages Shipment message",
+    "ok": true
+  },
+  {
+    "id": "chat",
+    "label": "Chat",
+    "file": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/010-chat-nb80-adb.png",
+    "text": "‹ LBMP System Admin • Chat • All branches Synced 4:22 AM OPERATIONS CHAT What do you want to do? Coordinate with staff, send prices for approval, and keep a short audit trail of decisions. Global Chat 2 messages Approvals 0 price requests Request Price 0 without price 2 All Threads 2 conversations",
+    "ok": true
+  },
+  {
+    "id": "admin",
+    "label": "Admin",
+    "file": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/011-admin-nb80-adb.png",
+    "text": "‹ LBMP System Admin • Admin • All branches Synced 4:22 AM ADMIN What do you want to do? Open admin actions or review the audit trail. User and branch setup remains in Settings. Admin Actions Delete / restore 250 Audit Trail 250 logs Users Use Settings Branches Use Settings",
+    "ok": true
+  },
+  {
+    "id": "settings",
+    "label": "Settings",
+    "file": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/012-settings-nb80-adb.png",
+    "text": "‹ LBMP System Admin • Settings • All branches Syncing SETTINGS What do you want to do? Manage company setup, branches, staff access, payment methods, and expense categories. Company Profile details 3 Branches 3 branches 10 Staff 10 users 7 Payments 7 methods 12 Expenses 12 categories",
+    "ok": true
+  },
+  {
+    "id": "hardware",
+    "label": "Device",
+    "file": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/013-device-nb80-adb.png",
+    "text": "‹ LBMP System Admin • Device • All branches Synced 4:22 AM DEVICE What do you want to do? Test the NB80 scanner, printer layout, and offline behavior before live operation. Device Setup Scanner / printer / offline 85 Test History 85 records Scanner Not Tested Printer Not Tested Image Attach Not Test",
+    "ok": true
+  }
+]

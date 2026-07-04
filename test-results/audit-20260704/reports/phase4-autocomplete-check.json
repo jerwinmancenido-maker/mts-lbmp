@@ -1,0 +1,18 @@
+{
+  "phase": "Phase 4 - Receive",
+  "screen": "Receive > New",
+  "device": "NB80 APK WebView",
+  "timestamp": "2026-07-04T05:12:00+08:00",
+  "result": "pass_with_observation",
+  "checks": {
+    "customerAutocompleteResponds": true,
+    "dropOffAutocompleteResponds": true,
+    "receiverAutocompleteResponds": true,
+    "productSkuBarcodeUnifiedField": true,
+    "onscreenScanButtonRemoved": true,
+    "productLookupBySkuWorks": true
+  },
+  "observation": "Drop-off and receiver fields can show no saved contact when the typed person is not in historical contact data.",
+  "screenshot": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/034-phase4-autocomplete-current-nb80.png",
+  "nextAction": "Continue with add item, save receiving, print availability, and record reprint."
+}

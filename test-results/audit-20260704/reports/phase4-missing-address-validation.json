@@ -1,0 +1,16 @@
+{
+  "phase": "Phase 4 - Receive",
+  "screen": "Receive > New > Save Receiving",
+  "device": "NB80 APK WebView",
+  "timestamp": "2026-07-04T05:18:00+08:00",
+  "result": "pass",
+  "checks": {
+    "friendlyValidationShown": true,
+    "serverErrorPrevented": true,
+    "confirmationScreenPrevented": true,
+    "blackboxIssueLogged": true
+  },
+  "message": "Delivery address is required before saving. Type the delivery area, then add the item again.",
+  "screenshot": "/Users/jerwinmancenido/mts-lbmp/test-results/audit-20260704/screenshots/nb80/035-phase4-missing-address-validation-nb80.png",
+  "nextAction": "Validate save path with address and print availability."
+}

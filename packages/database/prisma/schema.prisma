@@ -1,0 +1,343 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String    @id @default(cuid())
+  name           String
+  email          String    @unique
+  phone          String?
+  passwordHash   String
+  status         String    @default("Active")
+  roleId         String?
+  role           Role?     @relation(fields: [roleId], references: [id])
+  customerId     String?
+  customer       Customer? @relation(fields: [customerId], references: [id])
+  lastLoginAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+  auditLogs      AuditLog[]
+  notifications  Notification[]
+  messages       Message[]
+}
+
+model Role {
+  id              String           @id @default(cuid())
+  name            String           @unique
+  description     String?
+  isSystemDefault Boolean          @default(false)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  users           User[]
+  permissions     RolePermission[]
+}
+
+model Permission {
+  id          String           @id @default(cuid())
+  key         String           @unique
+  module      String
+  action      String
+  description String?
+  roles       RolePermission[]
+}
+
+model RolePermission {
+  id           String     @id @default(cuid())
+  roleId       String
+  permissionId String
+  allowed      Boolean    @default(true)
+  role         Role       @relation(fields: [roleId], references: [id])
+  permission   Permission @relation(fields: [permissionId], references: [id])
+
+  @@unique([roleId, permissionId])
+}
+
+model Branch {
+  id           String     @id @default(cuid())
+  name         String
+  code         String     @unique
+  address      String?
+  canReceive   Boolean    @default(false)
+  canDispatch  Boolean    @default(false)
+  canDeliver   Boolean    @default(false)
+  canReturn    Boolean    @default(false)
+  canStage     Boolean    @default(false)
+  status       String     @default("Active")
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+model Customer {
+  id              String            @id @default(cuid())
+  businessName    String
+  contactPerson   String?
+  phone           String?
+  email           String?
+  address         String?
+  billingTerm     String            @default("Custom")
+  status          String            @default("Active")
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  deletedAt       DateTime?
+  users           User[]
+  senders         Sender[]
+  consignees      Consignee[]
+  itemDescriptions ItemDescription[]
+  receivingRecords ReceivingRecord[]
+}
+
+model Sender {
+  id         String   @id @default(cuid())
+  customerId String
+  name       String
+  phone      String?
+  address    String?
+  customer   Customer @relation(fields: [customerId], references: [id])
+}
+
+model Consignee {
+  id         String   @id @default(cuid())
+  customerId String
+  name       String
+  phone      String?
+  address    String?
+  customer   Customer @relation(fields: [customerId], references: [id])
+}
+
+model ItemDescription {
+  id              String       @id @default(cuid())
+  customerId      String
+  description     String
+  category        String?
+  barcode         String?
+  lastPrice       Decimal?     @db.Decimal(12, 2)
+  isFavorite      Boolean      @default(false)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  customer        Customer     @relation(fields: [customerId], references: [id])
+  pricingHistory  PricingHistory[]
+
+  @@index([barcode])
+  @@index([description])
+}
+
+model PricingHistory {
+  id                String          @id @default(cuid())
+  itemDescriptionId String
+  routeKey          String?
+  price             Decimal         @db.Decimal(12, 2)
+  reason            String?
+  changedById       String?
+  createdAt         DateTime        @default(now())
+  itemDescription   ItemDescription @relation(fields: [itemDescriptionId], references: [id])
+}
+
+model ReceivingRecord {
+  id                  String         @id @default(cuid())
+  recordNumber        String         @unique
+  customerId          String
+  senderId            String?
+  consigneeId         String?
+  customerDrNumber    String?
+  customerDrPhotoUrl  String?
+  originBranchId      String?
+  destination         String?
+  status              String         @default("Received")
+  receivedById        String?
+  receivedAt          DateTime       @default(now())
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+  deletedAt           DateTime?
+  customer            Customer       @relation(fields: [customerId], references: [id])
+  packages            CargoPackage[]
+}
+
+model CargoPackage {
+  id                  String           @id @default(cuid())
+  packageNumber       String           @unique
+  receivingRecordId   String
+  itemDescriptionId   String?
+  description         String
+  destination         String
+  condition           String           @default("Good")
+  conditionNotes      String?
+  weight              Decimal?         @db.Decimal(12, 3)
+  length              Decimal?         @db.Decimal(12, 3)
+  width               Decimal?         @db.Decimal(12, 3)
+  height              Decimal?         @db.Decimal(12, 3)
+  price               Decimal?         @db.Decimal(12, 2)
+  priceChangeReason   String?
+  qrValue             String           @unique
+  status              String           @default("Received")
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  deletedAt           DateTime?
+  receivingRecord     ReceivingRecord  @relation(fields: [receivingRecordId], references: [id])
+  tripCargo           TripCargo[]
+  photos              Photo[]
+  deliveryRecords     DeliveryRecord[]
+  payments            Payment[]
+
+  @@index([status])
+  @@index([destination])
+}
+
+model Trip {
+  id                 String       @id @default(cuid())
+  tripNumber         String       @unique
+  origin             String
+  destination        String
+  isMixedTrip        Boolean      @default(false)
+  vehicleType        String?
+  vehicleDescription String?
+  driverName         String?
+  providerName       String?
+  status             String       @default("Draft")
+  plannedDepartureAt DateTime?
+  departedAt         DateTime?
+  arrivedAt          DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  cargo              TripCargo[]
+  expenses           Expense[]
+}
+
+model TripCargo {
+  id             String       @id @default(cuid())
+  tripId         String
+  cargoPackageId String
+  loadedAt       DateTime?
+  unloadedAt     DateTime?
+  status         String       @default("Assigned")
+  exception      String?
+  trip           Trip         @relation(fields: [tripId], references: [id])
+  cargoPackage   CargoPackage @relation(fields: [cargoPackageId], references: [id])
+
+  @@unique([tripId, cargoPackageId])
+}
+
+model DeliveryRecord {
+  id              String       @id @default(cuid())
+  cargoPackageId  String
+  deliveryType    String       @default("Branch Delivery")
+  status          String       @default("Delivered")
+  deliveredTo     String?
+  deliveredAt     DateTime?
+  deliveredById   String?
+  signatureUrl    String?
+  deliveryPhotoUrl String?
+  failedReason    String?
+  notes           String?
+  nextAction      String?
+  customerAcceptedDamage Boolean @default(false)
+  createdAt       DateTime      @default(now())
+  cargoPackage    CargoPackage  @relation(fields: [cargoPackageId], references: [id])
+}
+
+model Payment {
+  id             String       @id @default(cuid())
+  cargoPackageId String?
+  amountDue      Decimal      @db.Decimal(12, 2)
+  amountPaid     Decimal      @default(0) @db.Decimal(12, 2)
+  balance        Decimal      @db.Decimal(12, 2)
+  method         String
+  status         String       @default("Unpaid")
+  proofUrl       String?
+  recordedById   String?
+  verifiedById   String?
+  notes          String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  cargoPackage   CargoPackage? @relation(fields: [cargoPackageId], references: [id])
+}
+
+model Expense {
+  id          String   @id @default(cuid())
+  tripId      String?
+  branchId    String?
+  category    String
+  amount      Decimal  @db.Decimal(12, 2)
+  description String?
+  receiptUrl  String?
+  status      String   @default("Submitted")
+  createdById String?
+  approvedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  trip        Trip?    @relation(fields: [tripId], references: [id])
+}
+
+model Photo {
+  id             String       @id @default(cuid())
+  cargoPackageId String?
+  type           String
+  fileUrl        String
+  thumbnailUrl   String?
+  uploadedById   String?
+  createdAt      DateTime     @default(now())
+  cargoPackage   CargoPackage? @relation(fields: [cargoPackageId], references: [id])
+}
+
+model DocumentSequence {
+  id             String   @id @default(cuid())
+  documentType   String   @unique
+  lastSequence   Int      @default(0)
+  updatedAt      DateTime @updatedAt
+}
+
+model Notification {
+  id         String    @id @default(cuid())
+  userId     String?
+  title      String
+  message    String
+  priority   String    @default("Normal")
+  type       String
+  entityType String?
+  entityId   String?
+  readAt     DateTime?
+  createdAt  DateTime  @default(now())
+  user       User?      @relation(fields: [userId], references: [id])
+}
+
+model MessageThread {
+  id             String    @id @default(cuid())
+  cargoPackageId String?
+  subject        String
+  status         String    @default("Open")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  messages       Message[]
+}
+
+model Message {
+  id        String        @id @default(cuid())
+  threadId  String
+  senderId  String?
+  body      String
+  createdAt DateTime      @default(now())
+  thread    MessageThread @relation(fields: [threadId], references: [id])
+  sender    User?         @relation(fields: [senderId], references: [id])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String
+  beforeJson Json?
+  afterJson  Json?
+  reason     String?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+  actor      User?    @relation(fields: [actorId], references: [id])
+}
+

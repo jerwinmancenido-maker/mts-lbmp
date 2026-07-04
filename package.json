@@ -1,0 +1,62 @@
+{
+  "name": "mts-lbmp",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Mancenido Trucking Services Logistics Business Management Platform",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @mts-lbmp/web",
+    "dev:web": "npm run dev --workspace @mts-lbmp/web",
+    "dev:web:clean": "node tools/web-dev-clean.mjs",
+    "dev:api": "npm run dev --workspace @mts-lbmp/api",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test",
+    "test:all": "npm run typecheck && npm run test:unit && npm run smoke && npm run smoke:permissions && npm run test:e2e",
+    "smoke": "node tools/smoke-test.mjs",
+    "smoke:permissions": "node tools/permission-smoke-test.mjs",
+    "seed:demo": "node tools/seed-demo-data.mjs",
+    "reset:clean": "node tools/reset-clean-data.mjs",
+    "lsos:generate": "node tools/lsos-generate.mjs",
+    "apk:doctor": "node tools/apk-doctor.mjs",
+    "apk:add:android": "npx cap add android",
+    "apk:sync": "npx cap sync android",
+    "apk:build:debug": "cd android && ./gradlew assembleDebug",
+    "apk:install": "adb install -r android/app/build/outputs/apk/debug/app-debug.apk",
+    "apk:reverse": "node tools/apk-reverse.mjs",
+    "apk:refresh:hard": "node tools/apk-hard-refresh.mjs",
+    "apk:prod:build": "npm run build --workspace @mts-lbmp/api && npm run build --workspace @mts-lbmp/web",
+    "apk:prod:local": "node tools/apk-prod-local.mjs",
+    "apk:prod:start": "node tools/apk-prod-daemon.mjs start",
+    "apk:prod:stop": "node tools/apk-prod-daemon.mjs stop",
+    "apk:prod:status": "node tools/apk-prod-daemon.mjs status",
+    "apk:logs": "adb logcat -s Capacitor/Console chromium LBMP",
+    "prisma:generate": "npm run prisma:generate --workspace @mts-lbmp/database",
+    "prisma:migrate": "npm run prisma:migrate --workspace @mts-lbmp/database",
+    "prisma:studio": "npm run prisma:studio --workspace @mts-lbmp/database"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.4.1",
+    "@playwright/test": "^1.61.1",
+    "msw": "^2.14.6",
+    "vitest": "^4.1.9"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.4.1",
+    "@capacitor/app": "^8.1.0",
+    "@capacitor/camera": "^8.2.0",
+    "@capacitor/core": "^8.4.1",
+    "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/network": "^8.0.1",
+    "@capacitor/preferences": "^8.0.1"
+  }
+}

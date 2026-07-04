@@ -1,0 +1,146 @@
+[
+  {
+    "id": "dashboard",
+    "label": "Dashboard",
+    "mac": {
+      "text": "DASHBOARD Dashboard ‹ Home Account Synced 4:15 AM Demo session: System Admin Demo Cargo Waiting 0 Without Price 0 Customer Pending 0 Active Trips 0 Delivered 0 Failed Delivery 0 Payments PHP 23,330,113 Expenses Review 128 Est. Profit PHP 4,056,893 Cargo Waiting No records found for this tile. Notification Center Expense submitted Fuel: PHP 100 Normal Daet receiving created RR-2026-07-000619 for QA-CUSTOMER-001 Retail Group: 1 item received, 1 without price. High Expense submitted Fuel: PHP 100 N",
+      "ok": true
+    },
+    "nb80": {
+      "text": "‹ LBMP System Admin • Dashboard • All branches Synced 4:15 AM Cargo Waiting 0 Without Price 0 Customer Pending 0 Active Trips 0 Delivered 0 Failed Delivery 0 Payments PHP 23,330,113 Expenses Review 128 Est. Profit PHP 4,056,893 Cargo Waiting No records found for this tile. Notification Center Expense submitted Fuel: PHP 100 Normal Daet receiving created RR-2026-07-000619 for QA-CUSTOMER-001 Retail Group: 1 item received, 1 without price. High Expense submitted Fuel: PHP 100 Normal Daet receiving",
+      "ok": true
+    }
+  },
+  {
+    "id": "receiving",
+    "label": "Receive",
+    "mac": {
+      "text": "RECEIVE Receive ‹ Home Account Synced 4:15 AM Cached / Syncing RECEIVING COUNTER What do you want to do? Choose one clear task. Records contains saved receiving, drafts, cancelled drafts, edits, DR photos, and audit trail. New Receive items Records Saved, drafts, audit Intake Tasks 0 wall QR Companies List or add Products List or add",
+      "ok": true
+    },
+    "nb80": {
+      "ok": false,
+      "error": "page.screenshot: Timeout 20000ms exceeded.\nCall log:\n\u001b[2m  - taking page screenshot\u001b[22m\n\u001b[2m  - waiting for fonts to load...\u001b[22m\n\u001b[2m  - fonts loaded\u001b[22m\n"
+    }
+  },
+  {
+    "id": "packages",
+    "label": "Cargo",
+    "mac": {
+      "text": "CARGO Cargo ‹ Home Account Synced 4:15 AM Cached 4:15 AM / Syncing CARGO What do you want to do? Find cargo, fix missing details, view movement, and print documents. Action Needed Price, size, issues 2 Waiting Ready for loading 248 Moving Loaded or transit Delivery Arrived / ready Issues Failed or exception 250 All Cargo 250 records",
+      "ok": true
+    },
+    "nb80": {
+      "ok": false,
+      "error": "page.screenshot: Timeout 20000ms exceeded.\nCall log:\n\u001b[2m  - taking page screenshot\u001b[22m\n\u001b[2m  - waiting for fonts to load...\u001b[22m\n\u001b[2m  - fonts loaded\u001b[22m\n"
+    }
+  },
+  {
+    "id": "trips",
+    "label": "Trips",
+    "mac": {
+      "text": "TRIPS Trips ‹ Home Account Synced 4:16 AM Cached 4:16 AM / Syncing TRIPS What do you want to do? Create a trip, open the trip list, or manage saved trucks. Create Trip Start truck movement 237 Trip List 237 active / 250 total 28 Trucks 28 saved trucks",
+      "ok": true
+    },
+    "nb80": {
+      "ok": false,
+      "error": "page.screenshot: Timeout 20000ms exceeded.\nCall log:\n\u001b[2m  - taking page screenshot\u001b[22m\n\u001b[2m  - waiting for fonts to load...\u001b[22m\n\u001b[2m  - fonts loaded\u001b[22m\n"
+    }
+  },
+  {
+    "id": "delivery",
+    "label": "Deliver",
+    "mac": {
+      "text": "DELIVER Deliver ‹ Home Account Synced 4:16 AM Cached 4:16 AM / Syncing DELIVERY What do you want to do? Verify arrived cargo, deliver to receiver, collect payment, or handle failed delivery. Verify Arrived 0 to verify 47 Deliver 47 ready 110 Collect 110 unpaid 63 Failed / Return 63 issue",
+      "ok": true
+    },
+    "nb80": {
+      "ok": false,
+      "error": "page.screenshot: Timeout 20000ms exceeded.\nCall log:\n\u001b[2m  - taking page screenshot\u001b[22m\n\u001b[2m  - waiting for fonts to load...\u001b[22m\n\u001b[2m  - fonts loaded\u001b[22m\n"
+    }
+  },
+  {
+    "id": "payments",
+    "label": "Payments",
+    "mac": {
+      "text": "PAYMENTS Payments ‹ Home Account Synced 4:16 AM Cached 4:16 AM / Syncing PAYMENTS What do you want to do? Record collections, check unpaid packages, review payment history, or prepare billing follow-up. Record Payment Collect money 153 Unpaid 153 packages 500 History 500 records Billing Invoices / reminders",
+      "ok": true
+    },
+    "nb80": {
+      "ok": false,
+      "error": "page.screenshot: Timeout 20000ms exceeded.\nCall log:\n\u001b[2m  - taking page screenshot\u001b[22m\n\u001b[2m  - waiting for fonts to load...\u001b[22m\n\u001b[2m  - fonts loaded\u001b[22m\n"
+    }
+  },
+  {
+    "id": "expenses",
+    "label": "Expenses",
+    "mac": {
+      "text": "EXPENSES Expenses ‹ Home Account Synced 4:17 AM Cached 4:17 AM / Syncing EXPENSES What do you want to do? Submit operating expenses, review submitted records, or check expense categories. Add Expense Submit receipt 250 Submitted 250 records 84 Needs Review 84 submitted 12 Categories 12 saved",
+      "ok": true
+    },
+    "nb80": {
+      "ok": false,
+      "error": "page.screenshot: Timeout 20000ms exceeded.\nCall log:\n\u001b[2m  - taking page screenshot\u001b[22m\n\u001b[2m  - waiting for fonts to load...\u001b[22m\n\u001b[2m  - fonts loaded\u001b[22m\n"
+    }
+  },
+  {
+    "id": "customer",
+    "label": "Customers",
+    "mac": {
+      "text": "CUSTOMERS Customers ‹ Home Account Synced 4:17 AM Cached 4:17 AM / Syncing CUSTOMERS What do you want to do? Open customer accounts, check balances, prepare billing, or send shipment messages. 81 Customer List 81 customers Add Customer Use Receive / Companies Billing 0 pending Messages Shipment message",
+      "ok": true
+    },
+    "nb80": {
+      "ok": false,
+      "error": "page.screenshot: Timeout 20000ms exceeded.\nCall log:\n\u001b[2m  - taking page screenshot\u001b[22m\n\u001b[2m  - waiting for fonts to load...\u001b[22m\n\u001b[2m  - fonts loaded\u001b[22m\n"
+    }
+  },
+  {
+    "id": "chat",
+    "label": "Chat",
+    "mac": {
+      "text": "CHAT Chat ‹ Home Account Synced 4:18 AM Cached 4:18 AM / Syncing OPERATIONS CHAT What do you want to do? Coordinate with staff, send prices for approval, and keep a short audit trail of decisions. Global Chat 2 messages Approvals 0 price requests Request Price 0 without price 2 All Threads 2 conversations",
+      "ok": true
+    },
+    "nb80": {
+      "ok": false,
+      "error": "page.screenshot: Timeout 20000ms exceeded.\nCall log:\n\u001b[2m  - taking page screenshot\u001b[22m\n\u001b[2m  - waiting for fonts to load...\u001b[22m\n\u001b[2m  - fonts loaded\u001b[22m\n"
+    }
+  },
+  {
+    "id": "admin",
+    "label": "Admin",
+    "mac": {
+      "text": "ADMIN Admin ‹ Home Account Synced 4:18 AM Cached 4:18 AM / Syncing ADMIN What do you want to do? Open admin actions or review the audit trail. User and branch setup remains in Settings. Admin Actions Delete / restore 250 Audit Trail 250 logs Users Use Settings Branches Use Settings",
+      "ok": true
+    },
+    "nb80": {
+      "ok": false,
+      "error": "page.screenshot: Timeout 20000ms exceeded.\nCall log:\n\u001b[2m  - taking page screenshot\u001b[22m\n\u001b[2m  - waiting for fonts to load...\u001b[22m\n\u001b[2m  - fonts loaded\u001b[22m\n"
+    }
+  },
+  {
+    "id": "settings",
+    "label": "Settings",
+    "mac": {
+      "text": "SETTINGS Settings ‹ Home Account Syncing Cached 4:19 AM / Syncing SETTINGS What do you want to do? Manage company setup, branches, staff access, payment methods, and expense categories. Company Profile details 3 Branches 3 branches 10 Staff 10 users 7 Payments 7 methods 12 Expenses 12 categories",
+      "ok": true
+    },
+    "nb80": {
+      "ok": false,
+      "error": "page.screenshot: Timeout 20000ms exceeded.\nCall log:\n\u001b[2m  - taking page screenshot\u001b[22m\n\u001b[2m  - waiting for fonts to load...\u001b[22m\n\u001b[2m  - fonts loaded\u001b[22m\n"
+    }
+  },
+  {
+    "id": "hardware",
+    "label": "Device",
+    "mac": {
+      "text": "DEVICE Device ‹ Home Account Synced 4:19 AM Cached 4:19 AM / Syncing DEVICE What do you want to do? Test the NB80 scanner, printer layout, and offline behavior before live operation. Device Setup Scanner / printer / offline 85 Test History 85 records Scanner Not Tested Printer Not Tested Image Attach Not Tested GPS Not Tested Offline Storage Not Tested",
+      "ok": true
+    },
+    "nb80": {
+      "ok": false,
+      "error": "page.screenshot: Timeout 20000ms exceeded.\nCall log:\n\u001b[2m  - taking page screenshot\u001b[22m\n\u001b[2m  - waiting for fonts to load...\u001b[22m\n\u001b[2m  - fonts loaded\u001b[22m\n"
+    }
+  }
+]

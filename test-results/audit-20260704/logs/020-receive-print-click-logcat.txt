@@ -1,0 +1,232 @@
+--------- beginning of main
+07-04 04:30:08.934  8163 24670 W adbd    : timed out while waiting for FUNCTIONFS_BIND, trying again
+07-04 04:30:08.934  8163 24670 I adbd    : UsbFfs: connection terminated: monitor thread finished
+07-04 04:30:08.966  8163  8169 I adbd    : opening control endpoint /dev/usb-ffs/adb/ep0
+07-04 04:30:09.971  8163 24673 W adbd    : timed out while waiting for FUNCTIONFS_BIND, trying again
+07-04 04:30:09.971  8163 24673 I adbd    : UsbFfs: connection terminated: monitor thread finished
+07-04 04:30:10.002  8163  8169 I adbd    : opening control endpoint /dev/usb-ffs/adb/ep0
+07-04 04:30:10.514   877   932 I mali_gralloc: allocate: id=36d00000f78, hal_format=RGBA8888, mali_format=RGBA8888, afbc=SPLIT, usage=GPU_RW, size=832x320(1082368), stride=832, name=AHardwareBuffer pid [22933]
+07-04 04:30:10.515 22933 23021 D mali_gralloc: register: id=36d00000f78, handle=0xb4000073f559caf0, importpid=-1, gRegisteredHandles=11
+07-04 04:30:10.528   877   932 I mali_gralloc: allocate: id=36d00000f79, hal_format=RGBA8888, mali_format=RGBA8888, afbc=SPLIT, usage=GPU_RW, size=832x320(1082368), stride=832, name=AHardwareBuffer pid [22933]
+07-04 04:30:10.529 22933 23021 D mali_gralloc: register: id=36d00000f79, handle=0xb4000073f55993d0, importpid=-1, gRegisteredHandles=12
+07-04 04:30:10.536   877   932 I mali_gralloc: allocate: id=36d00000f7a, hal_format=RGBA8888, mali_format=RGBA8888, afbc=SPLIT, usage=GPU_RW, size=832x320(1082368), stride=832, name=AHardwareBuffer pid [22933]
+07-04 04:30:10.537 22933 23021 D mali_gralloc: register: id=36d00000f7a, handle=0xb4000073f559c9d0, importpid=-1, gRegisteredHandles=13
+07-04 04:30:10.546   877   932 I mali_gralloc: allocate: id=36d00000f7b, hal_format=RGBA8888, mali_format=RGBA8888, afbc=SPLIT, usage=GPU_RW, size=832x320(1082368), stride=832, name=AHardwareBuffer pid [22933]
+07-04 04:30:10.546 22933 23021 D mali_gralloc: register: id=36d00000f7b, handle=0xb4000073f5599f10, importpid=-1, gRegisteredHandles=14
+07-04 04:30:10.560 22933 22960 D mali_gralloc: unregister: id=36d00000f72, handle=0xb4000073f55930d0, base=0x0, importpid=22933, count:0
+07-04 04:30:10.561 22933 22960 D mali_gralloc: unregister: id=36d00000f75, handle=0xb4000073f558d370, base=0x0, importpid=22933, count:0
+07-04 04:30:10.563 22933 22960 D mali_gralloc: unregister: id=36d00000f5c, handle=0xb4000073f559b590, base=0x0, importpid=22933, count:0
+07-04 04:30:10.564 22933 22960 D mali_gralloc: unregister: id=36d00000f73, handle=0xb4000073f55931f0, base=0x0, importpid=22933, count:0
+07-04 04:30:11.007  8163 24674 W adbd    : timed out while waiting for FUNCTIONFS_BIND, trying again
+07-04 04:30:11.007  8163 24674 I adbd    : UsbFfs: connection terminated: monitor thread finished
+07-04 04:30:11.019  1089  1482 D WifiStaIfaceHidlImpl: getCachedScanData is not implemented by HIDL
+07-04 04:30:11.032  1089  1482 I HalDevMgr: bestIfaceCreationProposal is null, requestIface=STA, existingIface=[name=wlan0 type=STA]
+07-04 04:30:11.050  8163  8169 I adbd    : opening control endpoint /dev/usb-ffs/adb/ep0
+07-04 04:30:11.440 22933 22933 I Capacitor/Console: File:  - Line 349 - Msg: [object Object]
+07-04 04:30:11.451 22933 22933 V Capacitor/Plugin: To native (Capacitor plugin): callbackId: 70420108, pluginId: NyxPrinter, methodName: printText
+07-04 04:30:11.453 22933 22933 V Capacitor: callback: 70420108, pluginId: NyxPrinter, methodName: printText, methodData: {"text":"       MANCENIDO TRUCKING SERVICES\n            RECEIVING RECEIPT\nRR-2026-07-000620\n------------------------------------------\nCustomer: QA-AUDIT-20260703202816 Retail\nGroup\nDR: QA-DR-20260703202816\nBranch: Daet\nItems: 1 lines \/ Qty 1\nTotal: PHP 123.00\n1: 1 pcs QA-AUDIT-202607032028... \/ Daet \/\nP123\nCopy: 1 \/ 7\/4\/2026, 04:30:13\n------------------------------------------\nReceived By: _______________\n\n","documentName":"RR-2026-07-000620","paperWidth":"80mm"}
+07-04 04:30:11.523   894   894 D PowerHAL: enter power::setMode
+07-04 04:30:11.523   894   894 D PowerHAL: PowerSessionManager::updateHintMode: mode: LAUNCH, enabled: 1
+07-04 04:30:11.523   894   894 D PowerHAL: PowerSessionManager::updateHintMode resValue = 0
+07-04 04:30:11.523   894   894 D PowerHAL: ###Enter launch scene bgn###
+07-04 04:30:11.523   894   894 D PowerHAL: Enter common_set: enable:1, duration: 0, /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq: 1820000
+07-04 04:30:11.523   894   894 D PowerHAL: Enter set_cluster_freqs_max_min: 
+07-04 04:30:11.524   894   894 D PowerHAL: Enter common_set: enable:1, duration: 0, /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq: 1820000
+07-04 04:30:11.524   894   894 D PowerHAL: Enter set_cluster_freqs_max_min: 
+07-04 04:30:11.524   894   894 D PowerHAL: Enter common_set: enable:1, duration: 0, /sys/devices/system/cpu/cpufreq/policy6/scaling_min_freq: 2028000
+07-04 04:30:11.524   894   894 D PowerHAL: Enter set_cluster_freqs_max_min: 
+07-04 04:30:11.524   894   894 D PowerHAL: Enter common_set: enable:1, duration: 0, /sys/devices/system/cpu/cpufreq/policy6/scaling_max_freq: 2028000
+07-04 04:30:11.524   894   894 D PowerHAL: Enter set_cluster_freqs_max_min: 
+07-04 04:30:11.524   894   894 D PowerHAL: Enter devfreq_ddr_set: enable:1, duration: 0, /sys/class/devfreq/scene-frequency/sprd-governor/scene_boost_dfs: max
+07-04 04:30:11.525   894   894 D PowerHAL: ###Enter launch scene end###
+--------- beginning of system
+07-04 04:30:11.526  1089  3297 I ActivityTaskManager: START u0 {act=android.intent.action.VIEW dat=content://com.mancenido.lbmp.test.fileprovider/... typ=application/pdf flg=0x10000001 cmp=net.nyx.printerservice/.IntentGatewayActivity clip={text/uri-list hasLabel(10) {U(content)}}} with LAUNCH_SINGLE_TOP from uid 10212 pid 22933 (BAL_ALLOW_VISIBLE_WINDOW) result code=START_SUCCESS
+07-04 04:30:11.527  1638  1718 V WindowManagerShell: Transition requested: android.os.BinderProxy@69b2453 TransitionRequestInfo { type = OPEN, triggerTask = TaskInfo{userId=0 taskId=78 displayId=0 isRunning=true baseIntent=Intent { act=android.intent.action.VIEW dat=content://com.mancenido.lbmp.test.fileprovider/... typ=application/pdf flg=0x10800001 cmp=net.nyx.printerservice/.IntentGatewayActivity } baseActivity=ComponentInfo{net.nyx.printerservice/net.nyx.printerservice.IntentGatewayActivity} topActivity=ComponentInfo{net.nyx.printerservice/net.nyx.printerservice.IntentGatewayActivity} origActivity=null realActivity=ComponentInfo{net.nyx.printerservice/net.nyx.printerservice.IntentGatewayActivity} numActivities=1 lastActiveTime=21920501 supportsMultiWindow=true resizeMode=1 isResizeable=true minWidth=-1 minHeight=-1 defaultMinSize=220 token=WCT{android.window.IWindowContainerToken$Stub$Proxy@51f190} topActivityType=1 pictureInPictureParams=null shouldDockBigOverlays=false launchIntoPipHostTaskId=-1 lastParentTaskIdBeforePip=-1 displayCutoutSafeInsets=null topActivityInfo=ActivityInfo{fddea89 net.nyx.printerservice.IntentGatewayActivity} launchCookies=[] positionInParent=Point(0, 0) parentTaskId=-1 isFocused=false isVisible=false isVisibleRequested=false isSleeping=false topActivityInSizeCompat=false topActivityEligibleForLetterboxEducation= false topActivityLetterboxed= false isFromDoubleTap= false topActivityLetterboxVerticalPosition= -1 topActivityLetterboxHorizontalPosition= -1 topActivityLetterboxWidth=-1 topActivityLetterboxHeight=-1 locusId=null displayAreaFeatureId=1 cameraCompatControlState=hidden}, remoteTransition = null, displayChange = null }
+07-04 04:30:11.529  1089  2754 D ActivityManager: sync unfroze 6131 com.roco.copymedia for 0
+07-04 04:30:11.529  1089  2754 D ActivityManager: sync unfroze 19367 com.google.android.apps.wellbeing for 0
+07-04 04:30:11.530  1089  2754 D ActivityManager: sync unfroze 22063 com.google.android.webview:sandboxed_process0:org.chromium.content.app.SandboxedProcessService0:0 for 0
+07-04 04:30:11.533  1089  2754 D ActivityManager: sync unfroze 22293 com.google.android.tts for 0
+07-04 04:30:11.533  1089  2754 D ActivityManager: sync unfroze 22024 com.google.process.gservices for 0
+07-04 04:30:11.534 22933 22933 V Capacitor/AppPlugin: Notifying listeners for event pause
+07-04 04:30:11.534 22933 22933 D Capacitor/AppPlugin: No listeners found for event pause
+07-04 04:30:11.535  1089  2754 D ActivityManager: sync unfroze 3392 com.google.android.googlequicksearchbox:search for 0
+07-04 04:30:11.536  1089  2754 D ActivityManager: sync unfroze 22206 com.android.rkpdapp for 0
+07-04 04:30:11.537 22933 22933 D Capacitor: App paused
+07-04 04:30:11.542  1089  3297 I ActivityTaskManager: delivered LaunchActivityItem: ActivityRecord{97d5be9 u0 net.nyx.printerservice/.IntentGatewayActivity t78 d0}
+07-04 04:30:11.542  1089  3297 D WindowManager: setFocusedApp mFocusedApp = ActivityRecord{97d5be9 u0 net.nyx.printerservice/.IntentGatewayActivity t78 d0}displayId = 0Callers = com.android.server.wm.ActivityTaskManagerService.setLastResumedActivityUncheckLocked:4898 com.android.server.wm.ActivityTaskSupervisor.updateTopResumedActivityIfNeeded:2416 com.android.server.wm.TaskFragment.setResumedActivity:539 com.android.server.wm.TaskFragment.onActivityStateChanged:835 
+07-04 04:30:11.542  1089  3297 D InputDispatcher: setFocusedApplication displayId=0 ActivityRecord{97d5be9 u0 net.nyx.printerservice/.IntentGatewayActivity t78 d0}
+07-04 04:30:11.543  1089  3297 I WindowManager: Input focus has changed to null from e8c3023 com.mancenido.lbmp.test/com.mancenido.lbmp.test.MainActivity mDisplayId 0 updateInputWindows true
+07-04 04:30:11.543  1089  3297 D UnisocDisplayJamMonitorImpl: Switch focus to null.
+07-04 04:30:11.545  1089  2754 D ActivityManager: sync unfroze 22099 com.google.android.gms.unstable for 0
+07-04 04:30:11.546  1089  2754 D ActivityManager: sync unfroze 9257 com.android.chrome for 0
+07-04 04:30:11.547  1089  2754 D ActivityManager: sync unfroze 14577 com.google.android.permissioncontroller for 0
+07-04 04:30:11.548  1089  2754 D ActivityManager: sync unfroze 22878 com.google.android.documentsui for 0
+07-04 04:30:11.549  1089  2754 D ActivityManager: sync unfroze 14821 com.google.android.webview:webview_service for 0
+07-04 04:30:11.549  1089  2754 D ActivityManager: sync unfroze 22265 com.google.android.as.oss for 0
+07-04 04:30:11.555   915   915 I BpBinder: onLastStrongRef automatically unlinking death recipients: 
+07-04 04:30:11.561  1089  2754 D ActivityManager: sync unfroze 3832 com.google.android.apps.messaging for 0
+07-04 04:30:11.562  1089  2754 D ActivityManager: sync unfroze 19240 com.google.android.cellbroadcastreceiver for 0
+07-04 04:30:11.563  1089  2754 D ActivityManager: sync unfroze 26889 com.google.android.apps.turbo for 0
+07-04 04:30:11.564  1089  2754 D ActivityManager: sync unfroze 2385 com.google.android.gms for 0
+07-04 04:30:11.569 22933 22933 I Capacitor/Console: File:  - Line 333 - Msg: {"ok":true,"route":"net.nyx.printerservice.pdf","file":"content://com.mancenido.lbmp.test.fileprovider/my_cache_images/lbmp-prints/RR-2026-07-000620.pdf","paperWidth":"80mm","message":"Print request opened the NB80 printer gateway. Confirm paper output; if nothing prints, vendor SDK bridge is required."}
+07-04 04:30:11.573  1089  2754 D ActivityManager: sync unfroze 2007 com.android.settings for 0
+07-04 04:30:11.599  2385  2385 D BoundBrokerSvc: onUnbind: Intent { act=com.google.android.gms.common.BIND_SHARED_PREFS pkg=com.google.android.gms }
+07-04 04:30:11.671 22878 22883 W oid.documentsui: Reducing the number of considered missed Gc histogram windows from 111 to 100
+07-04 04:30:11.676 22878 22886 W oid.documentsui: ApkAssets: Deleting an ApkAssets object '<empty> and /system/priv-app/ExternalStorageProvider/ExternalStorageProvider.apk' with 1 weak references
+07-04 04:30:11.679 22878 22886 W oid.documentsui: ApkAssets: Deleting an ApkAssets object '<empty> and /system/priv-app/MtpService/MtpService.apk' with 1 weak references
+07-04 04:30:11.681 22878 22886 W oid.documentsui: ApkAssets: Deleting an ApkAssets object '<empty> and /system/priv-app/DownloadProvider/DownloadProvider.apk' with 1 weak references
+07-04 04:30:11.682 22878 22886 W oid.documentsui: ApkAssets: Deleting an ApkAssets object '<empty> and /system/priv-app/Shell/Shell.apk' with 1 weak references
+07-04 04:30:11.684 22878 22886 W oid.documentsui: ApkAssets: Deleting an ApkAssets object '<empty> and /apex/com.android.mediaprovider/priv-app/MediaProviderGoogle@371020440/MediaProviderGoogle.apk' with 1 weak references
+07-04 04:30:11.685  3832  3895 I ForwardSyncCache: reclaimMemory: Clearing caches
+07-04 04:30:11.686 22878 22886 W oid.documentsui: ApkAssets: Deleting an ApkAssets object '<empty> and /data/app/~~sYD3J7m2-5Vaj_hzrh9c2A==/com.google.android.apps.docs-qG7sO48LQd3Hx_dvTJ6mgg==/base.apk' with 1 weak references
+07-04 04:30:11.687 22878 22886 W oid.documentsui: ApkAssets: Deleting an ApkAssets object '<empty> and /data/app/~~sYD3J7m2-5Vaj_hzrh9c2A==/com.google.android.apps.docs-qG7sO48LQd3Hx_dvTJ6mgg==/split_config.arm64_v8a.apk' with 1 weak references
+07-04 04:30:11.687 22878 22886 W oid.documentsui: ApkAssets: Deleting an ApkAssets object '<empty> and /data/app/~~sYD3J7m2-5Vaj_hzrh9c2A==/com.google.android.apps.docs-qG7sO48LQd3Hx_dvTJ6mgg==/split_config.en.apk' with 1 weak references
+07-04 04:30:11.687 22878 22886 W oid.documentsui: ApkAssets: Deleting an ApkAssets object '<empty> and /data/app/~~sYD3J7m2-5Vaj_hzrh9c2A==/com.google.android.apps.docs-qG7sO48LQd3Hx_dvTJ6mgg==/split_config.xhdpi.apk' with 1 weak references
+07-04 04:30:11.688  3832  3895 I BugleSpam: HadesBitmapStore: Purged 0 images during memory reclamation
+07-04 04:30:11.691  3832  3895 I BugleRestore: reclaimMemory: Clearing persistent caches
+07-04 04:30:11.694  3832  3895 W Bugle   : TextClassifierLibManagerImpl: Reclaiming memory at level: 40
+07-04 04:30:12.054  8163 24675 W adbd    : timed out while waiting for FUNCTIONFS_BIND, trying again
+07-04 04:30:12.054  8163 24675 I adbd    : UsbFfs: connection terminated: monitor thread finished
+07-04 04:30:12.082  8163  8169 I adbd    : opening control endpoint /dev/usb-ffs/adb/ep0
+07-04 04:30:12.091  1089  1110 W ActivityTaskManager: Activity top resumed state loss timeout for ActivityRecord{97d5be9 u0 net.nyx.printerservice/.IntentGatewayActivity t78 d0 f}}
+07-04 04:30:12.092  1089  1110 W ActivityTaskManager: Activity pause timeout for ActivityRecord{97d5be9 u0 net.nyx.printerservice/.IntentGatewayActivity t78 d0 f}}
+07-04 04:30:12.093  1089  1110 D WindowManager: setFocusedApp mFocusedApp = ActivityRecord{2dc411b u0 com.mancenido.lbmp.test/.MainActivity t77 d0}displayId = 0Callers = com.android.server.wm.ActivityTaskManagerService.setLastResumedActivityUncheckLocked:4898 com.android.server.wm.ActivityTaskSupervisor.updateTopResumedActivityIfNeeded:2416 com.android.server.wm.TaskFragment.setResumedActivity:539 com.android.server.wm.TaskFragment.onActivityStateChanged:835 
+07-04 04:30:12.093  1089  1110 D InputDispatcher: setFocusedApplication displayId=0 ActivityRecord{2dc411b u0 com.mancenido.lbmp.test/.MainActivity t77 d0}
+07-04 04:30:12.093  1089  1110 I WindowManager: Input focus has changed to Window{e8c3023 u0 com.mancenido.lbmp.test/com.mancenido.lbmp.test.MainActivity}, [type=1]-[Surface(name=*Title#1545)/@0x2792c38, shown=false, alpha=0.0, windowType=1] from e8c3023 com.mancenido.lbmp.test/com.mancenido.lbmp.test.MainActivity mDisplayId 0 updateInputWindows true
+07-04 04:30:12.094  1089  1110 D UnisocDisplayJamMonitorImpl: Switch focus to Window{e8c3023 u0 com.mancenido.lbmp.test/com.mancenido.lbmp.test.MainActivity}, [type=1]-[Surface(name=*Title#1545)/@0x2792c38, shown=false, alpha=0.0, windowType=1] on APP(ActivityRecord{2dc411b u0 com.mancenido.lbmp.test/.MainActivity t77 d0}) from null, newWindowHandle = e8c3023 com.mancenido.lbmp.test/com.mancenido.lbmp.test.MainActivity, frame=[0,0,0,0], touchableRegion=SkRegion((0,0,800,1280)), scaleFactor=1.0, transform=null, windowToken=android.os.BinderProxy@d41c552, displayId=0, isClone=false, packageName=com.mancenido.lbmp.test, ownerPid=22933, touchableRegionSurfaceControl=java.lang.ref.WeakReference@753c68b, replaceTouchableRegionWithCrop=false, changed=false mGlobalScale=1.0 mCompatScale=1.0 mInvGlobalScale=1.0
+07-04 04:30:12.097 22933 22933 D Capacitor/AppPlugin: Firing change: true
+07-04 04:30:12.097 22933 22933 V Capacitor/AppPlugin: Notifying listeners for event appStateChange
+07-04 04:30:12.098 22933 22933 D Capacitor/AppPlugin: No listeners found for event appStateChange
+07-04 04:30:12.098 22933 22933 V Capacitor/AppPlugin: Notifying listeners for event resume
+07-04 04:30:12.098 22933 22933 D Capacitor/AppPlugin: No listeners found for event resume
+07-04 04:30:12.099  1089  1738 D ConnectivityService: requestNetwork for uid/pid:10212/22933 activeRequest: null callbackRequest: 1002 [NetworkRequest [ REQUEST id=1003, [ Capabilities: INTERNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10212 RequestorUid: 10212 RequestorPkg: com.mancenido.lbmp.test UnderlyingNetworks: Null] ]] callback flags: 0 order: 2147483647 isUidTracked: false declaredMethods: AVAIL|LOST|NC
+07-04 04:30:12.100   894   894 D PowerHAL: Enter getSceneIdByName: sceneName:com.mancenido.lbmp.test
+07-04 04:30:12.100   894   894 D PowerHAL: Enter getSceneIdByName: sceneName:PACKAGE
+07-04 04:30:12.101  1089  1107 V WindowManager: Sent Transition #150 createdAt=07-04 04:30:11.513 via request=TransitionRequestInfo { type = OPEN, triggerTask = TaskInfo{userId=0 taskId=78 displayId=0 isRunning=true baseIntent=Intent { act=android.intent.action.VIEW dat=content://com.mancenido.lbmp.test.fileprovider/... typ=application/pdf flg=0x10800001 cmp=net.nyx.printerservice/.IntentGatewayActivity } baseActivity=ComponentInfo{net.nyx.printerservice/net.nyx.printerservice.IntentGatewayActivity} topActivity=ComponentInfo{net.nyx.printerservice/net.nyx.printerservice.IntentGatewayActivity} origActivity=null realActivity=ComponentInfo{net.nyx.printerservice/net.nyx.printerservice.IntentGatewayActivity} numActivities=1 lastActiveTime=21920501 supportsMultiWindow=true resizeMode=1 isResizeable=true minWidth=-1 minHeight=-1 defaultMinSize=220 token=WCT{RemoteToken{d29b988 Task{b97506e #78 type=standard A=10199:net.nyx.printerservice}}} topActivityType=1 pictureInPictureParams=null shouldDockBigOverlays=false launchIntoPipHostTaskId=-1 lastParentTaskIdBeforePip=-1 displayCutoutSafeInsets=null topActivityInfo=ActivityInfo{87b9f21 net.nyx.printerservice.IntentGatewayActivity} launchCookies=[] positionInParent=Point(0, 0) parentTaskId=-1 isFocused=false isVisible=false isVisibleRequested=false isSleeping=false topActivityInSizeCompat=false topActivityEligibleForLetterboxEducation= false topActivityLetterboxed= false isFromDoubleTap= false topActivityLetterboxVerticalPosition= -1 topActivityLetterboxHorizontalPosition= -1 topActivityLetterboxWidth=-1 topActivityLetterboxHeight=-1 locusId=null displayAreaFeatureId=1 cameraCompatControlState=hidden}, remoteTransition = null, displayChange = null }
+07-04 04:30:12.101  1089  1107 V WindowManager:     startWCT=WindowContainerTransaction { changes = {} hops = [] errorCallbackToken=null taskFragmentOrganizer=null }
+07-04 04:30:12.102  1638  1718 V WindowManagerShell: onTransitionReady android.os.BinderProxy@69b2453: {id=150 t=OPEN f=0x0 trk=0 r=[0@Point(0, 0)] c=[{WCT{android.window.IWindowContainerToken$Stub$Proxy@c0c96bc} m=CHANGE f=MOVE_TO_TOP leash=Surface(name=Task=77#1542)/@0xde8ca8e sb=Rect(0, 0 - 800, 1280) eb=Rect(0, 0 - 800, 1280) d=0}]}
+07-04 04:30:12.102  1638  1718 V WindowManagerShell: Playing animation for (#150)android.os.BinderProxy@69b2453@0
+07-04 04:30:12.102  1638  1718 V WindowManagerShell:  try handler com.android.wm.shell.transition.DefaultMixedHandler@9dd2b48
+07-04 04:30:12.102  1638  1718 V WindowManagerShell:  try handler com.android.wm.shell.keyguard.KeyguardTransitionHandler@6a4dcff
+07-04 04:30:12.102  1638  1718 V WindowManagerShell:  try handler com.android.wm.shell.activityembedding.ActivityEmbeddingController@bc1facc
+07-04 04:30:12.102  1638  1718 V WindowManagerShell:  try handler com.android.wm.shell.recents.RecentsTransitionHandler@1ca2115
+07-04 04:30:12.102  1638  1718 V ShellRecents: RecentsTransitionHandler.startAnimation: no controller found
+07-04 04:30:12.102  1638  1718 V WindowManagerShell:  try handler com.android.wm.shell.pip.PipTransition@462ac2a
+07-04 04:30:12.103  1638  1718 V WindowManagerShell:  try handler com.android.wm.shell.splitscreen.StageCoordinator@f44a1b
+07-04 04:30:12.103  1638  1718 V WindowManagerShell:  try handler com.android.wm.shell.transition.RemoteTransitionHandler@279f7b8
+07-04 04:30:12.103  1638  1718 V WindowManagerShell: Transition doesn't have explicit remote, search filters for match for {id=150 t=OPEN f=0x0 trk=0 r=[0@Point(0, 0)] c=[{WCT{android.window.IWindowContainerToken$Stub$Proxy@c0c96bc} m=CHANGE f=MOVE_TO_TOP leash=Surface(name=Task=77#1542)/@0xde8ca8e sb=Rect(0, 0 - 800, 1280) eb=Rect(0, 0 - 800, 1280) d=0}]}
+07-04 04:30:12.103 22933 22933 D Capacitor: App resumed
+07-04 04:30:12.103  1638  1718 V WindowManagerShell:  Checking filter Pair{{types=[] flags=0x0] notFlags=0x100 checks=[{atype=home independent=true modes=[OPEN,TO_FRONT] flags=NONE mustBeTask=false order=TOP topActivity=ComponentInfo{com.android.launcher3/com.android.searchlauncher.SearchLauncher}},{atype=standard independent=true modes=[CLOSE,TO_BACK] flags=NONE mustBeTask=false order=ANY topActivity=null}]} RemoteTransition { remoteTransition = android.window.IRemoteTransition$Stub$Proxy@7b8b991, appThread = android.app.IApplicationThread$Stub$Proxy@95760f6, debugName = QuickstepLaunchHome }}
+07-04 04:30:12.103  1638  1718 V WindowManagerShell:  Delegate animation for #150 to null
+07-04 04:30:12.103  1638  1718 V WindowManagerShell:  try handler com.android.wm.shell.transition.DefaultTransitionHandler@e036cf7
+07-04 04:30:12.103  1638  1718 V WindowManagerShell: start default transition animation, info = {id=150 t=OPEN f=0x0 trk=0 r=[0@Point(0, 0)] c=[{WCT{android.window.IWindowContainerToken$Stub$Proxy@c0c96bc} m=CHANGE f=MOVE_TO_TOP leash=Surface(name=Task=77#1542)/@0xde8ca8e sb=Rect(0, 0 - 800, 1280) eb=Rect(0, 0 - 800, 1280) d=0}]}
+07-04 04:30:12.105  1638  1718 V WindowManagerShell: Transition animation finished (aborted=false), notifying core (#150)android.os.BinderProxy@69b2453@0
+07-04 04:30:12.105  1089  1482 D WifiNetworkFactory: got request NetworkRequest [ REQUEST id=1003, [ Capabilities: INTERNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10212 RequestorUid: 10212 RequestorPkg: com.mancenido.lbmp.test UnderlyingNetworks: Null] ]
+07-04 04:30:12.105  1089  1107 V WindowManager:     info={id=150 t=OPEN f=0x0 trk=0 r=[0@Point(0, 0)] c=[{WCT{RemoteToken{3b64067 Task{98022b8 #77 type=standard A=10212:com.mancenido.lbmp.test}}} m=CHANGE f=MOVE_TO_TOP leash=Surface(name=Task=77#1542)/@0xfac1368 sb=Rect(0, 0 - 800, 1280) eb=Rect(0, 0 - 800, 1280) d=0}]}
+07-04 04:30:12.105  1089  1482 D UntrustedWifiNetworkFactory: got request NetworkRequest [ REQUEST id=1003, [ Capabilities: INTERNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10212 RequestorUid: 10212 RequestorPkg: com.mancenido.lbmp.test UnderlyingNetworks: Null] ]
+07-04 04:30:12.106  1089  1482 D OemPaidWifiNetworkFactory: got request NetworkRequest [ REQUEST id=1003, [ Capabilities: INTERNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10212 RequestorUid: 10212 RequestorPkg: com.mancenido.lbmp.test UnderlyingNetworks: Null] ]
+07-04 04:30:12.106 22933 23031 V Capacitor/NetworkPlugin: Notifying listeners for event networkStatusChange
+07-04 04:30:12.106  1089  1482 D MultiInternetWifiNetworkFactory: got request NetworkRequest [ REQUEST id=1003, [ Capabilities: INTERNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10212 RequestorUid: 10212 RequestorPkg: com.mancenido.lbmp.test UnderlyingNetworks: Null] ]
+07-04 04:30:12.106 22933 23031 D Capacitor/NetworkPlugin: No listeners found for event networkStatusChange
+07-04 04:30:12.106  1089  1491 D ConnectivityService: NetReassign [1003 : null → 100] [c 1] [a 1] [i 5]
+07-04 04:30:12.107  1089  1107 V WindowManager: Finish Transition #150: created at 07-04 04:30:11.513 collect-started=0.106ms request-sent=12.364ms started=16.26ms ready=582.07ms sent=585.968ms finished=592.677ms
+07-04 04:30:12.107  1638  1718 V WindowManagerShell: Track 0 became idle
+07-04 04:30:12.108  1638  1718 V WindowManagerShell: All active transition animations finished
+07-04 04:30:12.108  1638  1718 V WindowManagerShell:  animated by com.android.wm.shell.transition.DefaultTransitionHandler@e036cf7
+07-04 04:30:12.108  1638  1718 V WindowManagerShell: Track 0 became idle
+07-04 04:30:12.108  1638  1718 V WindowManagerShell: All active transition animations finished
+07-04 04:30:12.117   915   977 D mali_gralloc: unregister: id=36d00000f77, handle=0xb40000733f5e5390, base=0x0, importpid=915, count:0
+07-04 04:30:12.118   894   894 D PowerHAL: enter power::setMode
+07-04 04:30:12.118   894   894 D PowerHAL: PowerSessionManager::updateHintMode: mode: LAUNCH, enabled: 0
+07-04 04:30:12.118   894   894 D PowerHAL: PowerSessionManager::updateHintMode resValue = 0
+07-04 04:30:12.118   894   894 D PowerHAL: ###Exit launch scene bgn###
+07-04 04:30:12.118   894   894 D PowerHAL: Enter common_set: enable:0, duration: 0, /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq: 1820000
+07-04 04:30:12.118   894   894 D PowerHAL: Enter set_cluster_freqs_max_min: 
+07-04 04:30:12.118   894   894 D PowerHAL: Enter common_clear: 
+07-04 04:30:12.118   894   894 D PowerHAL: Enter common_set: enable:0, duration: 0, /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq: 1820000
+07-04 04:30:12.118   894   894 D PowerHAL: Enter set_cluster_freqs_max_min: 
+07-04 04:30:12.118   894   894 D PowerHAL: Enter common_clear: 
+07-04 04:30:12.119   894   894 D PowerHAL: Enter common_set: enable:0, duration: 0, /sys/devices/system/cpu/cpufreq/policy6/scaling_min_freq: 2028000
+07-04 04:30:12.119   894   894 D PowerHAL: Enter set_cluster_freqs_max_min: 
+07-04 04:30:12.119   894   894 D PowerHAL: Enter common_clear: 
+07-04 04:30:12.119   894   894 D PowerHAL: Enter common_set: enable:0, duration: 0, /sys/devices/system/cpu/cpufreq/policy6/scaling_max_freq: 2028000
+07-04 04:30:12.119   894   894 D PowerHAL: Enter set_cluster_freqs_max_min: 
+07-04 04:30:12.119   894   894 D PowerHAL: Enter common_clear: 
+07-04 04:30:12.119   894   894 D PowerHAL: Enter devfreq_ddr_set: enable:0, duration: 0, /sys/class/devfreq/scene-frequency/sprd-governor/scene_boost_dfs: max
+07-04 04:30:12.119   894   894 D PowerHAL: ###Exit launch scene end###
+07-04 04:30:12.121  1089  1110 W ProcessStats: Tracking association SourceState{b9c748d com.android.phone/1001 Persist #19553} whose proc state 0 is better than process ProcessState{cc697c4 com.spreadtrum.ims/1001 pkg=com.spreadtrum.ims} proc state 5 (11 skipped)
+07-04 04:30:12.140  1089  1811 I ImeTracker: com.mancenido.lbmp.test:6244283b: onRequestHide at ORIGIN_SERVER_HIDE_INPUT reason HIDE_SAME_WINDOW_FOCUSED_WITHOUT_EDITOR
+07-04 04:30:12.140  1089  1811 I ImeTracker: com.mancenido.lbmp.test:6244283b: onCancelled at PHASE_SERVER_SHOULD_HIDE
+07-04 04:30:12.143  6779  6779 I GoogleInputMethodService: GoogleInputMethodService.onFinishInput():2276 
+07-04 04:30:12.145  6779  6779 I Module  : DeviceLockedStatusModuleProvider$Module.updateDeviceLockedStatusInternal():129 repeatCheckTimes = 0, locked = false
+07-04 04:30:12.146  6779  6779 I GoogleInputMethodService: GoogleInputMethodService.onStartInput():1460 onStartInput(EditorInfo{EditorInfo{packageName=com.mancenido.lbmp.test, inputType=0, inputTypeString=NULL, enableLearning=false, autoCorrection=false, autoComplete=false, imeOptions=12000000, privateImeOptions=null, actionName=UNSPECIFIED, actionLabel=null, initialSelStart=-1, initialSelEnd=-1, initialCapsMode=0, label=null, fieldId=0, fieldName=null, extras=null, hintText=null, hintLocales=[]}}, false)
+07-04 04:30:12.146  6779  6779 I LatinIMEBase: LatinIMEBase.updateInputViewCoverNavigation():317 Update input view padding, isNavbarOverInputWindow=false, bottom inset=59
+07-04 04:30:12.148  6779  6779 I Module  : DeviceLockedStatusModuleProvider$Module.updateDeviceLockedStatusInternal():129 repeatCheckTimes = 1, locked = false
+07-04 04:30:12.149  1089  1811 W PackageConfigPersister: App-specific configuration not found for packageName: com.mancenido.lbmp.test and userId: 0
+07-04 04:30:13.085  8163 24686 W adbd    : timed out while waiting for FUNCTIONFS_BIND, trying again
+07-04 04:30:13.085  8163 24686 I adbd    : UsbFfs: connection terminated: monitor thread finished
+07-04 04:30:13.111  8163  8169 I adbd    : opening control endpoint /dev/usb-ffs/adb/ep0
+07-04 04:30:13.268  1089  1479 D ActivityManager: Skip enqueue broadcast because no receiver with Intent { act=com.android.server.action.NETWORK_STATS_UPDATED flg=0x40000010 }
+07-04 04:30:13.553  1089  1113 E UnisocWatchdog: UnisocWatchdogImpl sendMessage:0
+07-04 04:30:13.553  1089  1368 E UnisocWatchdog: UNISOCWATCHDOG_MESSAGE_TIMER30 trigger
+07-04 04:30:14.041  1089  1482 D WifiStaIfaceHidlImpl: getCachedScanData is not implemented by HIDL
+07-04 04:30:14.054  1089  1482 I HalDevMgr: bestIfaceCreationProposal is null, requestIface=STA, existingIface=[name=wlan0 type=STA]
+07-04 04:30:14.113  8163 24688 W adbd    : timed out while waiting for FUNCTIONFS_BIND, trying again
+07-04 04:30:14.113  8163 24688 I adbd    : UsbFfs: connection terminated: monitor thread finished
+07-04 04:30:14.138  8163  8169 I adbd    : opening control endpoint /dev/usb-ffs/adb/ep0
+07-04 04:30:15.142  8163 24689 W adbd    : timed out while waiting for FUNCTIONFS_BIND, trying again
+07-04 04:30:15.143  8163 24689 I adbd    : UsbFfs: connection terminated: monitor thread finished
+07-04 04:30:15.182  8163  8169 I adbd    : opening control endpoint /dev/usb-ffs/adb/ep0
+07-04 04:30:15.392  8163  8163 I adbd    : adbd service requested 'exec:screencap '-p''
+07-04 04:30:15.564 24693 24693 W screencap: type=1400 audit(0.0:891): avc:  denied  { read } for  name="u:object_r:vendor_codec_prop:s0" dev="tmpfs" ino=419 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_codec_prop:s0 tclass=file permissive=0
+07-04 04:30:15.565 24693 24693 W libc    : Access denied finding property "ro.vendor.codec.weak.cpu"
+07-04 04:30:15.574 24693 24693 W BpBinder: Linking to death on android.gui.ISurfaceComposer but there are no threads (yet?) listening to incoming transactions. See ProcessState::startThreadPool and ProcessState::setThreadPoolMaxThreadCount. Generally you should setup the binder threadpool before other initialization steps.
+07-04 04:30:15.575 24693 24693 W ProcessState: Extra binder thread started, but 0 threads requested. Do not use *startThreadPool when zero threads are requested.
+07-04 04:30:15.576   877   932 I mali_gralloc: allocate: id=36d00000f7c, hal_format=RGBA8888, mali_format=RGBA8888, afbc=false, usage=CPU_RW|GPU_RW|HWC, size=800x1280(4096000), stride=800, name=screenshot
+07-04 04:30:15.577   915   962 D mali_gralloc: register: id=36d00000f7c, handle=0xb40000733f5d7830, importpid=-1, gRegisteredHandles=13
+07-04 04:30:15.620 24693 24694 D mali_gralloc: register: id=36d00000f7c, handle=0xb4000074e4d0a370, importpid=915, gRegisteredHandles=0
+07-04 04:30:15.622 24693 24693 I DMABUFHEAPS: Using DMA-BUF heap named: protected
+07-04 04:30:15.649  1089  3297 W ContextImpl: Calling a method in the system process without a qualified user: android.app.ContextImpl.sendBroadcastMultiplePermissions:1270 android.content.Context.sendBroadcastMultiplePermissions:2476 com.android.server.TelephonyRegistry.broadcastServiceStateChanged:3548 com.android.server.TelephonyRegistry.notifyServiceStateForPhoneId:1728 com.android.internal.telephony.ITelephonyRegistry$Stub.onTransact:534 
+07-04 04:30:15.651  1089  3297 V BroadcastQueue: Enqueuing BroadcastRecord{8cd1aa3 android.intent.action.SERVICE_STATE/u-1} from uid 1000 pid 1089 for 2 receivers
+07-04 04:30:15.652  1089  3297 W ContextImpl: Calling a method in the system process without a qualified user: android.app.ContextImpl.sendBroadcastMultiplePermissions:1303 com.android.server.TelephonyRegistry.broadcastServiceStateChanged:3553 com.android.server.TelephonyRegistry.notifyServiceStateForPhoneId:1728 com.android.internal.telephony.ITelephonyRegistry$Stub.onTransact:534 android.os.Binder.execTransactInternal:1344 
+07-04 04:30:15.653  1089  3297 V BroadcastQueue: Enqueuing BroadcastRecord{a8431a0 android.intent.action.SERVICE_STATE/u-1} from uid 1000 pid 1089 for 2 receivers
+07-04 04:30:15.654  1089  3297 W ContextImpl: Calling a method in the system process without a qualified user: android.app.ContextImpl.sendBroadcastMultiplePermissions:1303 com.android.server.TelephonyRegistry.broadcastServiceStateChanged:3562 com.android.server.TelephonyRegistry.notifyServiceStateForPhoneId:1728 com.android.internal.telephony.ITelephonyRegistry$Stub.onTransact:534 android.os.Binder.execTransactInternal:1344 
+07-04 04:30:15.655  1089  3297 V BroadcastQueue: Enqueuing BroadcastRecord{3281159 android.intent.action.SERVICE_STATE/u-1} from uid 1000 pid 1089 for 2 receivers
+07-04 04:30:15.656  1089  3297 W ContextImpl: Calling a method in the system process without a qualified user: android.app.ContextImpl.sendBroadcastMultiplePermissions:1303 com.android.server.TelephonyRegistry.broadcastServiceStateChanged:3568 com.android.server.TelephonyRegistry.notifyServiceStateForPhoneId:1728 com.android.internal.telephony.ITelephonyRegistry$Stub.onTransact:534 android.os.Binder.execTransactInternal:1344 
+07-04 04:30:15.657  1089  3297 V BroadcastQueue: Enqueuing BroadcastRecord{12eb11e android.intent.action.SERVICE_STATE/u-1} from uid 1000 pid 1089 for 2 receivers
+07-04 04:30:15.663 19240 19240 D CellBroadcastReceiver: onReceive Intent { act=android.intent.action.SERVICE_STATE flg=0x1000010 cmp=com.google.android.cellbroadcastreceiver/com.android.cellbroadcastreceiver.CellBroadcastReceiver (has extras) }
+07-04 04:30:15.664 19240 19240 D CellBroadcastReceiver: onServiceStateChanged, ss: 1
+07-04 04:30:15.664 19240 19240 D CellBroadcastReceiver: networkOperator: 
+07-04 04:30:15.665 19240 19240 D CellBroadcastReceiver: networkOperator on emergency mode: 515 for the country code: ph
+07-04 04:30:15.666 19240 19240 D CellBroadcastReceiver: roamingNetworks: [XXX]
+07-04 04:30:15.666 19240 19240 D CellBroadcastReceiver: mockmodem is running? = false
+07-04 04:30:15.666  1833  1945 D IwlanNetworkService: requestNetworkRegistrationInfo,domain:2 callback:android.telephony.NetworkServiceCallback@8ff6d53
+07-04 04:30:15.667 19240 19240 D CellBroadcastReceiver: update supported roaming operator as 515
+07-04 04:30:15.667  1638  1638 W KeyguardUpdateMonitorLog: invalid subId in handleServiceStateChange()
+07-04 04:30:15.668  1615  1739 D UniOperatorNameHandler: ist is null, return empty pnn
+07-04 04:30:15.674  1833  1945 D UnisocCallsettingManagerImpl: isVtEnabledByUser...  setting = -1 | onByDefault = true
+07-04 04:30:15.675  1615  2379 D UniOperatorNameHandler: ist is null, return empty pnn
+07-04 04:30:15.679  1615  2379 D UniOperatorNameHandler: ist is null, return empty pnn
+07-04 04:30:15.706  1615  1615 D UniTeleUtils:  Not translated GT operator name
+07-04 04:30:15.713  1089  3297 W ContextImpl: Calling a method in the system process without a qualified user: android.app.ContextImpl.sendBroadcastMultiplePermissions:1270 android.content.Context.sendBroadcastMultiplePermissions:2476 com.android.server.TelephonyRegistry.broadcastServiceStateChanged:3548 com.android.server.TelephonyRegistry.notifyServiceStateForPhoneId:1728 com.android.internal.telephony.ITelephonyRegistry$Stub.onTransact:534 
+07-04 04:30:15.714  1089  3297 V BroadcastQueue: Enqueuing BroadcastRecord{60cbdff android.intent.action.SERVICE_STATE/u-1} from uid 1000 pid 1089 for 2 receivers
+07-04 04:30:15.715  1089  3297 W ContextImpl: Calling a method in the system process without a qualified user: android.app.ContextImpl.sendBroadcastMultiplePermissions:1303 com.android.server.TelephonyRegistry.broadcastServiceStateChanged:3553 com.android.server.TelephonyRegistry.notifyServiceStateForPhoneId:1728 com.android.internal.telephony.ITelephonyRegistry$Stub.onTransact:534 android.os.Binder.execTransactInternal:1344 
+07-04 04:30:15.715  1089  3297 V BroadcastQueue: Enqueuing BroadcastRecord{78ac7cc android.intent.action.SERVICE_STATE/u-1} from uid 1000 pid 1089 for 2 receivers
+07-04 04:30:15.716  1089  3297 W ContextImpl: Calling a method in the system process without a qualified user: android.app.ContextImpl.sendBroadcastMultiplePermissions:1303 com.android.server.TelephonyRegistry.broadcastServiceStateChanged:3562 com.android.server.TelephonyRegistry.notifyServiceStateForPhoneId:1728 com.android.internal.telephony.ITelephonyRegistry$Stub.onTransact:534 android.os.Binder.execTransactInternal:1344 
+07-04 04:30:15.717  1089  3297 V BroadcastQueue: Enqueuing BroadcastRecord{2bf6a15 android.intent.action.SERVICE_STATE/u-1} from uid 1000 pid 1089 for 2 receivers
+07-04 04:30:15.718  1089  3297 W ContextImpl: Calling a method in the system process without a qualified user: android.app.ContextImpl.sendBroadcastMultiplePermissions:1303 com.android.server.TelephonyRegistry.broadcastServiceStateChanged:3568 com.android.server.TelephonyRegistry.notifyServiceStateForPhoneId:1728 com.android.internal.telephony.ITelephonyRegistry$Stub.onTransact:534 android.os.Binder.execTransactInternal:1344 
+07-04 04:30:15.719  1089  3297 V BroadcastQueue: Enqueuing BroadcastRecord{f10c12a android.intent.action.SERVICE_STATE/u-1} from uid 1000 pid 1089 for 2 receivers
+07-04 04:30:15.720  1615  1615 D ServiceStateProvider: subId=-1
+07-04 04:30:15.722 19240 19240 D CellBroadcastReceiver: onReceive Intent { act=android.intent.action.SERVICE_STATE flg=0x1000010 cmp=com.google.android.cellbroadcastreceiver/com.android.cellbroadcastreceiver.CellBroadcastReceiver (has extras) }
+07-04 04:30:15.723 19240 19240 D CellBroadcastReceiver: onServiceStateChanged, ss: 1
+07-04 04:30:15.723 19240 19240 D CellBroadcastReceiver: networkOperator: 
+07-04 04:30:15.724 19240 19240 D CellBroadcastReceiver: networkOperator on emergency mode: 515 for the country code: ph
+07-04 04:30:15.724  1638  1638 W KeyguardUpdateMonitorLog: invalid subId in handleServiceStateChange()
+07-04 04:30:15.725 19240 19240 D CellBroadcastReceiver: roamingNetworks: [XXX]
+07-04 04:30:15.726 19240 19240 D CellBroadcastReceiver: mockmodem is running? = false
+07-04 04:30:15.726 19240 19240 D CellBroadcastReceiver: update supported roaming operator as 515
+07-04 04:30:15.852 24693 24693 D mali_gralloc: unregister: id=36d00000f7c, handle=0xb4000074e4d0a370, base=0x72e09d2000, importpid=24693, count:0
+07-04 04:30:15.924 22933 23021 D mali_gralloc: unregister: id=36d00000f6b, handle=0xb4000073f5593790, base=0x0, importpid=22933, count:0
+07-04 04:30:15.961  8163  8163 I adbd    : adbd service requested 'shell,v2,TERM=dumb:export ANDROID_LOG_TAGS=''; exec logcat '-d' '-t' '500''
+07-04 04:30:15.968   877   932 I mali_gralloc: allocate: id=36d00000f7d, hal_format=RGBA8888, mali_format=RGBA8888, afbc=SPLIT, usage=GPU_RW, size=832x320(1082368), stride=832, name=AHardwareBuffer pid [22933]
+07-04 04:30:15.969 22933 23021 D mali_gralloc: register: id=36d00000f7d, handle=0xb4000073f5598bf0, importpid=-1, gRegisteredHandles=10

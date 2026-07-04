@@ -1,0 +1,37 @@
+{
+  "name": "Mancenido Trucking Services LBMP",
+  "short_name": "LBMP",
+  "description": "App-first logistics business management platform for Mancenido Trucking Services.",
+  "id": "/app",
+  "start_url": "/app",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#102033",
+  "orientation": "portrait-primary",
+  "categories": ["business", "productivity"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Receive",
+      "short_name": "Receive",
+      "description": "Open receiving tasks",
+      "url": "/app?demo=receiving",
+      "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "Delivery",
+      "short_name": "Delivery",
+      "description": "Open delivery tasks",
+      "url": "/app?demo=delivery",
+      "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    }
+  ]
+}
