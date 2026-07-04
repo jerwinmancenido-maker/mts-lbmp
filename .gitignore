@@ -16,3 +16,10 @@ storage/receipts/*
 !storage/receipts/.gitkeep
 storage/qr-labels/*
 !storage/qr-labels/.gitkeep
+
+# Teammate tooling generated artifacts
+tools/visual-results/
+tools/visual-audit.spec.js-snapshots/
+tools/tools/
+playwright-report/
+test-results/audit-*/
