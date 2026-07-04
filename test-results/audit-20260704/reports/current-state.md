@@ -19,6 +19,10 @@ Open http://localhost:3000/app?demo=admin
 → Open Records → open saved record → tap Reprint
 → Take MacBook and NB80 screenshots
 → Confirm: Reprint is visible and works
+
+Before continuing:
+→ Reconnect NB80 wireless ADB. MacBook web/API are healthy, but NB80 is not currently visible to `adb devices`.
+→ Need fresh Wireless Debugging "IP address & port" from the tablet, then run `adb connect <IP>:<PORT>`.
 ```
 
 ---
@@ -27,11 +31,11 @@ Open http://localhost:3000/app?demo=admin
 
 | Field | Value |
 |---|---|
-| Status | PAUSED — waiting to resume |
+| Status | BLOCKED — waiting for NB80 wireless ADB reconnect |
 | Current phase | Phase 5 — Receive Print Closeout |
 | Current step | 5.2 — Print visibility |
-| Waiting for | User signal to resume |
-| Blocker | None |
+| Waiting for | Fresh NB80 Wireless Debugging IP address & port |
+| Blocker | NB80 not visible in `adb devices`; last known IP 172.30.1.204 is unreachable |
 
 ---
 

@@ -29,12 +29,12 @@ import java.util.List;
 public class NyxPrinterPlugin extends Plugin {
     private static final int RECEIPT_WIDTH_80MM_PT = 227;
     private static final int RECEIPT_WIDTH_58MM_PT = 164;
-    private static final int RECEIPT_80MM_PADDING_PT = 10;
-    private static final int RECEIPT_58MM_PADDING_PT = 6;
-    private static final float RECEIPT_80MM_TEXT_SIZE_PT = 8.0f;
-    private static final float RECEIPT_58MM_TEXT_SIZE_PT = 6.4f;
-    private static final int RECEIPT_80MM_LINE_HEIGHT_PT = 12;
-    private static final int RECEIPT_58MM_LINE_HEIGHT_PT = 9;
+    private static final int RECEIPT_80MM_PADDING_PT = 18;
+    private static final int RECEIPT_58MM_PADDING_PT = 12;
+    private static final float RECEIPT_80MM_TEXT_SIZE_PT = 7.2f;
+    private static final float RECEIPT_58MM_TEXT_SIZE_PT = 5.8f;
+    private static final int RECEIPT_80MM_LINE_HEIGHT_PT = 10;
+    private static final int RECEIPT_58MM_LINE_HEIGHT_PT = 8;
 
     @PluginMethod
     public void printText(PluginCall call) {

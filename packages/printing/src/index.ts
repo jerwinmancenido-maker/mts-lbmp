@@ -13,6 +13,12 @@ export interface ReceiptTemplateInput {
 }
 
 const WIDTH_80MM = 42;
+const SAFE_TEXT_WIDTH_BY_PAPER = {
+  "58mm": 24,
+  "80mm": 34
+} as const;
+
+export type ThermalPaperWidth = keyof typeof SAFE_TEXT_WIDTH_BY_PAPER;
 
 function center(text: string) {
   return text.length >= WIDTH_80MM ? text : text.padStart(Math.floor((WIDTH_80MM + text.length) / 2));
@@ -39,6 +45,61 @@ export function render80mmReceipt(input: ReceiptTemplateInput) {
 
   lines.push(input.footer ?? "Thank you.");
   return `${lines.join("\n")}\n`;
+}
+
+function centerForWidth(text: string, width: number) {
+  const trimmed = text.trim();
+  if (trimmed.length >= width) return trimmed;
+  return trimmed.padStart(Math.floor((width + trimmed.length) / 2));
+}
+
+function splitLongToken(token: string, width: number) {
+  const parts: string[] = [];
+  let remaining = token;
+  while (remaining.length > width) {
+    parts.push(remaining.slice(0, width));
+    remaining = remaining.slice(width);
+  }
+  if (remaining) parts.push(remaining);
+  return parts;
+}
+
+function wrapThermalLine(line: string, width: number) {
+  const normalized = line.replace(/\s+/g, " ").trimEnd();
+  if (!normalized.trim()) return [""];
+  if (/^-{8,}$/.test(normalized.trim())) return ["-".repeat(width)];
+
+  const withoutLeading = normalized.trimStart();
+  const isCenteredSource = normalized.length > withoutLeading.length && !withoutLeading.includes(":");
+  const source = isCenteredSource ? withoutLeading.trim() : normalized.trim();
+  const wrapped: string[] = [];
+  let current = "";
+
+  for (const rawToken of source.split(" ")) {
+    const tokenParts = rawToken.length > width ? splitLongToken(rawToken, width) : [rawToken];
+    for (const token of tokenParts) {
+      if (!current) {
+        current = token;
+      } else if (`${current} ${token}`.length <= width) {
+        current = `${current} ${token}`;
+      } else {
+        wrapped.push(current);
+        current = token;
+      }
+    }
+  }
+
+  if (current) wrapped.push(current);
+  return isCenteredSource ? wrapped.map((value) => centerForWidth(value, width)) : wrapped;
+}
+
+export function formatThermalTextForPaper(text: string, paperWidth: ThermalPaperWidth) {
+  const width = SAFE_TEXT_WIDTH_BY_PAPER[paperWidth];
+  return `${text
+    .replace(/\r/g, "")
+    .split("\n")
+    .flatMap((line) => wrapThermalLine(line, width))
+    .join("\n")}\n`;
 }
 
 export interface CargoPrintRow {

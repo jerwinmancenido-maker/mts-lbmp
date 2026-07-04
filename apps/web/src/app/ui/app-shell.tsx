@@ -6163,6 +6163,25 @@ function Receiving({
               </div>
             </div>
             {printStatus && <p className="notice">{printStatus}</p>}
+            <div className="recordPrintToolbar">
+              <button className="primaryButton recordPrintPrimary" onClick={() => onAction("Reprint receiving receipt", () => printReceivingRecordReceipt(editingReceivingRecord))}>
+                <Printer /> Reprint Receipt
+              </button>
+              <button className="smallButton recordPrintSecondary" onClick={() => onAction("Preview receiving receipt", () => previewReceivingRecordReceipt(editingReceivingRecord))}>
+                <Printer /> Preview
+              </button>
+              <button className="smallButton recordPrintSecondary" disabled={!selectedAttachRecord} onClick={() => void capturePhotoOrOpenPicker(attachDrPhotoInputRef, `receiving-dr-photo-${Date.now()}.jpg`, async (file) => {
+                const uploaded = await uploadCompressedImage(file, "receiving-dr-photo", selectedAttachRecord);
+                await queueablePost("photo", `/receiving/${selectedAttachRecord}/dr-photo`, {
+                  drPhotoUrl: uploaded.fileUrl,
+                  reason: attachReason || "Late DR attachment"
+                });
+                await openExistingReceivingRecord(selectedAttachRecord);
+                setReceiveMessage(photoUploadStatus(uploaded, `DR photo attached to ${selectedAttachRecord}.`));
+              })}>
+                <Camera /> Add DR
+              </button>
+            </div>
             <div className="formGrid">
               <label>Customer DR Number<input value={editingReceivingRecord.customerDrNumber ?? ""} onChange={(event) => setEditingReceivingRecord({ ...editingReceivingRecord, customerDrNumber: event.target.value })} /></label>
               <label>Sender<input value={editingReceivingRecord.sender ?? ""} onChange={(event) => setEditingReceivingRecord({ ...editingReceivingRecord, sender: event.target.value })} /></label>
@@ -6193,23 +6212,6 @@ function Receiving({
             <div className="buttonGrid recordActionGrid">
               <button className="primaryButton" disabled={!recordEditReason.trim()} onClick={() => onAction("Save receiving record edits", saveReceivingRecordEdits)}>
                 Save Changes with Audit
-              </button>
-              <button className="actionButton" onClick={() => onAction("Reprint receiving receipt", () => printReceivingRecordReceipt(editingReceivingRecord))}>
-                <Printer /> Reprint Receipt
-              </button>
-              <button className="actionButton" onClick={() => onAction("Preview receiving receipt", () => previewReceivingRecordReceipt(editingReceivingRecord))}>
-                <Printer /> Preview Receipt
-              </button>
-              <button className="actionButton" disabled={!selectedAttachRecord} onClick={() => void capturePhotoOrOpenPicker(attachDrPhotoInputRef, `receiving-dr-photo-${Date.now()}.jpg`, async (file) => {
-                const uploaded = await uploadCompressedImage(file, "receiving-dr-photo", selectedAttachRecord);
-                await queueablePost("photo", `/receiving/${selectedAttachRecord}/dr-photo`, {
-                  drPhotoUrl: uploaded.fileUrl,
-                  reason: attachReason || "Late DR attachment"
-                });
-                await openExistingReceivingRecord(selectedAttachRecord);
-                setReceiveMessage(photoUploadStatus(uploaded, `DR photo attached to ${selectedAttachRecord}.`));
-              })}>
-                <Camera /> Add DR Image
               </button>
             </div>
             <div className="subPanel">
