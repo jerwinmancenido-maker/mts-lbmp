@@ -39,7 +39,11 @@
     "apk:logs": "adb logcat -s Capacitor/Console chromium LBMP",
     "prisma:generate": "npm run prisma:generate --workspace @mts-lbmp/database",
     "prisma:migrate": "npm run prisma:migrate --workspace @mts-lbmp/database",
-    "prisma:studio": "npm run prisma:studio --workspace @mts-lbmp/database"
+    "prisma:studio": "npm run prisma:studio --workspace @mts-lbmp/database",
+    "teammate:doctor": "node tools/teammate-doctor.js",
+    "visual:audit": "node tools/visual-audit.js",
+    "visual:audit:update": "node tools/visual-audit.js --update-baselines",
+    "linear:sync": "node tools/linear-sync.js"
   },
   "engines": {
     "node": ">=20.0.0"

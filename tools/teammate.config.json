@@ -1,0 +1,90 @@
+{
+  "path": "/Users/jerwinmancenido/mts-lbmp",
+  "name": "MTS LBMP",
+  "ports": [
+    3000,
+    4100
+  ],
+  "envFiles": [
+    ".env",
+    ".env.example"
+  ],
+  "prismaSchema": "packages/database/prisma/schema.prisma",
+  "adbReversePorts": [
+    3000,
+    4100
+  ],
+  "visualAuditBaseUrl": "http://127.0.0.1:3000",
+  "visualResultsDir": "tools/visual-results",
+  "visualAuditViewports": [
+    {
+      "name": "desktop",
+      "width": 1440,
+      "height": 1100
+    },
+    {
+      "name": "tablet",
+      "width": 834,
+      "height": 1112
+    }
+  ],
+  "visualAuditViews": [
+    {
+      "name": "01-public-home",
+      "path": "/"
+    },
+    {
+      "name": "02-tracking-demo",
+      "path": "/tracking/PKG-2026-07-000001"
+    },
+    {
+      "name": "03-intake-daet",
+      "path": "/intake/daet"
+    },
+    {
+      "name": "04-dashboard",
+      "path": "/app",
+      "click": "Dashboard"
+    },
+    {
+      "name": "05-receiving",
+      "path": "/app",
+      "click": "Receive"
+    },
+    {
+      "name": "06-packages",
+      "path": "/app",
+      "click": "Cargo"
+    },
+    {
+      "name": "07-trips",
+      "path": "/app",
+      "click": "Trips"
+    },
+    {
+      "name": "08-delivery",
+      "path": "/app",
+      "click": "Deliver"
+    },
+    {
+      "name": "09-payments",
+      "path": "/app",
+      "click": "Payments"
+    },
+    {
+      "name": "10-expenses",
+      "path": "/app",
+      "click": "Expenses"
+    },
+    {
+      "name": "11-admin",
+      "path": "/app",
+      "click": "Admin"
+    },
+    {
+      "name": "12-hardware",
+      "path": "/app",
+      "click": "Device"
+    }
+  ]
+}
