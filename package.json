@@ -52,7 +52,7 @@
     "@capacitor/cli": "^8.4.1",
     "@playwright/test": "^1.61.1",
     "msw": "^2.14.6",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.11"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.1",
