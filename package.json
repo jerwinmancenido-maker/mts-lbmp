@@ -52,10 +52,10 @@
     "@capacitor/cli": "^8.4.1",
     "@playwright/test": "^1.61.1",
     "msw": "^2.14.6",
-    "vitest": "^4.1.9"
+    "vitest": "^5.1.0"
   },
   "dependencies": {
-    "@capacitor/android": "^8.4.1",
+    "@capacitor/android": "^8.4.3",
     "@capacitor/app": "^8.1.0",
     "@capacitor/camera": "^8.2.0",
     "@capacitor/core": "^8.4.1",
