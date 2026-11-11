@@ -33,7 +33,7 @@ import { appendDiagnosticLog, clearCachedRecords, clearDiagnosticLogs, deleteOff
 import { OFFLINE_QUEUE_MAX_AUTO_ATTEMPTS, attemptQueueRecordSync, queueItemView, shouldAutoRetryQueueRecord, sortQueueItemViews, type QueueItemView } from "./queue-view";
 import { cacheReceivingFormStore, clearReceivingFormSnapshot, loadReceivingFormSnapshot, receivingFormHasContent, saveReceivingFormSnapshot, type ReceivingFormSnapshot } from "./receiving-form-persistence";
 import { parsePhilippineAddress, readDeliveryReceiptPhoto, type DrOcrConfidence, type DrOcrProgress, type DrOcrResult } from "./dr-ocr";
-import { setPhotoAuditUser, setPhotoUploadContext, takeNativeCameraPhoto, uploadCompressedImage } from "./media";
+import { setPhotoAuditUser, setPhotoUploadContext, takeNativeCameraPhoto, uploadCompressedImage, uploadPathForPhotoType } from "./media";
 import type { PrinterDiagnosticCheck } from "@mts-lbmp/printing";
 import { printNativeText, runPrinterDiagnostic } from "./native-printer";
 import type { AuditLog, BillingInvoice, BootstrapData, Branch, CargoPackage, DashboardData, ExpenseRecord, HardwareTestRecord, OperationChatThread, PaymentRecord, PrintDocumentMeta, ProductMaster, RenderedDocumentResponse, Trip } from "./types";
@@ -1129,7 +1129,10 @@ export function AppShell() {
 
   async function uploadQueuedPhoto(record: QueuedPhotoRecord) {
     const dataUrl = await blobToDataUrl(record.compressedBlob);
-    return apiPost<{ fileUrl: string; size: number; mimeType: string; type: string }>("/uploads", {
+    // Phase 5 P5-3: route by photo type — staff photos to the
+    // authenticated /uploads, wall-QR intake DR photos to the scoped
+    // public intake variant (see media.ts uploadPathForPhotoType).
+    return apiPost<{ fileUrl: string; size: number; mimeType: string; type: string }>(uploadPathForPhotoType(record.photoType), {
       dataUrl,
       fileName: record.fileName,
       type: record.photoType,

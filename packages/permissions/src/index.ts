@@ -10,6 +10,7 @@ export const permissions = [
   "receiving.print",
   "pricing.edit",
   "pricing.view",
+  "packages.view",
   "trips.create",
   "trips.view",
   "trips.edit",
@@ -38,6 +39,7 @@ export const rolePresets: Record<string, Permission[]> = {
   Administrator: [...permissions],
   "System Admin": [...permissions],
   "Daet Owner": [
+    "packages.view",
     "audit.view",
     "customers.manage",
     "receiving.view",
@@ -67,6 +69,7 @@ export const rolePresets: Record<string, Permission[]> = {
     "records.restore"
   ],
   "Naga Owner": [
+    "packages.view",
     "audit.view",
     "customers.manage",
     "receiving.view",
@@ -96,6 +99,7 @@ export const rolePresets: Record<string, Permission[]> = {
     "records.restore"
   ],
   "Receiving Staff": [
+    "packages.view",
     "customers.manage",
     "receiving.create",
     "receiving.view",
@@ -113,6 +117,7 @@ export const rolePresets: Record<string, Permission[]> = {
     "messages.reply"
   ],
   "Delivery Staff": [
+    "packages.view",
     "trips.view",
     "arrival.scan",
     "delivery.complete",
@@ -124,6 +129,7 @@ export const rolePresets: Record<string, Permission[]> = {
     "messages.reply"
   ],
   "Delivery Admin": [
+    "packages.view",
     "trips.view",
     "arrival.scan",
     "delivery.complete",
