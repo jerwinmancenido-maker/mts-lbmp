@@ -15,6 +15,7 @@ import {
 } from "@mts-lbmp/shared";
 import { renderDeliveryReceipt, renderLoadingManifest, renderQrLabel, renderReceivingDocument, renderReceivingSlip, summarizePrinterDiagnostic, toEscPosTextBytes, type PrinterDiagnosticCheck } from "@mts-lbmp/printing";
 import { hashSecret, signAuthToken, verifySecret } from "./security.js";
+import { deviceLabelFromUserAgent } from "./device-label.js";
 import { createStateStore, type LoadedServiceState, type ServiceState, type StateStore } from "./state-store.js";
 import { resolveSmokeSeedConfig, upsertSmokeAccounts } from "./smoke-seed.js";
 import { BOOTSTRAP_MISSING_ENV_WARNING, buildBootstrapAdminRecord, resolveBootstrapAdmin } from "./bootstrap-admin.js";
@@ -614,9 +615,9 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
    * counted on that account. Reaching LOGIN_MAX_FAILED_ATTEMPTS locks the
    * account for LOGIN_LOCKOUT_MS on BOTH doors (the counter is shared).
    */
-  private registerLoginFailure(record: StaffUserRecord | undefined, door: "password" | "staffCode", attemptedIdentifier: string) {
+  private registerLoginFailure(record: StaffUserRecord | undefined, door: "password" | "staffCode", attemptedIdentifier: string, device = "Unknown device") {
     if (!record) {
-      this.audit("auth.loginFailed", "User", attemptedIdentifier, `door=${door}; unknown or inactive account`);
+      this.audit("auth.loginFailed", "User", attemptedIdentifier, `door=${door}; device=${device}; unknown or inactive account`);
       this.saveData();
       return;
     }
@@ -627,10 +628,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         "auth.loginLocked",
         "User",
         record.id,
-        `door=${door}; ${record.failedLoginAttempts} consecutive failures; locked until ${record.loginLockedUntil}`
+        `door=${door}; device=${device}; ${record.failedLoginAttempts} consecutive failures; locked until ${record.loginLockedUntil}`
       );
     } else {
-      this.audit("auth.loginFailed", "User", record.id, `door=${door}; consecutive failures=${record.failedLoginAttempts}`);
+      this.audit("auth.loginFailed", "User", record.id, `door=${door}; device=${device}; consecutive failures=${record.failedLoginAttempts}`);
     }
     this.saveData();
   }
@@ -648,39 +649,44 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return new BadRequestException("Account is temporarily locked after repeated failed sign-ins. Try again later.");
   }
 
-  login(input: { email: string; password: string }) {
+  login(input: { email: string; password: string; userAgent?: string }) {
+    // Phase 5 P5-5: the login audit trail records a coarse device label
+    // derived from the request's user-agent (see device-label.ts).
+    const device = deviceLabelFromUserAgent(input.userAgent);
     const user = this.getAllUsers().find((entry) => entry.email === input.email);
     const record = user ? this.findUserRecord(user.id) : undefined;
     if (!user || !record || user.status === "Inactive") {
-      this.registerLoginFailure(undefined, "password", String(input.email ?? ""));
+      this.registerLoginFailure(undefined, "password", String(input.email ?? ""), device);
       throw new BadRequestException("Invalid email or password");
     }
     if (this.isLoginLocked(record)) {
-      this.audit("auth.loginLocked", "User", user.id, "door=password; sign-in attempted during lockout");
+      this.audit("auth.loginLocked", "User", user.id, `door=password; device=${device}; sign-in attempted during lockout`);
       throw this.lockedLoginError();
     }
     // Fail closed: an account with no password hash of its own cannot sign
     // in through this door at all — there is no shared fallback password.
     const storedHash = this.passwordHashFor(record);
     if (!storedHash || !verifySecret(input.password ?? "", storedHash)) {
-      this.registerLoginFailure(record, "password", user.id);
+      this.registerLoginFailure(record, "password", user.id, device);
       throw new BadRequestException("Invalid email or password");
     }
     this.registerLoginSuccess(record);
-    this.audit("auth.login", "User", user.id);
+    this.audit("auth.login", "User", user.id, `door=password; device=${device}`);
     return {
       user: this.toSafeUser(user),
       token: signAuthToken({
         userId: user.id,
         role: user.role,
         branchAccess: user.branchAccess,
-        sessionVersion: record.sessionVersion ?? 0
+        sessionVersion: record.sessionVersion ?? 0,
+        door: "password"
       }),
       note: "Signed JWT. The session is revoked when the account's credentials change."
     };
   }
 
-  loginWithStaffCode(input: { staffCode: string }) {
+  loginWithStaffCode(input: { staffCode: string; userAgent?: string }) {
+    const device = deviceLabelFromUserAgent(input.userAgent);
     const cleanCode = String(input.staffCode ?? "").trim();
     // Codes are stored only as per-user PBKDF2 hashes, so the match is a
     // verify against each eligible account's hash (codes are unique across
@@ -702,22 +708,23 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       // A code that matches no account cannot be attributed to one, so no
       // per-account counter moves; the failure is still audited, and the
       // global throttler remains the brake on unattributed guessing.
-      this.registerLoginFailure(undefined, "staffCode", "staff-code");
+      this.registerLoginFailure(undefined, "staffCode", "staff-code", device);
       throw new BadRequestException("Invalid staff code");
     }
     if (this.isLoginLocked(matchedRecord)) {
-      this.audit("auth.loginLocked", "User", matchedUser.id, "door=staffCode; sign-in attempted during lockout");
+      this.audit("auth.loginLocked", "User", matchedUser.id, `door=staffCode; device=${device}; sign-in attempted during lockout`);
       throw this.lockedLoginError();
     }
     this.registerLoginSuccess(matchedRecord);
-    this.audit("auth.staffCodeLogin", "User", matchedUser.id);
+    this.audit("auth.staffCodeLogin", "User", matchedUser.id, `door=staffCode; device=${device}`);
     return {
       user: this.toSafeUser(matchedUser),
       token: signAuthToken({
         userId: matchedUser.id,
         role: matchedUser.role,
         branchAccess: matchedUser.branchAccess,
-        sessionVersion: matchedRecord.sessionVersion ?? 0
+        sessionVersion: matchedRecord.sessionVersion ?? 0,
+        door: "staffCode"
       }),
       note: "Signed JWT. The session is revoked when the account's credentials change."
     };

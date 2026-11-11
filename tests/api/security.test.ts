@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "vitest";
-import { getAuthSecret, hashSecret, signAuthToken, verifyAuthToken, verifySecret } from "../../apps/api/src/modules/security";
+import { getAuthSecret, hashSecret, signAuthToken, tokenTtlSeconds, verifyAuthToken, verifySecret } from "../../apps/api/src/modules/security";
 
 describe("API security helpers", () => {
   test("hashes and verifies secrets without storing plain text", () => {
@@ -66,6 +66,59 @@ describe("API security helpers", () => {
       process.env.NODE_ENV = "test";
 
       expect(getAuthSecret()).toBeTruthy();
+    });
+  });
+
+  describe("per-door token TTL (P5-5)", () => {
+    const KEYS = ["AUTH_PASSWORD_TOKEN_TTL_SECONDS", "AUTH_STAFF_CODE_TOKEN_TTL_SECONDS", "AUTH_TOKEN_TTL_SECONDS"] as const;
+    const saved = new Map<string, string | undefined>(KEYS.map((key) => [key, process.env[key]]));
+
+    afterEach(() => {
+      for (const key of KEYS) {
+        const value = saved.get(key);
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+
+    function clearTtlEnv() {
+      for (const key of KEYS) delete process.env[key];
+    }
+
+    function lifetimeOf(token: string) {
+      const payload = verifyAuthToken(token);
+      return (payload?.exp ?? 0) - (payload?.iat ?? 0);
+    }
+
+    test("defaults: staff-code sessions last 8 h, password sessions 12 h", () => {
+      clearTtlEnv();
+      expect(tokenTtlSeconds("staffCode")).toBe(8 * 60 * 60);
+      expect(tokenTtlSeconds("password")).toBe(12 * 60 * 60);
+      expect(lifetimeOf(signAuthToken({ userId: "qa-user", role: "Receiving Staff", door: "staffCode" }))).toBe(8 * 60 * 60);
+      expect(lifetimeOf(signAuthToken({ userId: "qa-user", role: "System Admin", door: "password" }))).toBe(12 * 60 * 60);
+      // No door specified = the password door (the pre-P5-5 behaviour).
+      expect(lifetimeOf(signAuthToken({ userId: "qa-user", role: "System Admin" }))).toBe(12 * 60 * 60);
+    });
+
+    test("each door is env-tunable independently, and the legacy variable still feeds the password door", () => {
+      clearTtlEnv();
+      process.env.AUTH_STAFF_CODE_TOKEN_TTL_SECONDS = "3600";
+      process.env.AUTH_PASSWORD_TOKEN_TTL_SECONDS = "7200";
+      expect(tokenTtlSeconds("staffCode")).toBe(3600);
+      expect(tokenTtlSeconds("password")).toBe(7200);
+
+      delete process.env.AUTH_PASSWORD_TOKEN_TTL_SECONDS;
+      process.env.AUTH_TOKEN_TTL_SECONDS = "5400";
+      expect(tokenTtlSeconds("password")).toBe(5400);
+      expect(tokenTtlSeconds("staffCode")).toBe(3600);
+    });
+
+    test("garbage TTL values fall back to the door default instead of minting broken tokens", () => {
+      clearTtlEnv();
+      process.env.AUTH_STAFF_CODE_TOKEN_TTL_SECONDS = "not-a-number";
+      process.env.AUTH_PASSWORD_TOKEN_TTL_SECONDS = "-5";
+      expect(tokenTtlSeconds("staffCode")).toBe(8 * 60 * 60);
+      expect(tokenTtlSeconds("password")).toBe(12 * 60 * 60);
     });
   });
 

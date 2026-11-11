@@ -46,6 +46,15 @@ The gate is `npm run typecheck`, `npm run test:unit`, `npm run build`, then
 the two smoke suites against a running API (`npm run smoke`,
 `npm run smoke:permissions`).
 
+**Credential scan (standing rule, Phase 5 P5-5):** before any PR merges,
+scan the diff AND the built web bundle for credential-shaped <redacted>
+`password=`, token-shaped values, `sk-`-style API keys, and any real
+secret value. The Phase 5 audit found a working credential shipped in
+the web bundle; the demo doors that made that possible are deleted, and
+this scan is the checklist step that keeps them from creeping back.
+Hits must be removed (and, for a real secret, rotated) before merge —
+never explained away.
+
 The smoke suites sign in with dedicated smoke accounts, not the demo users.
 Boot the API with `ALLOW_DEMO_AUTH=true` (never in production) and a
 test-only seed hook provisions the accounts at startup; credentials come

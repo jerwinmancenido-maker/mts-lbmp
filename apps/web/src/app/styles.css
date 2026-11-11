@@ -3181,6 +3181,16 @@ textarea {
   color: var(--text);
 }
 
+/* Phase 5 P5-5: the login screen's session-expired notice. */
+.sessionExpiredNotice {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--role-accent) 10%, transparent);
+  font-weight: 600;
+}
+
 .globalIssueBanner {
   position: fixed;
   top: calc(env(safe-area-inset-top) + 12px);

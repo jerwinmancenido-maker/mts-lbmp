@@ -28,7 +28,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Ref } from "react";
 import type { PackageCondition } from "@mts-lbmp/shared";
-import { apiGet, apiPatch, apiPost, clearApiToken, setApiToken } from "./api";
+import { apiGet, apiPatch, apiPost, clearApiToken, hasApiToken, setApiToken, setSessionExpiredListener } from "./api";
+import { isSessionExpiredError, SESSION_EXPIRED_MESSAGE } from "./session-expiry";
 import { appendDiagnosticLog, clearCachedRecords, clearDiagnosticLogs, deleteOfflineQueueRecord, deleteQueuedPhoto, enqueueOfflineAction, getOfflineStorageSummary, listDiagnosticLogs, listOfflineQueue, listQueuedPhotos, newOfflineQueueRecordId, pruneOfflineQueue, readCachedRecord, readCachedValue, replaceQueuedPhotoReferences, requestPersistentStorage, updateOfflineQueueRecord, updateQueuedPhoto, writeCachedValue, type DiagnosticLogRecord, type OfflineQueueRecord, type OfflineStorageSummary, type QueuedPhotoRecord } from "./cache";
 import { OFFLINE_QUEUE_MAX_AUTO_ATTEMPTS, attemptQueueRecordSync, queueItemView, shouldAutoRetryQueueRecord, sortQueueItemViews, type QueueItemView } from "./queue-view";
 import { cacheReceivingFormStore, clearReceivingFormSnapshot, loadReceivingFormSnapshot, receivingFormHasContent, saveReceivingFormSnapshot, type ReceivingFormSnapshot } from "./receiving-form-persistence";
@@ -806,6 +807,10 @@ export function AppShell() {
     hasStaffCode: false
   });
   const [signedIn, setSignedIn] = useState(false);
+  // Phase 5 P5-5: shown on the login screen when the API reports the
+  // session is over (expired/invalid/revoked token) — set by the
+  // session-expired listener below, cleared on the next sign-in.
+  const [sessionNotice, setSessionNotice] = useState("");
   const [passwordChangeRequired, setPasswordChangeRequired] = useState(false);
   const [passwordChangeOpen, setPasswordChangeOpen] = useState(false);
   const [activeBranchContext, setActiveBranchContext] = useState("Daet");
@@ -997,6 +1002,9 @@ export function AppShell() {
     // to the change-password endpoint).
     if (!signedIn || passwordChangeRequired) return;
     refresh().catch((error: unknown) => {
+      // P5-5: a dead session already routed to the login screen via the
+      // session-expired listener — no error banner on top of it.
+      if (isSessionExpiredError(error)) return;
       const message = error instanceof Error ? error.message : "Unable to load app data";
       setStatus(message);
       showGlobalIssue({
@@ -1009,6 +1017,26 @@ export function AppShell() {
       });
     });
   }, [refresh, showGlobalIssue, signedIn, passwordChangeRequired]);
+
+  useEffect(() => {
+    // Phase 5 P5-5: when the API says the session is over (x-auth-failure:
+    // session), drop the token and return to the login screen with a
+    // plain notice — instead of every screen surfacing raw error toasts
+    // for a dead session. Permission failures on a VALID session never
+    // reach this listener, so they never sign anyone out. The token
+    // check keeps repeat failures (parallel calls racing the first one)
+    // and stray unauthenticated failures from re-firing the routing.
+    setSessionExpiredListener(() => {
+      if (!hasApiToken()) return;
+      clearApiToken();
+      setSignedIn(false);
+      setPasswordChangeRequired(false);
+      setPasswordChangeOpen(false);
+      setSessionNotice(SESSION_EXPIRED_MESSAGE);
+      setStatus(SESSION_EXPIRED_MESSAGE);
+    });
+    return () => setSessionExpiredListener(null);
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1553,6 +1581,12 @@ export function AppShell() {
       setStatus(`${label} completed`);
       void appendDiagnosticLog({ level: "info", source: "action", message: `${label} completed`, userId: activeUser.id, branch: branchScope, module: activeTab });
     } catch (error) {
+      // P5-5: session expiry is handled by the listener (login screen +
+      // notice); an action must not ALSO raise a failure banner for it.
+      if (isSessionExpiredError(error)) {
+        setStatus(SESSION_EXPIRED_MESSAGE);
+        return;
+      }
       const message = error instanceof Error ? error.message : `${label} failed`;
       setStatus(message);
       showGlobalIssue({
@@ -1600,6 +1634,7 @@ export function AppShell() {
   async function completeSignIn(result: { token: string; user: OperatorUser }) {
     setApiToken(result.token);
     setActiveUser(result.user);
+    setSessionNotice("");
     setSignedIn(true);
     setPasswordChangeRequired(Boolean(result.user.mustChangePassword));
     if (!result.user.mustChangePassword) {
@@ -1621,6 +1656,7 @@ export function AppShell() {
   /** Logout: clear the in-memory token and return to the login screen. */
   function logout() {
     clearApiToken();
+    setSessionNotice("");
     setSignedIn(false);
     setPasswordChangeRequired(false);
     setPasswordChangeOpen(false);
@@ -1931,7 +1967,7 @@ export function AppShell() {
   // account sees the forced password-change screen before anything else.
   if (!signedIn) {
     return (
-      <LoginScreen onSignInWithPassword={signInWithPassword} onSignInWithStaffCode={signInWithStaffCode} />
+      <LoginScreen notice={sessionNotice} onSignInWithPassword={signInWithPassword} onSignInWithStaffCode={signInWithStaffCode} />
     );
   }
   if (passwordChangeRequired || passwordChangeOpen) {
@@ -3397,9 +3433,12 @@ function apiErrorMessage(error: unknown, fallback: string) {
  * nothing renders the shell until one of these succeeds.
  */
 function LoginScreen({
+  notice,
   onSignInWithPassword,
   onSignInWithStaffCode
 }: {
+  /** Phase 5 P5-5: e.g. the session-expired notice after a forced return here. */
+  notice?: string;
   onSignInWithPassword: (email: string, password: string) => Promise<void>;
   onSignInWithStaffCode: (staffCode: string) => Promise<void>;
 }) {
@@ -3467,6 +3506,10 @@ function LoginScreen({
               <p className="muted">Sign in to continue</p>
             </div>
           </div>
+
+          {notice && (
+            <p className="sessionExpiredNotice" role="alert">{notice}</p>
+          )}
 
           <div className="segmentedControl" role="tablist" aria-label="Sign-in method">
             <button type="button" className={mode === "password" ? "active" : ""} onClick={() => setMode("password")}>Email &amp; Password</button>

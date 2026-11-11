@@ -16,7 +16,33 @@ export type AuthTokenPayload = {
   exp: number;
 };
 
-const TOKEN_TTL_SECONDS = Number(process.env.AUTH_TOKEN_TTL_SECONDS ?? 60 * 60 * 12);
+/**
+ * Token TTL policy (Phase 5 P5-5): explicit PER DOOR, env-tunable.
+ * - Password door: 12 h (owner/admin working day) — AUTH_PASSWORD_TOKEN_TTL_SECONDS.
+ *   The historical AUTH_TOKEN_TTL_SECONDS variable stays honoured as the
+ *   fallback for this door so existing deployments keep their setting.
+ * - Staff-code door: 8 h (one warehouse shift) — AUTH_STAFF_CODE_TOKEN_TTL_SECONDS.
+ * Before P5-5 a single 12 h TTL (AUTH_TOKEN_TTL_SECONDS) applied to both
+ * doors. Read at sign time (not module load) so the policy is testable
+ * and a restart-free env change in tests is honoured; garbage values
+ * (non-numeric / non-positive) fall back to the door's default rather
+ * than minting already-expired or never-expiring tokens.
+ */
+export type AuthDoor = "password" | "staffCode";
+
+const DEFAULT_TOKEN_TTL_SECONDS: Record<AuthDoor, number> = {
+  password: 60 * 60 * 12,
+  staffCode: 60 * 60 * 8
+};
+
+export function tokenTtlSeconds(door: AuthDoor, env: NodeJS.ProcessEnv = process.env): number {
+  const raw =
+    door === "staffCode"
+      ? env.AUTH_STAFF_CODE_TOKEN_TTL_SECONDS
+      : env.AUTH_PASSWORD_TOKEN_TTL_SECONDS ?? env.AUTH_TOKEN_TTL_SECONDS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_TOKEN_TTL_SECONDS[door];
+}
 const PASSWORD_ITERATIONS = Number(process.env.PASSWORD_HASH_ITERATIONS ?? 120_000);
 const PASSWORD_KEY_LENGTH = 32;
 const PASSWORD_DIGEST = "sha256";
@@ -64,7 +90,14 @@ export function verifySecret(secret: string, storedHash: string) {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-export function signAuthToken(input: { userId: string; role: string; branchAccess?: string; sessionVersion?: number }) {
+export function signAuthToken(input: {
+  userId: string;
+  role: string;
+  branchAccess?: string;
+  sessionVersion?: number;
+  /** Which login door minted this token — sets the TTL (P5-5). Defaults to the password door. */
+  door?: AuthDoor;
+}) {
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: "HS256", typ: "JWT" };
   const payload: AuthTokenPayload = {
@@ -73,7 +106,7 @@ export function signAuthToken(input: { userId: string; role: string; branchAcces
     branchAccess: input.branchAccess,
     sv: input.sessionVersion ?? 0,
     iat: now,
-    exp: now + TOKEN_TTL_SECONDS
+    exp: now + tokenTtlSeconds(input.door ?? "password")
   };
   const encodedHeader = base64Url(JSON.stringify(header));
   const encodedPayload = base64Url(JSON.stringify(payload));
