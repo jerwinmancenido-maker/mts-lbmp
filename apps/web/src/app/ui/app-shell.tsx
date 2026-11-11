@@ -31,8 +31,9 @@ import { apiGet, apiPatch, apiPost, setApiToken } from "./api";
 import { appendDiagnosticLog, clearCachedRecords, clearDiagnosticLogs, deleteQueuedPhoto, enqueueOfflineAction, getOfflineStorageSummary, listDiagnosticLogs, listOfflineQueue, listQueuedPhotos, readCachedRecord, readCachedValue, replaceQueuedPhotoReferences, requestPersistentStorage, updateOfflineQueueRecord, updateQueuedPhoto, writeCachedValue, type DiagnosticLogRecord, type OfflineQueueRecord, type OfflineStorageSummary, type QueuedPhotoRecord } from "./cache";
 import { parsePhilippineAddress, readDeliveryReceiptPhoto, type DrOcrConfidence, type DrOcrProgress, type DrOcrResult } from "./dr-ocr";
 import { setPhotoAuditUser, setPhotoUploadContext, takeNativeCameraPhoto, uploadCompressedImage } from "./media";
-import { printNativeText } from "./native-printer";
-import type { AuditLog, BillingInvoice, BootstrapData, Branch, CargoPackage, DashboardData, ExpenseRecord, HardwareTestRecord, OperationChatThread, PaymentRecord, ProductMaster, Trip } from "./types";
+import type { PrinterDiagnosticCheck } from "@mts-lbmp/printing";
+import { printNativeText, runPrinterDiagnostic } from "./native-printer";
+import type { AuditLog, BillingInvoice, BootstrapData, Branch, CargoPackage, DashboardData, ExpenseRecord, HardwareTestRecord, OperationChatThread, PaymentRecord, PrintDocumentMeta, ProductMaster, RenderedDocumentResponse, Trip } from "./types";
 
 type Tab =
   | "dashboard"
@@ -327,6 +328,49 @@ function documentNumberFromPrintText(text: string) {
   return text.match(/\b(RR|TR|PKG|DR)-\d{4}-\d{2}-\d{6}\b/)?.[0] ?? "Document number pending";
 }
 
+/**
+ * printNativeText rejects when the native plugin rejects (e.g. gateway
+ * missing); direct-print callers need the failure as a value so they can
+ * record the failed hand-off instead of losing it to an exception.
+ */
+async function attemptNativePrint(text: string, documentName: string, paperWidth: "58mm" | "80mm") {
+  try {
+    return await printNativeText(text, documentName, paperWidth);
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "Print failed. Open Device > Printer Test." };
+  }
+}
+
+/**
+ * Reports a print hand-off to the API so the PrintLog row is written at
+ * hand-off time — with the real signed-in user (resolved server-side from
+ * the session), the layout actually used, and the outcome the client
+ * observed — instead of at render time. Best-effort by design: the physical
+ * hand-off already happened (or failed) on this device, so a logging
+ * failure must not crash the print flow; it returns false so the caller can
+ * warn the operator that the audit row was not saved.
+ */
+async function recordPrintHandoff(
+  meta: PrintDocumentMeta,
+  input: { layout: "58mm" | "80mm" | "A4"; deviceName?: string; outcome: "HandedOff" | "Failed"; error?: string }
+): Promise<boolean> {
+  try {
+    await apiPost("/printing/handoffs", {
+      documentType: meta.documentType,
+      documentNumber: meta.documentNumber,
+      relatedEntityType: meta.relatedEntityType,
+      relatedEntityId: meta.relatedEntityId,
+      layout: input.layout,
+      deviceName: input.deviceName,
+      outcome: input.outcome,
+      error: input.error
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function branchOptionsForUser(user: { role: string; branchAccess?: string }, branches: Branch[] = []) {
   const operationalBranches = operationalBranchNames(branches);
   if (user.role === "Customer Owner") return ["Customer portal"];
@@ -593,7 +637,7 @@ function LongTextField({
   );
 }
 
-function PrintPanel({ text, autoPrintKey = 0, onClose }: { text: string; autoPrintKey?: number; onClose: () => void }) {
+function PrintPanel({ text, printMeta, autoPrintKey = 0, onClose }: { text: string; printMeta?: PrintDocumentMeta | null; autoPrintKey?: number; onClose: () => void }) {
   const [expanded, setExpanded] = useState(false);
   const [printMessage, setPrintMessage] = useState("Ready to print");
   const [isPrinting, setIsPrinting] = useState(false);
@@ -611,17 +655,35 @@ function PrintPanel({ text, autoPrintKey = 0, onClose }: { text: string; autoPri
   async function printDocument(label: string) {
     setIsPrinting(true);
     setPrintMessage(`${label} started...`);
+    // The PrintLog row is written only now — after the hand-off attempt —
+    // with the outcome this device actually observed. Rendering/previewing
+    // the document logged nothing.
+    const logHandoff = async (outcome: "HandedOff" | "Failed", error?: string) => {
+      if (!printMeta) return true;
+      return recordPrintHandoff(printMeta, { layout: paperWidth, outcome, error });
+    };
     try {
       const result = await printNativeText(text, documentNumber || title, paperWidth);
       if (result.ok) {
-        setPrintMessage(`${label} request sent. Check if paper came out.`);
+        const logged = await logHandoff("HandedOff");
+        setPrintMessage(
+          logged
+            ? `${label} request sent. Check if paper came out.`
+            : `${label} request sent. Check if paper came out. (Print audit log could not be saved.)`
+        );
         return;
       }
 
       window.print();
-      setPrintMessage(`${label} opened browser print fallback.`);
+      const logged = await logHandoff("HandedOff");
+      setPrintMessage(
+        logged
+          ? `${label} opened browser print fallback.`
+          : `${label} opened browser print fallback. (Print audit log could not be saved.)`
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : `${label} failed. Check Device setup or try again.`;
+      await logHandoff("Failed", message);
       setPrintMessage(message);
       emitUserIssue({
         level: "error",
@@ -741,6 +803,7 @@ export function AppShell() {
   const [hardwareTests, setHardwareTests] = useState<HardwareTestRecord[]>([]);
   const [operationChats, setOperationChats] = useState<OperationChatThread[]>([]);
   const [receiptPreview, setReceiptPreview] = useState("");
+  const [receiptPrintMeta, setReceiptPrintMeta] = useState<PrintDocumentMeta | null>(null);
   const [receiptAutoPrintKey, setReceiptAutoPrintKey] = useState(0);
   const [status, setStatus] = useState("Ready");
   const [searchQuery, setSearchQuery] = useState("");
@@ -864,6 +927,7 @@ export function AppShell() {
     }
     setMobileSearchOpen(false);
     setReceiptPreview("");
+    setReceiptPrintMeta(null);
   }
 
   function navigateTo(view: AppView) {
@@ -1783,6 +1847,7 @@ export function AppShell() {
     if (!visibleTabs.some((tab) => tab.id === activeTab)) {
       setActiveTab("dashboard");
       setReceiptPreview("");
+      setReceiptPrintMeta(null);
     }
   }, [activeTab, visibleTabs]);
 
@@ -1985,16 +2050,17 @@ export function AppShell() {
               activeUserRole={activeUser.role}
               paymentMethods={bootstrap?.defaultPaymentMethods ?? []}
               setReceiptPreview={setReceiptPreview}
+              setReceiptPrintMeta={setReceiptPrintMeta}
               triggerReceiptAutoPrint={() => setReceiptAutoPrintKey(Date.now())}
               onAction={runAction}
               queueablePost={queueablePost}
             />
           )}
           {activeTab === "packages" && (
-            <Packages packages={searchedPackages} trips={searchedTrips} receiptPreview={receiptPreview} setReceiptPreview={setReceiptPreview} onAction={runAction} />
+            <Packages packages={searchedPackages} trips={searchedTrips} receiptPreview={receiptPreview} setReceiptPreview={setReceiptPreview} setReceiptPrintMeta={setReceiptPrintMeta} onAction={runAction} />
           )}
           {activeTab === "trips" && (
-            <Trips packages={searchedPackages} loadablePackages={loadablePackages} trips={searchedTrips} trucks={bootstrap?.trucks ?? []} activeUserRole={activeUser.role} setReceiptPreview={setReceiptPreview} onAction={runAction} queueablePost={queueablePost} />
+            <Trips packages={searchedPackages} loadablePackages={loadablePackages} trips={searchedTrips} trucks={bootstrap?.trucks ?? []} activeUserRole={activeUser.role} setReceiptPreview={setReceiptPreview} setReceiptPrintMeta={setReceiptPrintMeta} onAction={runAction} queueablePost={queueablePost} />
           )}
           {activeTab === "delivery" && (
             <Delivery
@@ -2003,6 +2069,7 @@ export function AppShell() {
               methods={bootstrap?.defaultPaymentMethods ?? []}
               activeUser={activeUser}
               setReceiptPreview={setReceiptPreview}
+              setReceiptPrintMeta={setReceiptPrintMeta}
               onAction={runAction}
               queueablePost={queueablePost}
             />
@@ -2040,9 +2107,10 @@ export function AppShell() {
           )}
           {activeTab === "admin" && <AdminAudit packages={searchedPackages} auditLogs={searchedAuditLogs} onAction={runAction} />}
           {activeTab === "settings" && <OwnerSettings bootstrap={bootstrap} activeUser={activeUser} onAction={runAction} />}
-          {activeTab === "hardware" && <HardwarePrototype hardwareTests={searchedHardwareTests} setReceiptPreview={setReceiptPreview} onAction={runAction} />}
-          {receiptPreview && <PrintPanel text={receiptPreview} autoPrintKey={receiptAutoPrintKey} onClose={() => {
+          {activeTab === "hardware" && <HardwarePrototype hardwareTests={searchedHardwareTests} onAction={runAction} />}
+          {receiptPreview && <PrintPanel text={receiptPreview} printMeta={receiptPrintMeta} autoPrintKey={receiptAutoPrintKey} onClose={() => {
             setReceiptPreview("");
+            setReceiptPrintMeta(null);
             setReceiptAutoPrintKey(0);
           }} />}
           </section>
@@ -2095,11 +2163,9 @@ function HomeTiles({
 
 function HardwarePrototype({
   hardwareTests,
-  setReceiptPreview,
   onAction
 }: {
   hardwareTests: HardwareTestRecord[];
-  setReceiptPreview: (value: string) => void;
   onAction: <T>(label: string, action: () => Promise<T>) => Promise<void>;
 }) {
   const [mode, setMode] = useState<"home" | "setup" | "history">("home");
@@ -2119,6 +2185,42 @@ function HardwarePrototype({
   const [scannerMode, setScannerMode] = useState("Auto-enter after scan");
   const [notes, setNotes] = useState("Device setup validation");
   const [deviceStatus, setDeviceStatus] = useState("Run each device check before using the tablet for live operation.");
+  const [printerDiagnosticRun, setPrinterDiagnosticRun] = useState<{
+    result: "Pass" | "Fail";
+    recordedAt: string;
+    checks: PrinterDiagnosticCheck[];
+    notes?: string;
+  } | null>(null);
+  // The breakdown shown is the run from this session if there is one, else
+  // the newest persisted diagnostic record (its notes carry the breakdown).
+  const lastPersistedDiagnostic = [...hardwareTests]
+    .reverse()
+    .find((test) => test.notes?.startsWith("Printer diagnostic:"));
+  const printerDiagnosticView =
+    printerDiagnosticRun ??
+    (lastPersistedDiagnostic
+      ? {
+          result: (lastPersistedDiagnostic.printerResult === "Pass" ? "Pass" : "Fail") as "Pass" | "Fail",
+          recordedAt: lastPersistedDiagnostic.createdAt,
+          checks: [] as PrinterDiagnosticCheck[],
+          notes: lastPersistedDiagnostic.notes
+        }
+      : null);
+
+  async function runPrinterDiagnosticFlow() {
+    setDeviceStatus("Running printer diagnostic...");
+    const testText = `LBMP DEVICE TEST\nDevice: ${deviceName}\nPaper: ${paperWidth}\nRoute: ${printProtocol}\nBranch: ${assignedBranch}\nPrinter diagnostic - confirm paper output.\n`;
+    const checks = await runPrinterDiagnostic({ testText, paperWidth });
+    const record = await apiPost<HardwareTestRecord>("/hardware/printer-diagnostic", { deviceName, checks });
+    const result = record.printerResult === "Pass" ? "Pass" : "Fail";
+    setPrinterResult(record.printerResult);
+    setPrinterDiagnosticRun({ result, recordedAt: record.createdAt, checks });
+    setDeviceStatus(
+      result === "Pass"
+        ? "Printer diagnostic passed and was saved to test history. Confirm the test page came out of the printer."
+        : "Printer diagnostic failed and was saved to test history. See the per-check breakdown below."
+    );
+  }
   const [storageSummary, setStorageSummary] = useState<OfflineStorageSummary | null>(null);
   const [diagnosticPreview, setDiagnosticPreview] = useState<DiagnosticLogRecord[]>([]);
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
@@ -2245,18 +2347,9 @@ function HardwarePrototype({
           }}><ScanLine /> Ready Scanner</button>
           <button
             className="actionButton"
-            onClick={() =>
-              onAction("Generate ESC/POS test", async () => {
-                setDeviceStatus("Generating printer test...");
-                const text = `LBMP DEVICE TEST\nDevice: ${deviceName}\nPaper: ${paperWidth}\nRoute: ${printProtocol}\nBranch: ${assignedBranch}\nScan: ${scanValue}\nSignature: ${signature}\n`;
-                const result = await apiPost<{ bytes: number[]; text: string }>("/printing/escpos-preview", { text });
-                setReceiptPreview(`${result.text}\nESC/POS bytes: ${result.bytes.length}`);
-                setPrinterResult("Not Tested");
-                setDeviceStatus(result.bytes.length > 0 ? "Print panel opened. Tap Print, then confirm if paper comes out. If not, vendor SDK bridge is required." : "Printer preview failed.");
-              })
-            }
+            onClick={() => onAction("Run printer diagnostic", runPrinterDiagnosticFlow)}
           >
-            <Printer /> Test Print
+            <Printer /> Run Printer Diagnostic
           </button>
           <button className="actionButton" onClick={() => {
             setPwaResult("Pass");
@@ -2270,6 +2363,32 @@ function HardwarePrototype({
           }}><Camera /> Reset Camera Check</button>
           <button className="actionButton" onClick={testGps}><ShieldCheck /> Test GPS</button>
         </div>
+        {printerDiagnosticView && (
+          <section className="subPanel">
+            <div className="sectionHeader compact">
+              <div>
+                <h4>Printer Diagnostic</h4>
+                <p className="muted">
+                  Last run {new Date(printerDiagnosticView.recordedAt).toLocaleString()} — measured on this device and saved to test history. The printer result is derived from these checks, never set by hand.
+                </p>
+              </div>
+              <span className={printerDiagnosticView.result === "Pass" ? "badge" : "badge warning"}>{printerDiagnosticView.result}</span>
+            </div>
+            <div className="list">
+              {printerDiagnosticView.checks.map((check) => (
+                <div className="row" key={check.name}>
+                  {check.status === "Pass" ? <CheckCircle2 /> : <AlertTriangle />}
+                  <div>
+                    <strong>{check.name}</strong>
+                    {check.detail && <p className="muted">{check.detail}</p>}
+                  </div>
+                  <span className="badge">{check.status}</span>
+                </div>
+              ))}
+              {!printerDiagnosticView.checks.length && printerDiagnosticView.notes && <p className="muted">{printerDiagnosticView.notes}</p>}
+            </div>
+          </section>
+        )}
         <input ref={cameraInputRef} className="hiddenInput" type="file" accept="image/*" onChange={(event) => {
           const inputElement = event.currentTarget;
           const file = event.target.files?.[0];
@@ -2340,7 +2459,11 @@ function HardwarePrototype({
         />
         <div className="buttonGrid">
           <StatusSelect label="Scanner" value={scannerResult} setValue={setScannerResult} />
-          <StatusSelect label="Printer" value={printerResult} setValue={setPrinterResult} />
+          <div>
+            <span>Printer</span>
+            <strong>{printerResult}</strong>
+            <p className="muted">Set by the printer diagnostic run above — measured, not manual.</p>
+          </div>
           <StatusSelect label="Image Attach" value={cameraResult} setValue={setCameraResult} />
           <StatusSelect label="GPS" value={gpsResult} setValue={setGpsResult} />
           <StatusSelect label="Signature" value={signatureResult} setValue={setSignatureResult} />
@@ -3507,6 +3630,7 @@ function Receiving({
   activeUserRole,
   paymentMethods,
   setReceiptPreview,
+  setReceiptPrintMeta,
   triggerReceiptAutoPrint,
   onAction,
   queueablePost
@@ -3521,6 +3645,7 @@ function Receiving({
   activeUserRole: string;
   paymentMethods: string[];
   setReceiptPreview: (value: string) => void;
+  setReceiptPrintMeta?: (value: PrintDocumentMeta | null) => void;
   triggerReceiptAutoPrint: () => void;
   onAction: <T>(label: string, action: () => Promise<T>) => Promise<void>;
   queueablePost: QueueablePost;
@@ -5508,8 +5633,13 @@ function Receiving({
   }
 
   async function printSavedReceivingReceipt(receiving: ReceivingSaveResponse) {
-    const slip = await apiGet<{ text: string }>(`/receiving/${receiving.id}/receiving-document`);
-    const result = await printNativeText(slip.text, receiving.recordNumber, savedPaperWidth);
+    const slip = await apiGet<RenderedDocumentResponse>(`/receiving/${receiving.id}/receiving-document`);
+    const result = await attemptNativePrint(slip.text, receiving.recordNumber, savedPaperWidth);
+    await recordPrintHandoff(slip.print, {
+      layout: savedPaperWidth,
+      outcome: result.ok ? "HandedOff" : "Failed",
+      error: result.ok ? undefined : result.message
+    });
     const message = result.ok
       ? `Print request sent to NB80 (${savedPaperWidth}). Check if paper came out.`
       : result.message ?? "Print failed. Open Device > Printer Test.";
@@ -5525,8 +5655,13 @@ function Receiving({
   }
 
   async function printReceivingRecordReceipt(record: ReceivingRecordEditor) {
-    const slip = await apiGet<{ text: string }>(`/receiving/${record.id}/receiving-document`);
-    const result = await printNativeText(slip.text, record.recordNumber, savedPaperWidth);
+    const slip = await apiGet<RenderedDocumentResponse>(`/receiving/${record.id}/receiving-document`);
+    const result = await attemptNativePrint(slip.text, record.recordNumber, savedPaperWidth);
+    await recordPrintHandoff(slip.print, {
+      layout: savedPaperWidth,
+      outcome: result.ok ? "HandedOff" : "Failed",
+      error: result.ok ? undefined : result.message
+    });
     const message = result.ok
       ? `Print request sent to NB80 (${savedPaperWidth}). Check if paper came out.`
       : result.message ?? "Print failed. Open Device > Printer Test.";
@@ -5543,9 +5678,10 @@ function Receiving({
   }
 
   async function previewReceivingRecordReceipt(record: ReceivingRecordEditor) {
-    const slip = await apiGet<{ text: string }>(`/receiving/${record.id}/receiving-document`);
+    const slip = await apiGet<RenderedDocumentResponse>(`/receiving/${record.id}/receiving-document`);
     setEditingReceivingRecord(null);
     setReceiptPreview(slip.text);
+    setReceiptPrintMeta?.(slip.print);
     setPrintStatus(`${record.recordNumber} preview opened. Use Print if the details are correct.`);
   }
 
@@ -5645,8 +5781,9 @@ function Receiving({
             <button
               className="smallButton savedReceiptSecondaryButton"
               onClick={() => onAction("Preview receiving receipt", async () => {
-                const slip = await apiGet<{ text: string }>(`/receiving/${recordedReceiving.id}/receiving-document`);
+                const slip = await apiGet<RenderedDocumentResponse>(`/receiving/${recordedReceiving.id}/receiving-document`);
                 setReceiptPreview(slip.text);
+                setReceiptPrintMeta?.(slip.print);
                 setPrintStatus("Receipt preview opened.");
               })}
             >
@@ -7090,12 +7227,14 @@ function Packages({
   trips,
   receiptPreview,
   setReceiptPreview,
+  setReceiptPrintMeta,
   onAction
 }: {
   packages: CargoPackage[];
   trips: Trip[];
   receiptPreview: string;
   setReceiptPreview: (value: string) => void;
+  setReceiptPrintMeta?: (value: PrintDocumentMeta | null) => void;
   onAction: <T>(label: string, action: () => Promise<T>) => Promise<void>;
 }) {
   const [mode, setMode] = useState<"home" | "records">("home");
@@ -7310,8 +7449,9 @@ function Packages({
                   className="actionButton"
                   onClick={() =>
                     onAction("Load receiving slip", async () => {
-                      const result = await apiGet<{ text: string }>(`/packages/${selectedCargo.id}/receiving-slip`);
+                      const result = await apiGet<RenderedDocumentResponse>(`/packages/${selectedCargo.id}/receiving-slip`);
                       setReceiptPreview(result.text);
+                      setReceiptPrintMeta?.(result.print);
                     })
                   }
                 >
@@ -7322,8 +7462,9 @@ function Packages({
                   className="actionButton"
                   onClick={() =>
                     onAction("Load QR label", async () => {
-                      const result = await apiGet<{ text: string }>(`/packages/${selectedCargo.id}/qr-label`);
+                      const result = await apiGet<RenderedDocumentResponse>(`/packages/${selectedCargo.id}/qr-label`);
                       setReceiptPreview(result.text);
+                      setReceiptPrintMeta?.(result.print);
                     })
                   }
                 >
@@ -7443,6 +7584,7 @@ function Trips({
   trucks,
   activeUserRole,
   setReceiptPreview,
+  setReceiptPrintMeta,
   onAction,
   queueablePost
 }: {
@@ -7452,6 +7594,7 @@ function Trips({
   trucks: BootstrapData["trucks"];
   activeUserRole: string;
   setReceiptPreview: (value: string) => void;
+  setReceiptPrintMeta?: (value: PrintDocumentMeta | null) => void;
   onAction: <T>(label: string, action: () => Promise<T>) => Promise<void>;
   queueablePost: QueueablePost;
 }) {
@@ -8061,8 +8204,9 @@ function Trips({
                 className="actionButton"
                 onClick={() =>
                   onAction("Load manifest preview", async () => {
-                    const result = await apiGet<{ text: string }>(`/trips/${activeTrip.id}/loading-manifest`);
+                    const result = await apiGet<RenderedDocumentResponse>(`/trips/${activeTrip.id}/loading-manifest`);
                     setReceiptPreview(result.text);
+                    setReceiptPrintMeta?.(result.print);
                   })
                 }
               >
@@ -8136,6 +8280,7 @@ function Delivery({
   methods,
   activeUser,
   setReceiptPreview,
+  setReceiptPrintMeta,
   onAction,
   queueablePost
 }: {
@@ -8144,6 +8289,7 @@ function Delivery({
   methods: string[];
   activeUser: OperatorUser;
   setReceiptPreview: (value: string) => void;
+  setReceiptPrintMeta?: (value: PrintDocumentMeta | null) => void;
   onAction: <T>(label: string, action: () => Promise<T>) => Promise<void>;
   queueablePost: QueueablePost;
 }) {
@@ -8485,8 +8631,9 @@ function Delivery({
             disabled={!selectedPackage}
             onClick={() =>
               onAction("Load delivery receipt", async () => {
-                const result = await apiGet<{ text: string }>(`/packages/${selectedPackage}/delivery-receipt`);
+                const result = await apiGet<RenderedDocumentResponse>(`/packages/${selectedPackage}/delivery-receipt`);
                 setReceiptPreview(result.text);
+                setReceiptPrintMeta?.(result.print);
               })
             }
           >

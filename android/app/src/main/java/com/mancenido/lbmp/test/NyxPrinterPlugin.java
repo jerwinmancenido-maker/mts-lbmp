@@ -97,6 +97,41 @@ public class NyxPrinterPlugin extends Plugin {
         }
     }
 
+    /**
+     * Diagnostic-only status probe (added for the Device Setup printer
+     * diagnostic). It never launches the gateway and never prints: it only
+     * reports whether the NYX printer service package is installed and
+     * whether the gateway activity resolves, so the app can persist a
+     * measured printer check instead of a self-attested one.
+     */
+    @PluginMethod
+    public void printerStatus(PluginCall call) {
+        try {
+            PackageManager packageManager = getContext().getPackageManager();
+
+            boolean packageInstalled = true;
+            try {
+                packageManager.getPackageInfo("net.nyx.printerservice", 0);
+            } catch (PackageManager.NameNotFoundException error) {
+                packageInstalled = false;
+            }
+
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setComponent(new ComponentName("net.nyx.printerservice", "net.nyx.printerservice.IntentGatewayActivity"));
+            intent.setType("application/pdf");
+            ResolveInfo resolvedActivity = packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY);
+
+            JSObject result = new JSObject();
+            result.put("ok", true);
+            result.put("packageInstalled", packageInstalled);
+            result.put("gatewayAvailable", resolvedActivity != null);
+            result.put("route", "net.nyx.printerservice.pdf");
+            call.resolve(result);
+        } catch (Exception error) {
+            call.reject("NB80 printer status check failed: " + error.getMessage(), error);
+        }
+    }
+
     private void writeReceiptPdf(String text, File outputFile, String paperWidth) throws Exception {
         boolean is58mm = "58mm".equals(paperWidth);
         int receiptWidthPt = is58mm ? RECEIPT_WIDTH_58MM_PT : RECEIPT_WIDTH_80MM_PT;

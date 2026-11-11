@@ -358,9 +358,10 @@ export interface HardwareTestRecordRow extends Omit<HardwareTestRecord, "notes" 
   createdAt: DateValue;
 }
 
-export interface PrintLogRow extends Omit<PrintLog, "reason" | "deviceName" | "createdAt"> {
+export interface PrintLogRow extends Omit<PrintLog, "reason" | "deviceName" | "outcome" | "createdAt"> {
   reason: string | null;
   deviceName: string | null;
+  outcome: string;
   createdAt: DateValue;
 }
 
@@ -1298,6 +1299,7 @@ export function rowsToState(rows: PrismaStateRows): LoadedServiceState {
       ...log,
       action: log.action as PrintLog["action"],
       reason: log.reason ?? undefined,
+      outcome: (log.outcome as PrintLog["outcome"]) ?? "HandedOff",
       deviceName: log.deviceName ?? undefined,
       layout: log.layout as PrintLog["layout"],
       createdAt: toIso(log.createdAt)

@@ -53,6 +53,12 @@ export class LogisticsController {
     return this.logistics.createHardwareTest(body);
   }
 
+  @Post("hardware/printer-diagnostic")
+  @RequirePermissions("settings.manage")
+  recordPrinterDiagnostic(@Body() body: Parameters<LogisticsService["recordPrinterDiagnostic"]>[0]) {
+    return this.logistics.recordPrinterDiagnostic(body);
+  }
+
   @Get("settings")
   @RequirePermissions("settings.manage")
   settings() {
@@ -371,25 +377,34 @@ export class LogisticsController {
   @Get("packages/:id/receiving-slip")
   @RequirePermissions("documents.print")
   receivingSlip(@Param("id") id: string) {
-    return { text: this.logistics.renderReceivingSlip(id) };
+    return this.logistics.renderReceivingSlip(id);
   }
 
   @Get("receiving/:id/receiving-document")
   @RequirePermissions("documents.print")
   receivingDocument(@Param("id") id: string) {
-    return { text: this.logistics.renderReceivingDocument(id) };
+    return this.logistics.renderReceivingDocument(id);
   }
 
   @Get("packages/:id/qr-label")
   @RequirePermissions("documents.print")
   qrLabel(@Param("id") id: string) {
-    return { text: this.logistics.renderQrLabel(id) };
+    return this.logistics.renderQrLabel(id);
   }
 
   @Get("packages/:id/delivery-receipt")
   @RequirePermissions("documents.print")
   deliveryReceipt(@Param("id") id: string) {
-    return { text: this.logistics.renderDeliveryReceipt(id) };
+    return this.logistics.renderDeliveryReceipt(id);
+  }
+
+  @Post("printing/handoffs")
+  @RequirePermissions("documents.print")
+  recordPrintHandoff(
+    @Req() request: { user?: { id?: string; role?: string; branchAccess?: string } },
+    @Body() body: Parameters<LogisticsService["recordPrintHandoff"]>[0]
+  ) {
+    return this.logistics.recordPrintHandoff(body, request.user);
   }
 
   @Post("printing/escpos-preview")
@@ -467,7 +482,7 @@ export class LogisticsController {
   @Get("trips/:id/loading-manifest")
   @RequirePermissions("documents.print")
   loadingManifest(@Param("id") id: string) {
-    return { text: this.logistics.renderTripManifest(id) };
+    return this.logistics.renderTripManifest(id);
   }
 
   @Get("deliveries")

@@ -318,3 +318,37 @@ export function toEscPosTextBytes(text: string) {
   merged.set(feed, init.length + body.length);
   return Array.from(merged);
 }
+
+/**
+ * One measured check from the client-side printer diagnostic (Device Setup).
+ * Checks are produced on the device (plugin presence, gateway route, test
+ * payload hand-off) and posted to the API, which derives the persisted
+ * printer result from them — the printer row of a HardwareTestRecord is no
+ * longer a manually self-attested dropdown value.
+ */
+export interface PrinterDiagnosticCheck {
+  name: string;
+  status: "Pass" | "Fail";
+  detail?: string;
+}
+
+export interface PrinterDiagnosticSummary {
+  printerResult: "Pass" | "Fail";
+  notes: string;
+}
+
+/**
+ * Derives the persisted printer result + human-readable breakdown from the
+ * checks a diagnostic run actually performed. Pass requires at least one
+ * check and every check passing; anything else is a Fail. The notes string
+ * is what gets stored on the HardwareTestRecord, so it must carry the full
+ * per-check breakdown (name → result/error).
+ */
+export function summarizePrinterDiagnostic(checks: PrinterDiagnosticCheck[]): PrinterDiagnosticSummary {
+  const breakdown = checks.length
+    ? checks.map((check) => `${check.name}: ${check.status}${check.detail ? ` — ${check.detail}` : ""}`).join("; ")
+    : "No checks ran";
+  const printerResult: "Pass" | "Fail" =
+    checks.length > 0 && checks.every((check) => check.status === "Pass") ? "Pass" : "Fail";
+  return { printerResult, notes: `Printer diagnostic: ${breakdown}` };
+}

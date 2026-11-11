@@ -245,6 +245,25 @@ export interface Branch {
   status: string;
 }
 
+/**
+ * Identity of a rendered document as returned by the API next to the text.
+ * The client passes it back to POST /printing/handoffs after attempting the
+ * print hand-off, so the PrintLog row names the real document, user, device
+ * and outcome instead of being written at render time.
+ */
+export interface PrintDocumentMeta {
+  documentType: string;
+  documentNumber: string;
+  relatedEntityType: string;
+  relatedEntityId: string;
+  layout: "58mm" | "80mm" | "A4";
+}
+
+export interface RenderedDocumentResponse {
+  text: string;
+  print: PrintDocumentMeta;
+}
+
 export interface HardwareTestRecord {
   id: string;
   deviceName: string;
