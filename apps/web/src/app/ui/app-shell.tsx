@@ -14,6 +14,7 @@ import {
   Printer,
   QrCode,
   ReceiptText,
+  RotateCcw,
   ScanLine,
   Search,
   Settings,
@@ -28,7 +29,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Ref } from "react";
 import type { PackageCondition } from "@mts-lbmp/shared";
 import { apiGet, apiPatch, apiPost, setApiToken } from "./api";
-import { appendDiagnosticLog, clearCachedRecords, clearDiagnosticLogs, deleteQueuedPhoto, enqueueOfflineAction, getOfflineStorageSummary, listDiagnosticLogs, listOfflineQueue, listQueuedPhotos, newOfflineQueueRecordId, readCachedRecord, readCachedValue, replaceQueuedPhotoReferences, requestPersistentStorage, updateOfflineQueueRecord, updateQueuedPhoto, writeCachedValue, type DiagnosticLogRecord, type OfflineQueueRecord, type OfflineStorageSummary, type QueuedPhotoRecord } from "./cache";
+import { appendDiagnosticLog, clearCachedRecords, clearDiagnosticLogs, deleteOfflineQueueRecord, deleteQueuedPhoto, enqueueOfflineAction, getOfflineStorageSummary, listDiagnosticLogs, listOfflineQueue, listQueuedPhotos, newOfflineQueueRecordId, pruneOfflineQueue, readCachedRecord, readCachedValue, replaceQueuedPhotoReferences, requestPersistentStorage, updateOfflineQueueRecord, updateQueuedPhoto, writeCachedValue, type DiagnosticLogRecord, type OfflineQueueRecord, type OfflineStorageSummary, type QueuedPhotoRecord } from "./cache";
+import { attemptQueueRecordSync, queueItemView, shouldAutoRetryQueueRecord, sortQueueItemViews, type QueueItemView } from "./queue-view";
+import { cacheReceivingFormStore, clearReceivingFormSnapshot, loadReceivingFormSnapshot, receivingFormHasContent, saveReceivingFormSnapshot, type ReceivingFormSnapshot } from "./receiving-form-persistence";
 import { parsePhilippineAddress, readDeliveryReceiptPhoto, type DrOcrConfidence, type DrOcrProgress, type DrOcrResult } from "./dr-ocr";
 import { setPhotoAuditUser, setPhotoUploadContext, takeNativeCameraPhoto, uploadCompressedImage } from "./media";
 import type { PrinterDiagnosticCheck } from "@mts-lbmp/printing";
@@ -69,6 +72,7 @@ type ModuleCacheData = {
 
 type SyncState = "Online" | "Refreshing" | "Cached" | "Offline" | "Pending sync" | "Sync failed" | "Syncing";
 type QueueablePost = <T>(type: OfflineQueueRecord["type"], path: string, body?: unknown) => Promise<{ queued: true } | { queued: false; result: T }>;
+type QueueablePatch = <T>(type: OfflineQueueRecord["type"], path: string, body?: unknown) => Promise<{ queued: true } | { queued: false; result: T }>;
 type PhotoUploadResult = Awaited<ReturnType<typeof uploadCompressedImage>>;
 type AppView = { kind: "home" } | { kind: "account" } | { kind: "tab"; tab: Tab };
 type UserIssueLevel = "success" | DiagnosticLogRecord["level"];
@@ -868,13 +872,9 @@ export function AppShell() {
     return () => window.removeEventListener("mts-user-issue", handleUserIssue);
   }, [showGlobalIssue]);
 
-  useEffect(() => {
-    if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
-    if (window.location.protocol !== "https:" && window.location.hostname !== "localhost") return;
-    navigator.serviceWorker.register("/sw.js").catch(() => {
-      // The app still works without shell caching; operational cache is handled separately.
-    });
-  }, []);
+  // Service worker registration lives in the root layout (sw-registrar.tsx)
+  // so public routes that never mount this shell — the wall-QR intake pages —
+  // install the worker too (Phase 4 A1).
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1102,6 +1102,35 @@ export function AppShell() {
     }
   }
 
+  async function queueablePatch<T>(type: OfflineQueueRecord["type"], path: string, body?: unknown) {
+    // Phase 4 A3: the PATCH twin of queueablePost — same one-key-per-intent
+    // rule (Phase 4 B1). The queue record type and the replayer already
+    // supported PATCH; draft updates were the write that never used them,
+    // so editing a saved draft failed hard offline while creating one
+    // queued. The API honours the key on PATCH /receiving/drafts/:id.
+    const idempotencyKey = newOfflineQueueRecordId();
+    if (!isOnline || (typeof navigator !== "undefined" && !navigator.onLine)) {
+      await enqueueOfflineAction({ id: idempotencyKey, type, method: "PATCH", path, body, userId: activeUser.id, branch: branchScope });
+      void appendDiagnosticLog({ level: "warning", source: "offline", message: `Queued offline ${type} update`, details: { path, body }, userId: activeUser.id, branch: branchScope, module: activeTab });
+      await refreshPendingSyncCount();
+      setSyncState("Pending sync");
+      setStatus("Saved on tablet - needs sync.");
+      return { queued: true as const };
+    }
+    try {
+      const result = await apiPatch<T>(path, body, { idempotencyKey });
+      return { queued: false as const, result };
+    } catch (error) {
+      if (!isNetworkError(error)) throw error;
+      await enqueueOfflineAction({ id: idempotencyKey, type, method: "PATCH", path, body, userId: activeUser.id, branch: branchScope });
+      void appendDiagnosticLog({ level: "warning", source: "offline", message: `Queued failed ${type} update`, details: { path, body, error }, userId: activeUser.id, branch: branchScope, module: activeTab });
+      await refreshPendingSyncCount();
+      setSyncState("Pending sync");
+      setStatus("Saved on tablet - needs sync.");
+      return { queued: true as const };
+    }
+  }
+
   function blobToDataUrl(blob: Blob) {
     return new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
@@ -1156,33 +1185,32 @@ export function AppShell() {
   async function processOfflineQueue() {
     if (!isOnline || (typeof navigator !== "undefined" && !navigator.onLine)) return;
     await processQueuedPhotos();
-    const queue = (await listOfflineQueue()).filter((record) => record.status === "Pending" || record.status === "Failed");
+    // Phase 4 A7 housekeeping: Synced records are history, not work — keep
+    // only a bounded tail so the queue store cannot grow for the life of
+    // the install.
+    await pruneOfflineQueue().catch(() => undefined);
+    const waiting = (await listOfflineQueue()).filter((record) => record.status === "Pending" || record.status === "Failed");
+    // Parked records (Failed past the auto-attempt cap) are skipped here;
+    // they stay visible in Device Setup until staff retry or discard them.
+    const queue = waiting.filter(shouldAutoRetryQueueRecord);
     if (!queue.length) {
       await refreshPendingSyncCount();
+      if (waiting.length) setSyncState("Sync failed");
       return;
     }
     setSyncState("Syncing");
     for (const record of queue) {
-      const syncingRecord = { ...record, status: "Syncing" as const, attempts: record.attempts + 1, lastError: undefined };
-      await updateOfflineQueueRecord(syncingRecord);
+      await updateOfflineQueueRecord({ ...record, status: "Syncing" });
       await refreshPendingSyncCount();
-      try {
-        // The queue record's id is the action's idempotency key (Phase 4
-        // B1): identical on the original attempt and on every replay.
-        if (record.method === "PATCH") {
-          await apiPatch(record.path, record.body, { idempotencyKey: record.id });
-        } else {
-          await apiPost(record.path, record.body, { idempotencyKey: record.id });
-        }
-        await updateOfflineQueueRecord({ ...syncingRecord, status: "Synced" });
-      } catch (error) {
-        void appendDiagnosticLog({ level: "error", source: "sync", message: "Queued action sync failed", details: { id: record.id, type: record.type, path: record.path, error }, userId: activeUser.id, branch: branchScope, module: activeTab });
-        await updateOfflineQueueRecord({
-          ...syncingRecord,
-          status: "Failed",
-          lastError: error instanceof Error ? error.message : "Sync failed"
-        });
+      // The queue record's id is the action's idempotency key (Phase 4
+      // B1): identical on the original attempt and on every replay.
+      const outcome = await attemptQueueRecordSync(record, (method, path, body, idempotencyKey) =>
+        method === "PATCH" ? apiPatch(path, body, { idempotencyKey }) : apiPost(path, body, { idempotencyKey })
+      );
+      if (outcome.status === "Failed") {
+        void appendDiagnosticLog({ level: "error", source: "sync", message: "Queued action sync failed", details: { id: record.id, type: record.type, path: record.path, error: outcome.lastError }, userId: activeUser.id, branch: branchScope, module: activeTab });
       }
+      await updateOfflineQueueRecord(outcome);
     }
     await refreshPendingSyncCount();
     const remaining = (await listOfflineQueue()).filter((record) => record.status === "Pending" || record.status === "Failed").length;
@@ -1506,6 +1534,14 @@ export function AppShell() {
       });
     });
   }, [activeTab, isOnline, pendingSyncCount, showGlobalIssue]);
+
+  useEffect(() => {
+    // Phase 4 A7: ask the browser for persistent storage at app start so
+    // the offline cache, queue, and receiving-form guard are protected
+    // from eviction. Device Setup's manual "protect storage" tap remains
+    // as a fallback/status check, not the only chance to ask.
+    void requestPersistentStorage();
+  }, []);
 
   useEffect(() => {
     if (pendingSyncCount <= 0 || typeof window === "undefined") return;
@@ -2068,6 +2104,7 @@ export function AppShell() {
               triggerReceiptAutoPrint={() => setReceiptAutoPrintKey(Date.now())}
               onAction={runAction}
               queueablePost={queueablePost}
+              queueablePatch={queueablePatch}
             />
           )}
           {activeTab === "packages" && (
@@ -2236,6 +2273,7 @@ function HardwarePrototype({
     );
   }
   const [storageSummary, setStorageSummary] = useState<OfflineStorageSummary | null>(null);
+  const [queueItems, setQueueItems] = useState<QueueItemView[]>([]);
   const [diagnosticPreview, setDiagnosticPreview] = useState<DiagnosticLogRecord[]>([]);
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const scannerInputRef = useRef<HTMLInputElement | null>(null);
@@ -2245,12 +2283,47 @@ function HardwarePrototype({
   }, []);
 
   async function refreshStorageSummary() {
-    const [summary, logs] = await Promise.all([getOfflineStorageSummary(), listDiagnosticLogs(5)]);
+    // Phase 4 A7: prune synced history, then list every unsynced queue
+    // record individually — counts alone hid what was actually stuck.
+    await pruneOfflineQueue().catch(() => undefined);
+    const [summary, logs, queue] = await Promise.all([getOfflineStorageSummary(), listDiagnosticLogs(5), listOfflineQueue()]);
     setStorageSummary(summary);
     setDiagnosticPreview(logs);
+    setQueueItems(sortQueueItemViews(queue.filter((record) => record.status !== "Synced").map((record) => queueItemView(record))));
     const pending = summary.offlineQueue.pending + summary.offlineQueue.failed + summary.photoQueue.pending + summary.photoQueue.failed;
     setDeviceStatus(pending > 0 ? `${pending} item(s) saved on tablet still need sync.` : "Tablet cache is ready. No pending uploads or actions.");
     return summary;
+  }
+
+  async function retryQueueItem(item: QueueItemView) {
+    const record = (await listOfflineQueue()).find((entry) => entry.id === item.id);
+    if (!record) {
+      await refreshStorageSummary();
+      return;
+    }
+    await updateOfflineQueueRecord({ ...record, status: "Syncing" });
+    // Same idempotency key as every other attempt (the record id) — a
+    // retry after a lost response returns the server's original result.
+    const outcome = await attemptQueueRecordSync(record, (method, path, body, idempotencyKey) =>
+      method === "PATCH" ? apiPatch(path, body, { idempotencyKey }) : apiPost(path, body, { idempotencyKey })
+    );
+    await updateOfflineQueueRecord(outcome);
+    await refreshStorageSummary();
+    setDeviceStatus(
+      outcome.status === "Synced" ? `${item.label} synced.` : `${item.label} failed again: ${outcome.lastError ?? "unknown error"}`
+    );
+  }
+
+  async function discardQueueItem(item: QueueItemView) {
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm(`Discard this queued item? This drops work saved only on this tablet and cannot be undone.\n\n${item.label} — ${item.detail}`)
+    ) {
+      return;
+    }
+    await deleteOfflineQueueRecord(item.id);
+    await refreshStorageSummary();
+    setDeviceStatus(`${item.label} discarded.`);
   }
 
   async function exportDiagnosticLogs() {
@@ -2470,6 +2543,9 @@ function HardwarePrototype({
             })
           }
           diagnosticPreview={diagnosticPreview}
+          queueItems={queueItems}
+          onRetryItem={(item) => onAction("Retry queued item", () => retryQueueItem(item))}
+          onDiscardItem={(item) => onAction("Discard queued item", () => discardQueueItem(item))}
         />
         <div className="buttonGrid">
           <StatusSelect label="Scanner" value={scannerResult} setValue={setScannerResult} />
@@ -2539,7 +2615,10 @@ function OfflineStoragePanel({
   onClearScreens,
   onExportLogs,
   onClearLogs,
-  diagnosticPreview
+  diagnosticPreview,
+  queueItems,
+  onRetryItem,
+  onDiscardItem
 }: {
   summary: OfflineStorageSummary | null;
   onRefresh: () => void;
@@ -2548,6 +2627,9 @@ function OfflineStoragePanel({
   onExportLogs: () => void;
   onClearLogs: () => void;
   diagnosticPreview: DiagnosticLogRecord[];
+  queueItems: QueueItemView[];
+  onRetryItem: (item: QueueItemView) => void;
+  onDiscardItem: (item: QueueItemView) => void;
 }) {
   const pendingActions = summary ? summary.offlineQueue.pending + summary.offlineQueue.failed + summary.offlineQueue.syncing : 0;
   const pendingPhotos = summary ? summary.photoQueue.pending + summary.photoQueue.failed + summary.photoQueue.syncing : 0;
@@ -2588,6 +2670,37 @@ function OfflineStoragePanel({
           <small>{summary ? formatBytes(summary.diagnosticLogs.bytes) : "Checking"}</small>
         </button>
       </div>
+      {queueItems.length > 0 && (
+        <div className="list compactList">
+          <p className="muted">
+            Waiting to sync on this tablet. Retry sends an item again with the same reference, so a retry cannot apply it
+            twice. Discard drops the item for good.
+          </p>
+          {queueItems.map((item) => (
+            <div className="row compactRow" key={item.id}>
+              {item.status === "Failed" ? <AlertTriangle /> : <ClipboardList />}
+              <div>
+                <strong>{item.label}</strong>
+                <p>
+                  {item.detail} · {item.ageLabel} · {item.attempts} attempt{item.attempts === 1 ? "" : "s"}
+                </p>
+                {item.lastError && <p className="muted">Last error: {item.lastError}</p>}
+              </div>
+              <span className={item.status === "Failed" ? "badge warning" : "badge"}>{item.statusLabel}</span>
+              {item.canRetry && (
+                <button className="smallButton" type="button" onClick={() => onRetryItem(item)}>
+                  Retry
+                </button>
+              )}
+              {item.canDiscard && (
+                <button className="smallButton" type="button" onClick={() => onDiscardItem(item)}>
+                  Discard
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
       <div className="buttonGrid two">
         <button className="actionButton" type="button" onClick={onRefresh}><ShieldCheck /> Refresh Status</button>
         <button className="actionButton" type="button" onClick={onClearScreens}><X /> Clear Saved Screens</button>
@@ -3666,7 +3779,8 @@ function Receiving({
   setReceiptPrintMeta,
   triggerReceiptAutoPrint,
   onAction,
-  queueablePost
+  queueablePost,
+  queueablePatch
 }: {
   customers: BootstrapData["customers"];
   branches: Branch[];
@@ -3682,6 +3796,7 @@ function Receiving({
   triggerReceiptAutoPrint: () => void;
   onAction: <T>(label: string, action: () => Promise<T>) => Promise<void>;
   queueablePost: QueueablePost;
+  queueablePatch: QueueablePatch;
 }) {
   const receivingBranchOptions = branchOptions.length ? branchOptions : operationalBranchNames(branches);
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
@@ -3829,6 +3944,8 @@ function Receiving({
   const barcodeInputRef = useRef<HTMLInputElement | null>(null);
   const autoFilledPriceRef = useRef<string | null>(null);
   const lastAutoSavedDraftRef = useRef("");
+  const [restoredForm, setRestoredForm] = useState<ReceivingFormSnapshot | null>(null);
+  const formRestoreAttemptedRef = useRef(false);
   const visibleCustomers = customers.filter((customer) => !/(demo|test)/i.test(customer.businessName));
   const selectedCustomer = customers.find((customer) => customer.id === selectedCustomerId);
   const canOverrideDuplicateDr = isOwnerRole(activeUserRole);
@@ -4834,7 +4951,29 @@ function Receiving({
       await loadDrafts();
       return draft;
     }
-    const draft = await apiPatch<ReceivingDraftRecord>(`/receiving/drafts/${activeDraftId}`, payload);
+    // Phase 4 A3: draft updates go through queueablePatch so an offline
+    // edit to a saved draft queues and replays (with its idempotency key)
+    // instead of failing hard while new-draft creation queued.
+    const result = await queueablePatch<ReceivingDraftRecord>("receivingDraft", `/receiving/drafts/${activeDraftId}`, payload);
+    if (result.queued) {
+      setDraftSaveStatus(`${activeDraftNumber || "Draft"} saved on tablet`);
+      if (!options.silent) setReceiveMessage("Draft update saved on tablet. It will sync when online.");
+      return {
+        id: activeDraftId,
+        draftNumber: activeDraftNumber,
+        status: "Draft",
+        customerId: payload.customerId,
+        customerDrNumber: payload.customerDrNumber,
+        destination: payload.destination,
+        drPhotoUrl: payload.drPhotoUrl,
+        formState: payload.formState,
+        productLines: payload.productLines,
+        createdBy: activeUser.name,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      } as ReceivingDraftRecord;
+    }
+    const draft = result.result;
     setActiveDraftId(draft.id);
     setActiveDraftNumber(draft.draftNumber);
     const savedAt = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -4887,10 +5026,10 @@ function Receiving({
     };
   }, [activeDraftId, consigneeName, customerDrNumber, deliverySummary, deliveryType, drPhotoUrl, handlingBranchName, mode, productLines, receivingAmountPaid, receivingPaymentMethod, receivingPaymentNotes, receivingPaymentProofUrl, receivingPaymentReference, receivingPaymentStatus, selectedCustomerId, senderName]);
 
-  function resumeDraft(draft: ReceivingDraftRecord) {
-    const state = draft.formState ?? {};
-    setActiveDraftId(draft.id);
-    setActiveDraftNumber(draft.draftNumber);
+  function applyDraftFormState(
+    state: Partial<ReceivingDraftRecord["formState"]>,
+    draft: { customerId?: string; customerNameSnapshot?: string; customerDrNumber?: string; destination?: string; drPhotoUrl?: string; productLines?: ReceivingLineDraft[] }
+  ) {
     setSelectedCustomerId(state.selectedCustomerId ?? draft.customerId ?? "");
     setCustomerQuery(state.customerQuery ?? draft.customerNameSnapshot ?? "");
     setPendingCustomerName(state.pendingCustomerName ?? "");
@@ -4958,13 +5097,77 @@ function Receiving({
     setReceivingPaymentProofUrl(state.receivingPaymentProofUrl ?? "");
     setReceivingPaymentNotes(state.receivingPaymentNotes ?? "");
     setProductLines(draft.productLines ?? []);
+  }
+
+  function resumeDraft(draft: ReceivingDraftRecord) {
+    setActiveDraftId(draft.id);
+    setActiveDraftNumber(draft.draftNumber);
+    applyDraftFormState(draft.formState ?? {}, draft);
     setMode("receive");
     setDraftSaveStatus(`${draft.draftNumber} resumed`);
     lastAutoSavedDraftRef.current = "";
     setReceiveMessage(`${draft.draftNumber} resumed. Review before finalizing.`);
   }
 
+  // Phase 4 A3: the in-progress form is persisted locally as staff type
+  // (see receiving-form-persistence.ts) and restored on mount, so a reload
+  // or app kill no longer loses receiving work that was never saved as a
+  // server draft. The restore is visibly flagged and discardable.
+  async function restorePersistedReceivingForm() {
+    if (formRestoreAttemptedRef.current) return;
+    formRestoreAttemptedRef.current = true;
+    const snapshot = await loadReceivingFormSnapshot(cacheReceivingFormStore, activeUser.id).catch(() => null);
+    if (!snapshot) return;
+    setActiveDraftId(snapshot.activeDraftId);
+    setActiveDraftNumber(snapshot.activeDraftNumber);
+    applyDraftFormState(snapshot.payload.formState as ReceivingDraftRecord["formState"], {
+      customerId: snapshot.payload.customerId,
+      customerDrNumber: snapshot.payload.customerDrNumber,
+      destination: snapshot.payload.destination,
+      drPhotoUrl: snapshot.payload.drPhotoUrl,
+      productLines: snapshot.payload.productLines as ReceivingLineDraft[]
+    });
+    setMode("receive");
+    setRestoredForm(snapshot);
+    const savedAt = new Date(snapshot.savedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    setReceiveMessage(`Draft restored from this tablet (saved ${savedAt}). It is not on the server yet — review it, then Save Draft or finalize.`);
+  }
+
+  useEffect(() => {
+    void restorePersistedReceivingForm();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeUser.id]);
+
+  useEffect(() => {
+    if (mode !== "receive") return;
+    const handle = window.setTimeout(() => {
+      const payload = buildDraftPayload();
+      if (receivingFormHasContent(payload)) {
+        void saveReceivingFormSnapshot(cacheReceivingFormStore, activeUser.id, {
+          version: 1,
+          savedAt: new Date().toISOString(),
+          activeDraftId,
+          activeDraftNumber,
+          payload
+        }).catch(() => undefined);
+      } else {
+        void clearReceivingFormSnapshot(cacheReceivingFormStore, activeUser.id).catch(() => undefined);
+      }
+    }, 650);
+    return () => window.clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, activeDraftId, activeDraftNumber, selectedCustomerId, customerQuery, pendingCustomerName, pendingContactPerson, pendingCustomerPhone, pendingCustomerAddress, pendingBillingAddress, pendingShippingAddress, customerDrNumber, senderName, senderPhone, senderCompany, description, consigneeName, deliveryBusinessName, addressLine, barangay, city, province, deliveryPhone, deliveryNotes, price, barcode, productSku, drPhotoUrl, receivingPaymentStatus, receivingAmountPaid, receivingPaymentReference, receivingPaymentProofUrl, receivingPaymentNotes, productLines, activeUser.id]);
+
+  function discardRestoredForm() {
+    void clearReceivingFormSnapshot(cacheReceivingFormStore, activeUser.id).catch(() => undefined);
+    setRestoredForm(null);
+    newReceiving();
+  }
+
   function newReceiving() {
+    // Starting fresh abandons any locally persisted in-progress form.
+    void clearReceivingFormSnapshot(cacheReceivingFormStore, activeUser.id).catch(() => undefined);
+    setRestoredForm(null);
     setActiveIntakeId("");
     setActiveDraftId("");
     setActiveDraftNumber("");
@@ -5639,6 +5842,10 @@ function Receiving({
       setSavedItemsExpanded(false);
       setSavedPaperWidth(readDevicePaperWidth());
       setReceiptPreview("");
+      // The receiving is finalized on the server; the local form guard
+      // must not resurrect it on the next open.
+      void clearReceivingFormSnapshot(cacheReceivingFormStore, activeUser.id).catch(() => undefined);
+      setRestoredForm(null);
       setMode("saved");
       setPrintStatus(`${receiving.recordNumber} saved. Print the receiving receipt when ready.`);
       window.setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
@@ -6472,6 +6679,22 @@ function Receiving({
         </div>
       </div>
       <p className="notice">{receiveMessage}</p>
+      {restoredForm && (
+        <div className="validationWarning" role="status">
+          <RotateCcw size={20} />
+          <div>
+            <strong>Draft restored from this tablet</strong>
+            <p>
+              This receiving form was saved on this device at{" "}
+              {new Date(restoredForm.savedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              {restoredForm.activeDraftNumber ? ` while editing ${restoredForm.activeDraftNumber}` : ""}. It is not on the
+              server yet — review it, then Save Draft or finalize. Discarding clears the form.
+            </p>
+          </div>
+          <button className="smallButton" onClick={discardRestoredForm}>Discard restored draft</button>
+          <button className="smallButton" onClick={() => setRestoredForm(null)}>Keep</button>
+        </div>
+      )}
       {receiveWarning && (
         <div ref={receiveWarningRef} className="validationWarning" role="alert" key={receiveWarning.time}>
           <AlertTriangle size={20} />

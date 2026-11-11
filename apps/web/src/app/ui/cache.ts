@@ -240,6 +240,69 @@ export async function updateOfflineQueueRecord(record: OfflineQueueRecord): Prom
   });
 }
 
+export async function deleteCachedValue(key: string): Promise<void> {
+  if (!canUseIndexedDb()) return;
+  try {
+    const db = await openCacheDb();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, "readwrite");
+      transaction.objectStore(STORE_NAME).delete(key);
+      transaction.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      transaction.onerror = () => {
+        db.close();
+        reject(transaction.error ?? new Error("Unable to delete cached value"));
+      };
+    });
+  } catch {
+    // Cache failures should never block operations.
+  }
+}
+
+export async function deleteOfflineQueueRecord(id: string): Promise<void> {
+  if (!canUseIndexedDb()) return;
+  const db = await openCacheDb();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction(QUEUE_STORE_NAME, "readwrite");
+    transaction.objectStore(QUEUE_STORE_NAME).delete(id);
+    transaction.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error ?? new Error("Unable to delete queued action"));
+    };
+  });
+}
+
+/**
+ * Phase 4 A7 housekeeping bound: Synced queue records are kept only as a
+ * short history (the newest {@link MAX_SYNCED_QUEUE_RECORDS_KEPT}); Pending,
+ * Syncing, and Failed records are never pruned — they are live work or work
+ * that needs staff attention in the Device Setup queue list.
+ */
+export const MAX_SYNCED_QUEUE_RECORDS_KEPT = 50;
+
+export function selectSyncedQueueRecordsToPrune(records: OfflineQueueRecord[], maxSyncedKept = MAX_SYNCED_QUEUE_RECORDS_KEPT): string[] {
+  const synced = records
+    .filter((record) => record.status === "Synced")
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return synced.slice(Math.max(maxSyncedKept, 0)).map((record) => record.id);
+}
+
+export async function pruneOfflineQueue(maxSyncedKept = MAX_SYNCED_QUEUE_RECORDS_KEPT): Promise<number> {
+  if (!canUseIndexedDb()) return 0;
+  const records = await listOfflineQueue();
+  const toDelete = selectSyncedQueueRecordsToPrune(records, maxSyncedKept);
+  for (const id of toDelete) {
+    await deleteOfflineQueueRecord(id);
+  }
+  return toDelete.length;
+}
+
 export async function enqueueQueuedPhoto(input: Omit<QueuedPhotoRecord, "localPhotoId" | "capturedAt" | "status" | "attempts">): Promise<QueuedPhotoRecord> {
   const record: QueuedPhotoRecord = {
     ...input,
