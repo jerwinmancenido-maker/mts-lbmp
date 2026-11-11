@@ -13,7 +13,7 @@ import {
   type PaymentStatus,
   type TripStatus
 } from "@mts-lbmp/shared";
-import { renderDeliveryReceipt, renderLoadingManifest, renderQrLabel, renderReceivingDocument, renderReceivingSlip, toEscPosTextBytes } from "@mts-lbmp/printing";
+import { renderDeliveryReceipt, renderLoadingManifest, renderQrLabel, renderReceivingDocument, renderReceivingSlip, summarizePrinterDiagnostic, toEscPosTextBytes, type PrinterDiagnosticCheck } from "@mts-lbmp/printing";
 import { hashSecret, signAuthToken, verifySecret } from "./security.js";
 import { createStateStore, type LoadedServiceState, type ServiceState, type StateStore } from "./state-store.js";
 import type {
@@ -60,6 +60,45 @@ type AuthContext = {
   role?: string;
   branchAccess?: string;
 };
+
+/**
+ * Identity of a rendered document, returned alongside the text so the client
+ * can report the print hand-off against the right entity. Rendering never
+ * writes a PrintLog row — see recordPrintHandoff.
+ */
+export interface PrintDocumentMeta {
+  documentType: string;
+  documentNumber: string;
+  relatedEntityType: string;
+  relatedEntityId: string;
+  layout: PrintLog["layout"];
+}
+
+export interface RenderedDocument {
+  text: string;
+  print: PrintDocumentMeta;
+}
+
+export interface PrintHandoffInput {
+  documentType: string;
+  documentNumber: string;
+  relatedEntityType: string;
+  relatedEntityId: string;
+  layout: PrintLog["layout"];
+  deviceName?: string;
+  outcome: PrintLog["outcome"];
+  /** Client-reported error text; stored as the log's reason when outcome is "Failed". */
+  error?: string;
+}
+
+export interface PrinterDiagnosticInput {
+  deviceName: string;
+  checks: PrinterDiagnosticCheck[];
+  scannerResult?: HardwareTestRecord["scannerResult"];
+  cameraResult?: HardwareTestRecord["cameraResult"];
+  signatureResult?: HardwareTestRecord["signatureResult"];
+  pwaResult?: HardwareTestRecord["pwaResult"];
+}
 
 function parseLimit(value: ListQuery["limit"]) {
   const parsed = Number(value ?? 0);
@@ -2441,16 +2480,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return expense;
   }
 
-  renderReceivingSlip(packageId: string) {
+  renderReceivingSlip(packageId: string): RenderedDocument {
     const cargo = this.findPackage(packageId);
-    const printLog = this.logPrint({
-      documentType: "Receiving Slip",
-      documentNumber: cargo.packageNumber,
-      relatedEntityType: "CargoPackage",
-      relatedEntityId: cargo.id,
-      layout: "80mm"
-    });
-    return renderReceivingSlip({
+    const copy = this.peekPrintCopy(cargo.packageNumber);
+    const text = renderReceivingSlip({
       documentNumber: cargo.receivingRecordNumber,
       packageNumber: cargo.packageNumber,
       customerName: cargo.customerName,
@@ -2472,58 +2505,69 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       unitPrice: cargo.unitPrice,
       price: cargo.price,
       qrValue: cargo.qrValue,
-      printLine: `${printLog.action} ${printLog.createdAt}`,
-      copyNumber: printLog.copyNumber
+      printLine: `${copy.action} ${copy.at}`,
+      copyNumber: copy.copyNumber
     });
+    return {
+      text,
+      print: {
+        documentType: "Receiving Slip",
+        documentNumber: cargo.packageNumber,
+        relatedEntityType: "CargoPackage",
+        relatedEntityId: cargo.id,
+        layout: "80mm"
+      }
+    };
   }
 
-  renderReceivingDocument(receivingRecordId: string) {
+  renderReceivingDocument(receivingRecordId: string): RenderedDocument {
     const receiving = this.findReceivingRecord(receivingRecordId);
-    const printLog = this.logPrint({
-      documentType: "Receiving Document",
-      documentNumber: receiving.recordNumber,
-      relatedEntityType: "ReceivingRecord",
-      relatedEntityId: receiving.id,
-      layout: "80mm"
-    });
-    return renderReceivingDocument({
+    const copy = this.peekPrintCopy(receiving.recordNumber);
+    const text = renderReceivingDocument({
       recordNumber: receiving.recordNumber,
       customerName: receiving.customerName,
       customerDrNumber: receiving.customerDrNumber,
       destination: receiving.destination,
       packages: receiving.packages,
-      copyLine: `${printLog.copyNumber} / ${new Date(printLog.createdAt).toLocaleString("en-PH", { hour12: false })}`
+      copyLine: `${copy.copyNumber} / ${new Date(copy.at).toLocaleString("en-PH", { hour12: false })}`
     });
+    return {
+      text,
+      print: {
+        documentType: "Receiving Document",
+        documentNumber: receiving.recordNumber,
+        relatedEntityType: "ReceivingRecord",
+        relatedEntityId: receiving.id,
+        layout: "80mm"
+      }
+    };
   }
 
-  renderQrLabel(packageId: string) {
+  renderQrLabel(packageId: string): RenderedDocument {
     const cargo = this.findPackage(packageId);
-    this.logPrint({
-      documentType: "QR Label",
-      documentNumber: cargo.packageNumber,
-      relatedEntityType: "CargoPackage",
-      relatedEntityId: cargo.id,
-      layout: "80mm"
-    });
-    return renderQrLabel({
+    const text = renderQrLabel({
       packageNumber: cargo.packageNumber,
       description: cargo.description,
       destination: cargo.destination,
       qrValue: cargo.qrValue
     });
+    return {
+      text,
+      print: {
+        documentType: "QR Label",
+        documentNumber: cargo.packageNumber,
+        relatedEntityType: "CargoPackage",
+        relatedEntityId: cargo.id,
+        layout: "80mm"
+      }
+    };
   }
 
-  renderTripManifest(tripId: string) {
+  renderTripManifest(tripId: string): RenderedDocument {
     const trip = this.findTrip(tripId);
     const cargo = trip.cargoPackageIds.map((packageId) => this.findPackage(packageId));
-    const printLog = this.logPrint({
-      documentType: "Loading Manifest",
-      documentNumber: trip.tripNumber,
-      relatedEntityType: "Trip",
-      relatedEntityId: trip.id,
-      layout: "80mm"
-    });
-    return renderLoadingManifest({
+    const copy = this.peekPrintCopy(trip.tripNumber);
+    const text = renderLoadingManifest({
       tripNumber: trip.tripNumber,
       origin: trip.origin,
       destination: trip.destination,
@@ -2536,23 +2580,26 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         status: pkg.status,
         price: pkg.price
       })),
-      auditLine: `${printLog.action} ${printLog.createdAt} / Copy ${printLog.copyNumber}`
+      auditLine: `${copy.action} ${copy.at} / Copy ${copy.copyNumber}`
     });
+    return {
+      text,
+      print: {
+        documentType: "Loading Manifest",
+        documentNumber: trip.tripNumber,
+        relatedEntityType: "Trip",
+        relatedEntityId: trip.id,
+        layout: "80mm"
+      }
+    };
   }
 
-  renderDeliveryReceipt(packageId: string) {
+  renderDeliveryReceipt(packageId: string): RenderedDocument {
     const cargo = this.findPackage(packageId);
     const delivery = [...this.deliveries].reverse().find((entry) => entry.cargoPackageId === cargo.id && entry.status === "Delivered");
     if (!delivery) throw new BadRequestException("Package has no completed delivery receipt yet");
     const latestPayment = [...this.payments].reverse().find((entry) => entry.cargoPackageId === cargo.id);
-    this.logPrint({
-      documentType: "Delivery Receipt",
-      documentNumber: `DR-${cargo.packageNumber}`,
-      relatedEntityType: "CargoPackage",
-      relatedEntityId: cargo.id,
-      layout: "80mm"
-    });
-    return renderDeliveryReceipt({
+    const text = renderDeliveryReceipt({
       documentNumber: `DR-PREVIEW-${cargo.packageNumber}`,
       packageNumber: cargo.packageNumber,
       customerName: cargo.customerName,
@@ -2563,6 +2610,105 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       paymentStatus: latestPayment?.status ?? "Unpaid",
       qrValue: cargo.qrValue
     });
+    return {
+      text,
+      print: {
+        documentType: "Delivery Receipt",
+        documentNumber: `DR-${cargo.packageNumber}`,
+        relatedEntityType: "CargoPackage",
+        relatedEntityId: cargo.id,
+        layout: "80mm"
+      }
+    };
+  }
+
+  /**
+   * Records a print hand-off reported by the client AFTER it attempted to
+   * hand the document to a printer (native gateway intent launched, browser
+   * print fallback invoked, or the attempt failed). This is the only writer
+   * of PrintLog rows: a row now proves a hand-off was attempted by a named
+   * user on a named device, and carries the outcome the client observed.
+   * Copy numbering keeps the historical rule — copies are counted per
+   * document number and the first recorded hand-off is "Printed", later
+   * ones "Reprinted" — but the population counted is hand-offs, not renders.
+   */
+  recordPrintHandoff(input: PrintHandoffInput, user?: AuthContext) {
+    this.assertPrintableEntity(input.relatedEntityType, input.relatedEntityId);
+    const existing = this.printLogs.filter((entry) => entry.documentNumber === input.documentNumber);
+    const failed = input.outcome === "Failed";
+    const log: PrintLog = {
+      id: id("prt"),
+      documentType: input.documentType,
+      documentNumber: input.documentNumber,
+      relatedEntityType: input.relatedEntityType,
+      relatedEntityId: input.relatedEntityId,
+      action: existing.length ? "Reprinted" : "Printed",
+      reason: failed ? input.error?.trim() || "Print hand-off failed" : undefined,
+      outcome: input.outcome,
+      printedByName: this.printUserName(user),
+      deviceName: input.deviceName?.trim() || undefined,
+      layout: input.layout,
+      copyNumber: existing.length + 1,
+      createdAt: new Date().toISOString()
+    };
+    this.printLogs.push(log);
+    this.audit(
+      failed ? "document.printFailed" : log.action === "Printed" ? "document.printed" : "document.reprinted",
+      input.relatedEntityType,
+      input.relatedEntityId,
+      log.reason
+    );
+    this.saveData();
+    return log;
+  }
+
+  /**
+   * Persists one Device Setup printer diagnostic run. The checks were
+   * measured on the client (plugin presence, gateway route, test payload
+   * hand-off); the printer result is derived here from those checks, never
+   * self-attested. Other hardware results keep their existing manual flow
+   * and default to "Not Tested" for a diagnostic-only record.
+   */
+  recordPrinterDiagnostic(input: PrinterDiagnosticInput) {
+    const summary = summarizePrinterDiagnostic(input.checks ?? []);
+    return this.createHardwareTest({
+      deviceName: input.deviceName,
+      scannerResult: input.scannerResult ?? "Not Tested",
+      printerResult: summary.printerResult,
+      cameraResult: input.cameraResult ?? "Not Tested",
+      signatureResult: input.signatureResult ?? "Not Tested",
+      pwaResult: input.pwaResult ?? "Not Tested",
+      notes: summary.notes
+    });
+  }
+
+  private assertPrintableEntity(relatedEntityType: string, relatedEntityId: string) {
+    const known =
+      (relatedEntityType === "CargoPackage" && this.packages.some((entry) => entry.id === relatedEntityId)) ||
+      (relatedEntityType === "ReceivingRecord" && this.receivingRecords.some((entry) => entry.id === relatedEntityId)) ||
+      (relatedEntityType === "Trip" && this.trips.some((entry) => entry.id === relatedEntityId));
+    if (!known) throw new BadRequestException("Print hand-off references an unknown document");
+  }
+
+  private printUserName(user?: AuthContext) {
+    const found = user?.id ? this.getDemoUsers().find((entry) => entry.id === user.id) : undefined;
+    return found?.name ?? user?.role ?? "Unknown User";
+  }
+
+  /**
+   * The copy line printed ON a rendered document must anticipate the copy
+   * this print will be, without writing the log row the old flow wrote at
+   * render time: it peeks at the recorded hand-offs for the document number
+   * and predicts action + copy number. The authoritative row is written by
+   * recordPrintHandoff once the client actually attempts the hand-off.
+   */
+  private peekPrintCopy(documentNumber: string) {
+    const existing = this.printLogs.filter((entry) => entry.documentNumber === documentNumber);
+    return {
+      action: (existing.length ? "Reprinted" : "Printed") as PrintLog["action"],
+      copyNumber: existing.length + 1,
+      at: new Date().toISOString()
+    };
   }
 
   renderEscPosPreview(text: string) {
@@ -2620,34 +2766,6 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     const draft = this.receivingDrafts.find((entry) => entry.id === draftId || entry.draftNumber === draftId);
     if (!draft) throw new NotFoundException("Receiving draft not found");
     return draft;
-  }
-
-  private logPrint(input: {
-    documentType: string;
-    documentNumber: string;
-    relatedEntityType: string;
-    relatedEntityId: string;
-    layout: PrintLog["layout"];
-    reason?: string;
-  }) {
-    const existing = this.printLogs.filter((entry) => entry.documentNumber === input.documentNumber);
-    const log: PrintLog = {
-      id: id("prt"),
-      documentType: input.documentType,
-      documentNumber: input.documentNumber,
-      relatedEntityType: input.relatedEntityType,
-      relatedEntityId: input.relatedEntityId,
-      action: existing.length ? "Reprinted" : "Printed",
-      reason: input.reason,
-      printedByName: "Current User",
-      layout: input.layout,
-      copyNumber: existing.length + 1,
-      createdAt: new Date().toISOString()
-    };
-    this.printLogs.push(log);
-    this.audit(log.action === "Printed" ? "document.printed" : "document.reprinted", input.relatedEntityType, input.relatedEntityId, input.reason);
-    this.saveData();
-    return log;
   }
 
   private findTrip(tripId: string) {
@@ -2795,7 +2913,8 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     this.messages = data.messages ?? [];
     this.operationChatThreads = data.operationChatThreads ?? [];
     this.hardwareTests = data.hardwareTests ?? [];
-    this.printLogs = data.printLogs ?? [];
+    // Rows persisted before the hand-off rework predate the outcome column.
+    this.printLogs = (data.printLogs ?? []).map((log) => ({ ...log, outcome: log.outcome ?? "HandedOff" }));
     this.customUsers = data.customUsers ?? [];
     this.companyProfile = data.companyProfile ?? this.companyProfile;
     this.branches = data.branches?.length ? data.branches : this.branches;

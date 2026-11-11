@@ -510,6 +510,7 @@ model PrintLog {
   relatedEntityType String
   relatedEntityId   String
   action            String   @default("Printed")
+  outcome           String   @default("HandedOff")
   reason            String?
   printedByName     String
   deviceName        String?

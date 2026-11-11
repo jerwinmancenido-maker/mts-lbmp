@@ -198,6 +198,14 @@ export interface PrintLog {
   relatedEntityId: string;
   action: "Printed" | "Reprinted";
   reason?: string;
+  /**
+   * Client-reported outcome of the print hand-off this row records. Rows are
+   * written when the client attempts the hand-off (never at render time):
+   * "HandedOff" = the native gateway intent launched or the browser print
+   * fallback was invoked; "Failed" = the hand-off threw/returned not-ok, in
+   * which case `reason` carries the client-reported error text.
+   */
+  outcome: "HandedOff" | "Failed";
   printedByName: string;
   deviceName?: string;
   layout: "58mm" | "80mm" | "A4";
