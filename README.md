@@ -40,6 +40,20 @@ Receiving
 -> Basic dashboard
 ```
 
+## Testing
+
+The gate is `npm run typecheck`, `npm run test:unit`, `npm run build`, then
+the two smoke suites against a running API (`npm run smoke`,
+`npm run smoke:permissions`).
+
+The smoke suites sign in with dedicated smoke accounts, not the demo users.
+Boot the API with `ALLOW_DEMO_AUTH=true` (never in production) and a
+test-only seed hook provisions the accounts at startup; credentials come
+from `SMOKE_EMAIL` / `SMOKE_PASSWORD` and `SMOKE_LIMITED_EMAIL` /
+`SMOKE_LIMITED_PASSWORD`, with throwaway local defaults so a fresh clone
+passes with zero setup. Full details: `tools/smoke-credentials.mjs` and
+`apps/api/src/modules/smoke-seed.ts`.
+
 ## Error Policy
 
 Technical and UX issues should be resolved with the best practical recommendation and documented.
