@@ -87,9 +87,14 @@ const invoice: BillingInvoice = {
   amountDue: 3600,
   amountPaid: 500,
   balance: 3100,
-  dueRule: "Pay upon delivery",
+  dueRule: "Net 30",
   status: "Issued",
-  createdAt: "2026-11-11T02:00:00.000Z"
+  // Manila midnight 2026-12-11 in UTC form, so the Date round-trip through
+  // the Prisma rows is byte-identical (the service stores the +08:00 form;
+  // both name the same instant and the same Manila calendar date).
+  dueDate: "2026-12-10T16:00:00.000Z",
+  createdAt: "2026-11-11T02:00:00.000Z",
+  updatedAt: "2026-11-11T02:00:00.000Z"
 };
 
 const draft: ReceivingDraft = {
@@ -138,7 +143,8 @@ function fixtureState(): ServiceState {
             createdAt: "2026-11-11T00:00:00.000Z"
           }
         ],
-        billingTerm: "Pay upon delivery"
+        billingTerm: "Pay upon delivery",
+        billingTermDays: 30
       }
     ],
     receivingRecords: [receiving],

@@ -228,7 +228,7 @@ export class LogisticsController {
 
   @Patch("customers/:id/finalize")
   @RequirePermissions("customers.manage")
-  finalizeCustomer(@Param("id") id: string, @Body() body: { businessName?: string; contactPerson?: string; phone?: string; billingTerm?: string }) {
+  finalizeCustomer(@Param("id") id: string, @Body() body: { businessName?: string; contactPerson?: string; phone?: string; billingTerm?: string; billingTermDays?: number | null }) {
     return this.logistics.finalizeCustomer(id, body);
   }
 
@@ -671,6 +671,34 @@ export class LogisticsController {
   @RequirePermissions("customers.manage")
   createBillingInvoice(@Body() body: Parameters<LogisticsService["createBillingInvoice"]>[0]) {
     return this.logistics.createBillingInvoice(body);
+  }
+
+  // Phase 6 P6-1: invoice detail read (branch-scoped, existence-hiding —
+  // the P5-3 detail pattern), void, and the server-rendered statement.
+  // Billing reads/writes stay behind customers.manage, the permission the
+  // existing list/create endpoints already use; documents.print gates the
+  // statement render like every other printed document. (reports.view
+  // enforcement is P6-2's job and is deliberately not half-wired here.)
+  @Get("billing/invoices/:id")
+  @RequirePermissions("customers.manage")
+  billingInvoice(@Req() request: { user?: { branchAccess?: string } }, @Param("id") id: string) {
+    return this.logistics.getBillingInvoice(id, request.user);
+  }
+
+  @Post("billing/invoices/:id/void")
+  @RequirePermissions("customers.manage")
+  voidBillingInvoice(
+    @Req() request: { user?: { branchAccess?: string } },
+    @Param("id") id: string,
+    @Body() body: { reason?: string }
+  ) {
+    return this.logistics.voidBillingInvoice(id, request.user, body ?? {});
+  }
+
+  @Get("billing/invoices/:id/statement")
+  @RequirePermissions("documents.print")
+  billingStatement(@Req() request: { user?: { branchAccess?: string } }, @Param("id") id: string) {
+    return this.logistics.renderBillingStatement(id, request.user);
   }
 
   @Get("expenses")

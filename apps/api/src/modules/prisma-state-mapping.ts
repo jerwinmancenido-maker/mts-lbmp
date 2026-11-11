@@ -98,6 +98,7 @@ export interface CustomerRow {
   tin: string | null;
   companyPhone: string | null;
   billingTerm: string;
+  billingTermDays: number | null;
   status: string;
   notes: string | null;
   createdFromReceivingId: string | null;
@@ -322,7 +323,9 @@ export interface BillingInvoiceRow {
   balance: DecimalValue;
   dueRule: string;
   status: string;
+  dueDate: DateValue | null;
   createdAt: DateValue;
+  updatedAt: DateValue;
 }
 
 export interface BillingInvoicePackageRow {
@@ -646,6 +649,7 @@ export function stateToRows(state: ServiceState): PrismaStateRows {
       tin: customer.tin ?? null,
       companyPhone: customer.companyPhone ?? null,
       billingTerm: customer.billingTerm,
+      billingTermDays: customer.billingTermDays ?? null,
       status: customer.status,
       notes: customer.notes ?? null,
       createdFromReceivingId: customer.createdFromReceivingId ?? null,
@@ -866,7 +870,9 @@ export function stateToRows(state: ServiceState): PrismaStateRows {
       balance: invoice.balance,
       dueRule: invoice.dueRule,
       status: invoice.status,
-      createdAt: new Date(invoice.createdAt)
+      dueDate: invoice.dueDate ? new Date(invoice.dueDate) : null,
+      createdAt: new Date(invoice.createdAt),
+      updatedAt: new Date(invoice.updatedAt ?? invoice.createdAt)
     })),
     billingInvoicePackages: state.billingInvoices.flatMap((invoice) =>
       invoice.packageIds.map((cargoPackageId) => ({
@@ -1109,6 +1115,7 @@ export function rowsToState(rows: PrismaStateRows): LoadedServiceState {
         createdAt: toIso(contact.createdAt)
       })),
       billingTerm: customer.billingTerm,
+      billingTermDays: customer.billingTermDays ?? undefined,
       notes: customer.notes ?? undefined,
       createdFromReceivingId: customer.createdFromReceivingId ?? undefined,
       finalizedAt: customer.finalizedAt ? toIso(customer.finalizedAt) : undefined,
@@ -1269,7 +1276,11 @@ export function rowsToState(rows: PrismaStateRows): LoadedServiceState {
       balance: requiredDecimal(invoice.balance),
       dueRule: invoice.dueRule,
       status: invoice.status as BillingInvoice["status"],
-      createdAt: toIso(invoice.createdAt)
+      dueDate: invoice.dueDate ? toIso(invoice.dueDate) : undefined,
+      createdAt: toIso(invoice.createdAt),
+      // Rows persisted before P6-1 have no updatedAt column value in older
+      // fixtures; the creation time is the honest fallback.
+      updatedAt: invoice.updatedAt ? toIso(invoice.updatedAt) : toIso(invoice.createdAt)
     })),
     notifications: rows.notifications.map((notification) => ({
       id: notification.id,

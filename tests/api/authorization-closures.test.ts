@@ -205,8 +205,8 @@ function seedOperations(service: LogisticsService) {
     { id: "ret_p53_naga", cargoPackageId: pkgNaga.id, reason: "Fixture return", nextAction: "Hold at Branch", status: "Requested", createdAt: NOW }
   );
   state.billingInvoices.push(
-    { id: "inv_p53_daet", invoiceNumber: "INV-P53-D", customerId: "cust_p53", customerName: "P5-3 Fixture Customer", packageIds: [pkgDaet.id], amountDue: 500, amountPaid: 0, balance: 500, dueRule: "Pay upon delivery", status: "Issued", createdAt: NOW },
-    { id: "inv_p53_open", invoiceNumber: "INV-P53-O", customerId: "cust_p53", customerName: "P5-3 Fixture Customer", packageIds: [], amountDue: 0, amountPaid: 0, balance: 0, dueRule: "Pay upon delivery", status: "Draft", createdAt: NOW }
+    { id: "inv_p53_daet", invoiceNumber: "INV-P53-D", customerId: "cust_p53", customerName: "P5-3 Fixture Customer", packageIds: [pkgDaet.id], amountDue: 500, amountPaid: 0, balance: 500, dueRule: "Pay upon delivery", status: "Issued", createdAt: NOW, updatedAt: NOW },
+    { id: "inv_p53_open", invoiceNumber: "INV-P53-O", customerId: "cust_p53", customerName: "P5-3 Fixture Customer", packageIds: [], amountDue: 0, amountPaid: 0, balance: 0, dueRule: "Pay upon delivery", status: "Draft", createdAt: NOW, updatedAt: NOW }
   );
 }
 
