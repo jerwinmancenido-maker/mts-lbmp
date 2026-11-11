@@ -16,6 +16,7 @@ import {
 import { renderDeliveryReceipt, renderLoadingManifest, renderQrLabel, renderReceivingDocument, renderReceivingSlip, summarizePrinterDiagnostic, toEscPosTextBytes, type PrinterDiagnosticCheck } from "@mts-lbmp/printing";
 import { hashSecret, signAuthToken, verifySecret } from "./security.js";
 import { createStateStore, type LoadedServiceState, type ServiceState, type StateStore } from "./state-store.js";
+import { resolveSmokeSeedConfig, upsertSmokeAccounts } from "./smoke-seed.js";
 import type {
   CargoPackage,
   Customer,
@@ -433,7 +434,28 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     await this.loadData();
+    this.seedSmokeAccountsIfRequested();
     this.reconcileProductsFromCargo();
+  }
+
+  /**
+   * Phase 5 P5-0: provision the smoke-gate accounts (see smoke-seed.ts).
+   * Inert unless ALLOW_DEMO_AUTH=true in a non-production process; the
+   * accounts are ordinary custom users that sign in through the real
+   * login path, so the smoke scripts no longer depend on the demo users.
+   */
+  private seedSmokeAccountsIfRequested() {
+    const config = resolveSmokeSeedConfig(process.env);
+    if (!config) return;
+    const { users, changed } = upsertSmokeAccounts(this.customUsers, config);
+    if (!changed) return;
+    this.customUsers = users;
+    console.warn(
+      `[smoke-seed] ALLOW_DEMO_AUTH is on outside production: seeded smoke-test accounts ` +
+        `${config.email} (System Admin) and ${config.limitedEmail} (Delivery Staff). ` +
+        `Never enable ALLOW_DEMO_AUTH outside local/test runs.`
+    );
+    this.saveData();
   }
 
   async onModuleDestroy() {
@@ -450,7 +472,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       trucks: this.listTrucks(),
       users: this.getDemoUsers()
         .filter((user) => user.role !== "Customer Owner")
-        .map(({ staffCode, ...user }) => ({
+        .map(({ staffCode, passwordHash, ...user }) => ({
           ...user,
           hasStaffCode: Boolean(staffCode),
           lastLogin: new Date().toISOString()
@@ -464,7 +486,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException("Invalid demo credentials");
     }
     this.audit("auth.login", "User", user.id);
-    const { staffCode, ...safeUser } = user;
+    const { staffCode, passwordHash, ...safeUser } = user;
     return {
       user: { ...safeUser, hasStaffCode: Boolean(staffCode), lastLogin: new Date().toISOString() },
       token: signAuthToken({ userId: user.id, role: user.role, branchAccess: user.branchAccess }),
@@ -479,7 +501,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException("Invalid staff code");
     }
     this.audit("auth.staffCodeLogin", "User", user.id);
-    const { staffCode, ...safeUser } = user;
+    const { staffCode, passwordHash, ...safeUser } = user;
     return {
       user: { ...safeUser, hasStaffCode: true, lastLogin: new Date().toISOString() },
       token: signAuthToken({ userId: user.id, role: user.role, branchAccess: user.branchAccess }),
@@ -771,7 +793,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     this.audit("settings.user.branchAccess.update", "User", userId, branchAccess);
     this.saveData();
     const updated = this.getDemoUsers().find((entry) => entry.id === userId)!;
-    const { staffCode, ...safeUser } = updated;
+    const { staffCode, passwordHash, ...safeUser } = updated;
     return { ...safeUser, hasStaffCode: Boolean(staffCode), lastLogin: new Date().toISOString() };
   }
 
@@ -811,7 +833,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     this.customUsers.push(user);
     this.audit("settings.user.create", "User", user.id, `${user.name} - ${user.role} - ${user.branchAccess}`);
     this.saveData();
-    const { staffCode: hiddenCode, ...safeUser } = user;
+    const { staffCode: hiddenCode, passwordHash, ...safeUser } = user;
     return { ...safeUser, hasStaffCode: Boolean(hiddenCode), lastLogin: new Date().toISOString() };
   }
 
@@ -846,7 +868,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     this.audit("settings.user.update", "User", userId, `${user.name} - ${input.role ?? user.role} - ${input.branchAccess ?? this.userBranchAccessOverrides[userId] ?? user.branchAccess}`);
     this.saveData();
     const updated = this.getDemoUsers().find((entry) => entry.id === userId)!;
-    const { staffCode, ...safeUser } = updated;
+    const { staffCode, passwordHash, ...safeUser } = updated;
     return { ...safeUser, hasStaffCode: Boolean(staffCode), lastLogin: new Date().toISOString() };
   }
 

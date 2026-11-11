@@ -377,6 +377,13 @@ export interface StaffUserRecord {
   phone?: string;
   role: string;
   staffCode?: string;
+  /**
+   * Per-user PBKDF2 password hash (security.ts format). Seeded onto the
+   * smoke-test accounts in P5-0; login() starts verifying against it in
+   * P5-1. Never serialized into API responses — every user-returning site
+   * strips it alongside staffCode.
+   */
+  passwordHash?: string;
   branchId?: string;
   branchAccess?: string;
   permissionPreset?: string;

@@ -1,4 +1,18 @@
+/**
+ * Permission smoke gate: positive checks run as the provisioned smoke admin
+ * account, negative checks as the provisioned limited (Delivery Staff)
+ * account — NOT the demo accounts. Credentials come from SMOKE_EMAIL /
+ * SMOKE_PASSWORD and SMOKE_LIMITED_EMAIL / SMOKE_LIMITED_PASSWORD (see
+ * tools/smoke-credentials.mjs for the env vars, the ALLOW_DEMO_AUTH-gated
+ * seed hook that provisions the accounts, and the local defaults).
+ *
+ * The /bootstrap assertion still expects the endpoint to be public; the
+ * Phase 5 audit stages its flip to a reduced projection for tranche P5-3.
+ */
+import { resolveSmokeCredentials } from "./smoke-credentials.mjs";
+
 const API_URL = process.env.API_URL ?? "http://localhost:4100";
+const smoke = resolveSmokeCredentials();
 
 async function request(path, options = {}) {
   const response = await fetch(`${API_URL}${path}`, {
@@ -9,17 +23,17 @@ async function request(path, options = {}) {
   return { status: response.status, text };
 }
 
-async function login(email) {
+async function login(email, password) {
   const response = await request("/auth/login", {
     method: "POST",
-    body: JSON.stringify({ email, password: "password" })
+    body: JSON.stringify({ email, password })
   });
   if (response.status !== 201) throw new Error(`Login failed for ${email}: ${response.text}`);
   return JSON.parse(response.text).token;
 }
 
-const ownerToken = await login("daet.owner@mts.local");
-const deliveryToken = await login("delivery@mts.local");
+const ownerToken = await login(smoke.email, smoke.password);
+const deliveryToken = await login(smoke.limitedEmail, smoke.limitedPassword);
 
 const dashboardWithoutToken = await request("/dashboard");
 const bootstrapPublic = await request("/bootstrap");

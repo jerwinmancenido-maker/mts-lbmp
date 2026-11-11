@@ -1,4 +1,15 @@
+/**
+ * Full-journey smoke gate.
+ *
+ * Signs in with the provisioned smoke admin account — NOT a demo account.
+ * Credentials come from SMOKE_EMAIL / SMOKE_PASSWORD (see
+ * tools/smoke-credentials.mjs for the env vars, the ALLOW_DEMO_AUTH-gated
+ * seed hook that provisions the accounts, and the local defaults).
+ */
+import { resolveSmokeCredentials } from "./smoke-credentials.mjs";
+
 const API_URL = process.env.API_URL ?? "http://localhost:4100";
+const smoke = resolveSmokeCredentials();
 let token = "";
 
 async function request(path, options = {}) {
@@ -19,7 +30,7 @@ async function request(path, options = {}) {
 
 const login = await request("/auth/login", {
   method: "POST",
-  body: JSON.stringify({ email: "admin@mts.local", password: "password" })
+  body: JSON.stringify({ email: smoke.email, password: smoke.password })
 });
 token = login.token;
 const bootstrap = await request("/bootstrap");
