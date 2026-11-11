@@ -35,6 +35,17 @@ export const permissions = [
 
 export type Permission = (typeof permissions)[number];
 
+/**
+ * AUTHORIZATION SOURCE OF TRUTH (Phase 5 P5-4, CR-006): these role
+ * presets are the one place role→permission authorization is decided.
+ * The auth guard reads them on every request. The database's Role /
+ * Permission / RolePermission tables exist in the schema but are
+ * deliberately NEVER written or read for authorization — keeping the
+ * presets in code means every authorization change is a reviewed,
+ * tested code change, and there is no second, driftable copy of the
+ * truth in the database. Do not start persisting RolePermission rows
+ * without a new change-control decision superseding CR-006.
+ */
 export const rolePresets: Record<string, Permission[]> = {
   Administrator: [...permissions],
   "System Admin": [...permissions],

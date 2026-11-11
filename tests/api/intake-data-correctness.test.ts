@@ -427,7 +427,6 @@ describe("Prisma state mapping round-trip", () => {
       branches: [],
       paymentMethods: [],
       expenseCategories: [],
-      userBranchAccessOverrides: {}
     } as unknown as ServiceState;
 
     const restored = rowsToState(stateToRows(state));

@@ -486,7 +486,6 @@ describe("prisma mapping round-trip (Phase 2 §4.1 fields)", () => {
       branches: [],
       paymentMethods: ["Cash"],
       expenseCategories: ["Fuel"],
-      userBranchAccessOverrides: {}
     };
   }
 

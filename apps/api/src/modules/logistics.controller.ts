@@ -37,14 +37,16 @@ export class LogisticsController {
 
   @Post("auth/login")
   @PublicRoute()
-  login(@Body() body: { email: string; password: string }) {
-    return this.logistics.login(body);
+  login(@Body() body: { email: string; password: string }, @Headers("user-agent") userAgent?: string) {
+    // Phase 5 P5-5: the user-agent rides along so the login audit entry
+    // can carry its coarse device label (device-label.ts).
+    return this.logistics.login({ ...body, userAgent });
   }
 
   @Post("auth/staff-code")
   @PublicRoute()
-  staffCodeLogin(@Body() body: { staffCode: string }) {
-    return this.logistics.loginWithStaffCode(body);
+  staffCodeLogin(@Body() body: { staffCode: string }, @Headers("user-agent") userAgent?: string) {
+    return this.logistics.loginWithStaffCode({ ...body, userAgent });
   }
 
   /**

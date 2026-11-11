@@ -321,7 +321,6 @@ describe("B1 storage — Prisma mapping round-trip", () => {
       branches: [],
       paymentMethods: [],
       expenseCategories: [],
-      userBranchAccessOverrides: {}
     } as unknown as ServiceState;
 
     const rows = stateToRows(state);

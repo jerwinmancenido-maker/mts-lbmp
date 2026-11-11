@@ -1,4 +1,29 @@
 import { appendDiagnosticLog } from "./cache";
+import { classifyAuthFailure, SessionExpiredError } from "./session-expiry";
+
+export { SessionExpiredError } from "./session-expiry";
+
+/**
+ * Phase 5 P5-5: the shell registers one listener here; when any API
+ * response is classified as a SESSION failure (see session-expiry.ts),
+ * the listener routes the shell back to the login screen and the call
+ * throws SessionExpiredError instead of a generic error, so callers
+ * don't ALSO surface an error toast for the dead session. Permission
+ * failures on a valid session never reach the listener.
+ */
+let sessionExpiredListener: (() => void) | null = null;
+
+export function setSessionExpiredListener(listener: (() => void) | null) {
+  sessionExpiredListener = listener;
+}
+
+function errorForFailedResponse(response: Response, errorText: string): Error {
+  if (classifyAuthFailure(response.status, response.headers.get("x-auth-failure")) === "session") {
+    sessionExpiredListener?.();
+    return new SessionExpiredError();
+  }
+  return new Error(errorText);
+}
 
 /**
  * The session JWT lives ONLY in this module variable (Phase 5 audit §6:
@@ -53,7 +78,7 @@ export async function apiGet<T>(path: string): Promise<T> {
     if (!response.ok) {
       const errorText = await response.text();
       void appendDiagnosticLog({ level: "error", source: "api", message: `GET ${path} failed`, details: { status: response.status, errorText } });
-      throw new Error(errorText);
+      throw errorForFailedResponse(response, errorText);
     }
     return response.json() as Promise<T>;
   } catch (error) {
@@ -72,7 +97,7 @@ export async function apiPost<T>(path: string, body?: unknown, options?: ApiWrit
     if (!response.ok) {
       const errorText = await response.text();
       void appendDiagnosticLog({ level: "error", source: "api", message: `POST ${path} failed`, details: { status: response.status, errorText, body } });
-      throw new Error(errorText);
+      throw errorForFailedResponse(response, errorText);
     }
     return response.json() as Promise<T>;
   } catch (error) {
@@ -91,7 +116,7 @@ export async function apiPatch<T>(path: string, body?: unknown, options?: ApiWri
     if (!response.ok) {
       const errorText = await response.text();
       void appendDiagnosticLog({ level: "error", source: "api", message: `PATCH ${path} failed`, details: { status: response.status, errorText, body } });
-      throw new Error(errorText);
+      throw errorForFailedResponse(response, errorText);
     }
     return response.json() as Promise<T>;
   } catch (error) {

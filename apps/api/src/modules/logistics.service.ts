@@ -15,6 +15,7 @@ import {
 } from "@mts-lbmp/shared";
 import { renderDeliveryReceipt, renderLoadingManifest, renderQrLabel, renderReceivingDocument, renderReceivingSlip, summarizePrinterDiagnostic, toEscPosTextBytes, type PrinterDiagnosticCheck } from "@mts-lbmp/printing";
 import { hashSecret, signAuthToken, verifySecret } from "./security.js";
+import { deviceLabelFromUserAgent } from "./device-label.js";
 import { createStateStore, type LoadedServiceState, type ServiceState, type StateStore } from "./state-store.js";
 import { resolveSmokeSeedConfig, upsertSmokeAccounts } from "./smoke-seed.js";
 import { BOOTSTRAP_MISSING_ENV_WARNING, buildBootstrapAdminRecord, resolveBootstrapAdmin } from "./bootstrap-admin.js";
@@ -392,7 +393,6 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   private printLogs: PrintLog[] = [];
   private customUsers: StaffUserRecord[] = [];
   private idempotencyRecords: IdempotencyRecord[] = [];
-  private userBranchAccessOverrides: Record<string, string> = {};
   private notifications: ServiceNotification[] = [];
   private auditLogs: ServiceAuditLog[] = [];
 
@@ -615,9 +615,9 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
    * counted on that account. Reaching LOGIN_MAX_FAILED_ATTEMPTS locks the
    * account for LOGIN_LOCKOUT_MS on BOTH doors (the counter is shared).
    */
-  private registerLoginFailure(record: StaffUserRecord | undefined, door: "password" | "staffCode", attemptedIdentifier: string) {
+  private registerLoginFailure(record: StaffUserRecord | undefined, door: "password" | "staffCode", attemptedIdentifier: string, device = "Unknown device") {
     if (!record) {
-      this.audit("auth.loginFailed", "User", attemptedIdentifier, `door=${door}; unknown or inactive account`);
+      this.audit("auth.loginFailed", "User", attemptedIdentifier, `door=${door}; device=${device}; unknown or inactive account`);
       this.saveData();
       return;
     }
@@ -628,10 +628,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         "auth.loginLocked",
         "User",
         record.id,
-        `door=${door}; ${record.failedLoginAttempts} consecutive failures; locked until ${record.loginLockedUntil}`
+        `door=${door}; device=${device}; ${record.failedLoginAttempts} consecutive failures; locked until ${record.loginLockedUntil}`
       );
     } else {
-      this.audit("auth.loginFailed", "User", record.id, `door=${door}; consecutive failures=${record.failedLoginAttempts}`);
+      this.audit("auth.loginFailed", "User", record.id, `door=${door}; device=${device}; consecutive failures=${record.failedLoginAttempts}`);
     }
     this.saveData();
   }
@@ -649,39 +649,44 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return new BadRequestException("Account is temporarily locked after repeated failed sign-ins. Try again later.");
   }
 
-  login(input: { email: string; password: string }) {
+  login(input: { email: string; password: string; userAgent?: string }) {
+    // Phase 5 P5-5: the login audit trail records a coarse device label
+    // derived from the request's user-agent (see device-label.ts).
+    const device = deviceLabelFromUserAgent(input.userAgent);
     const user = this.getAllUsers().find((entry) => entry.email === input.email);
     const record = user ? this.findUserRecord(user.id) : undefined;
     if (!user || !record || user.status === "Inactive") {
-      this.registerLoginFailure(undefined, "password", String(input.email ?? ""));
+      this.registerLoginFailure(undefined, "password", String(input.email ?? ""), device);
       throw new BadRequestException("Invalid email or password");
     }
     if (this.isLoginLocked(record)) {
-      this.audit("auth.loginLocked", "User", user.id, "door=password; sign-in attempted during lockout");
+      this.audit("auth.loginLocked", "User", user.id, `door=password; device=${device}; sign-in attempted during lockout`);
       throw this.lockedLoginError();
     }
     // Fail closed: an account with no password hash of its own cannot sign
     // in through this door at all — there is no shared fallback password.
     const storedHash = this.passwordHashFor(record);
     if (!storedHash || !verifySecret(input.password ?? "", storedHash)) {
-      this.registerLoginFailure(record, "password", user.id);
+      this.registerLoginFailure(record, "password", user.id, device);
       throw new BadRequestException("Invalid email or password");
     }
     this.registerLoginSuccess(record);
-    this.audit("auth.login", "User", user.id);
+    this.audit("auth.login", "User", user.id, `door=password; device=${device}`);
     return {
       user: this.toSafeUser(user),
       token: signAuthToken({
         userId: user.id,
         role: user.role,
         branchAccess: user.branchAccess,
-        sessionVersion: record.sessionVersion ?? 0
+        sessionVersion: record.sessionVersion ?? 0,
+        door: "password"
       }),
       note: "Signed JWT. The session is revoked when the account's credentials change."
     };
   }
 
-  loginWithStaffCode(input: { staffCode: string }) {
+  loginWithStaffCode(input: { staffCode: string; userAgent?: string }) {
+    const device = deviceLabelFromUserAgent(input.userAgent);
     const cleanCode = String(input.staffCode ?? "").trim();
     // Codes are stored only as per-user PBKDF2 hashes, so the match is a
     // verify against each eligible account's hash (codes are unique across
@@ -703,22 +708,23 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       // A code that matches no account cannot be attributed to one, so no
       // per-account counter moves; the failure is still audited, and the
       // global throttler remains the brake on unattributed guessing.
-      this.registerLoginFailure(undefined, "staffCode", "staff-code");
+      this.registerLoginFailure(undefined, "staffCode", "staff-code", device);
       throw new BadRequestException("Invalid staff code");
     }
     if (this.isLoginLocked(matchedRecord)) {
-      this.audit("auth.loginLocked", "User", matchedUser.id, "door=staffCode; sign-in attempted during lockout");
+      this.audit("auth.loginLocked", "User", matchedUser.id, `door=staffCode; device=${device}; sign-in attempted during lockout`);
       throw this.lockedLoginError();
     }
     this.registerLoginSuccess(matchedRecord);
-    this.audit("auth.staffCodeLogin", "User", matchedUser.id);
+    this.audit("auth.staffCodeLogin", "User", matchedUser.id, `door=staffCode; device=${device}`);
     return {
       user: this.toSafeUser(matchedUser),
       token: signAuthToken({
         userId: matchedUser.id,
         role: matchedUser.role,
         branchAccess: matchedUser.branchAccess,
-        sessionVersion: matchedRecord.sessionVersion ?? 0
+        sessionVersion: matchedRecord.sessionVersion ?? 0,
+        door: "staffCode"
       }),
       note: "Signed JWT. The session is revoked when the account's credentials change."
     };
@@ -1122,7 +1128,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     if (!user) throw new NotFoundException("User not found");
     const branchAccess = input.branchAccess?.trim();
     if (!branchAccess) throw new BadRequestException("Branch access is required");
-    this.userBranchAccessOverrides[userId] = branchAccess;
+    // Phase 5 P5-4 (CR-007): the value is written onto the user record
+    // itself — branchAccess on the record is the single source of truth
+    // (the separate override map this method used to write is deleted).
+    const record = this.findUserRecord(userId);
+    if (record) record.branchAccess = branchAccess;
     this.audit("settings.user.branchAccess.update", "User", userId, branchAccess);
     this.saveData();
     const updated = this.getAllUsers().find((entry) => entry.id === userId)!;
@@ -1247,10 +1257,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (input.branchAccess?.trim()) {
-      this.userBranchAccessOverrides[userId] = input.branchAccess.trim();
+      user.branchAccess = input.branchAccess.trim();
     }
 
-    this.audit("settings.user.update", "User", userId, `${user.name} - ${input.role ?? user.role} - ${input.branchAccess ?? this.userBranchAccessOverrides[userId] ?? user.branchAccess}`);
+    this.audit("settings.user.update", "User", userId, `${user.name} - ${input.role ?? user.role} - ${input.branchAccess ?? user.branchAccess}`);
     this.saveData();
     const updated = this.getAllUsers().find((entry) => entry.id === userId)!;
     return this.toSafeUser(updated);
@@ -3751,17 +3761,42 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         migratedStaffCodes = true;
       }
     }
+    // Phase 5 P5-4 migration (CR-007) — the branch-access override map is
+    // deleted; branchAccess on the user record is the single source of
+    // truth. State persisted before P5-4 may carry a
+    // `userBranchAccessOverrides` map holding values an admin set through
+    // the old path (on the JSON store those values lived ONLY in the map,
+    // so dropping it unread would silently revert those users to their
+    // record's older value). Fold each entry into its user record — the
+    // same value stateToRows already persisted as the effective value on
+    // the Prisma path — then drop the map: snapshots no longer write it,
+    // so the fold runs once per legacy file and is a no-op afterwards.
+    let foldedBranchAccessOverrides = false;
+    const legacyOverrides = (data as { userBranchAccessOverrides?: Record<string, string> }).userBranchAccessOverrides;
+    if (legacyOverrides) {
+      for (const [userId, branchAccess] of Object.entries(legacyOverrides)) {
+        const record = this.customUsers.find((entry) => entry.id === userId);
+        if (record && branchAccess && record.branchAccess !== branchAccess) {
+          record.branchAccess = branchAccess;
+          foldedBranchAccessOverrides = true;
+        }
+      }
+    }
     this.idempotencyRecords = data.idempotencyRecords ?? [];
     this.companyProfile = data.companyProfile ?? this.companyProfile;
     this.branches = data.branches?.length ? data.branches : this.branches;
     this.paymentMethods = data.paymentMethods?.length ? data.paymentMethods : this.paymentMethods;
     this.expenseCategories = data.expenseCategories?.length ? data.expenseCategories : this.expenseCategories;
-    this.userBranchAccessOverrides = data.userBranchAccessOverrides ?? {};
-    // Persist the staff-code migration only now that every field has been
+    // Persist the load migrations only now that every field has been
     // loaded — saveData() snapshots the whole state, so calling it earlier
     // would write not-yet-loaded defaults over the stored state.
     if (migratedStaffCodes) {
       this.audit("auth.staffCodeMigrated", "User", "customUsers", "Plaintext staff codes hashed on load (Phase 5 P5-1)");
+    }
+    if (foldedBranchAccessOverrides) {
+      this.audit("settings.branchAccessOverridesFolded", "User", "customUsers", "Legacy branch-access overrides folded into user records on load (Phase 5 P5-4)");
+    }
+    if (migratedStaffCodes || foldedBranchAccessOverrides) {
       this.saveData();
     }
   }
@@ -3796,8 +3831,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       companyProfile: this.companyProfile,
       branches: this.branches,
       paymentMethods: this.paymentMethods,
-      expenseCategories: this.expenseCategories,
-      userBranchAccessOverrides: this.userBranchAccessOverrides
+      expenseCategories: this.expenseCategories
     };
   }
 
@@ -3857,13 +3891,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   /**
    * Every account in the system (Phase 5 P5-2: the store is the only
    * source — the hard-coded demo users this method used to prepend are
-   * deleted), with branch-access overrides applied. Returns copies; use
-   * findUserRecord for the live record.
+   * deleted). Phase 5 P5-4: branchAccess is read straight off the record
+   * — it is the single source of truth, no override map is applied.
+   * Returns copies; use findUserRecord for the live record.
    */
   private getAllUsers() {
-    return this.customUsers.map((user) => ({
-      ...user,
-      branchAccess: this.userBranchAccessOverrides[user.id] ?? user.branchAccess
-    }));
+    return this.customUsers.map((user) => ({ ...user }));
   }
 }

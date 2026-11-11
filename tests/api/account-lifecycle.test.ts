@@ -512,7 +512,6 @@ describe("prisma mapping round-trip (mustChangePassword)", () => {
       branches: [],
       paymentMethods: ["Cash"],
       expenseCategories: ["Fuel"],
-      userBranchAccessOverrides: {}
     };
   }
 

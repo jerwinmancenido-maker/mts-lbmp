@@ -44,7 +44,11 @@ const localDevCorsOrigins = [
 ];
 app.enableCors({
   origin: corsAllowList.length ? corsAllowList : localDevCorsOrigins,
-  credentials: true
+  credentials: true,
+  // Phase 5 P5-5: the web shell reads the guard's refusal-kind header
+  // (x-auth-failure: session | permission) to route expired sessions
+  // back to the login screen; browsers only expose listed headers.
+  exposedHeaders: ["x-auth-failure"]
 });
 app.useBodyParser("json", { limit: "8mb" });
 app.useBodyParser("urlencoded", { limit: "8mb", extended: true });
