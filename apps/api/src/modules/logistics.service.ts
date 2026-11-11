@@ -43,6 +43,8 @@ import type {
   ProfitabilityGroup,
   ProfitabilityGroupBy,
   ProfitabilityReport,
+  ReportSeries,
+  ReportSeriesDay,
   ReceivingDraft,
   ReceivingIntakeDuplicateSubmission,
   ReceivingIntakeTask,
@@ -60,6 +62,7 @@ import type {
   TruckRecord
 } from "./logistics.types.js";
 import { billingTermLabel, expenseCategoryRequiresTrip, isBillingTermDays, TRIP_REQUIRED_EXPENSE_CATEGORIES } from "./logistics.types.js";
+import { rolePresets } from "@mts-lbmp/permissions";
 
 function id(prefix: string) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
@@ -574,6 +577,18 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
    * yet, an invoice with no packages) is not hidden: there is no branch
    * whose data it could leak.
    */
+  /**
+   * Phase 6 P6-6 — the caller's effective permissions, resolved from
+   * the role presets in @mts-lbmp/permissions: the same source of
+   * truth the auth guard enforces with (CR-006). Service code that
+   * shapes a payload by what the caller may see (the dashboard's
+   * financial fields) reads permissions from here — never from role
+   * NAME comparisons, which drift the moment a preset changes.
+   */
+  private permissionsForUser(user?: AuthContext): readonly string[] {
+    return rolePresets[user?.role ?? ""] ?? [];
+  }
+
   private accessibleBranchNames(user?: AuthContext): Set<string> | null {
     if (!user) return null;
     const access = user.branchAccess?.trim() ?? "";
@@ -638,7 +653,12 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     // must never have to guess from a missing field. hasPassword mirrors
     // hasStaffCode: it reports whether a password credential exists
     // without exposing anything about it.
-    return { ...safeUser, mustChangePassword: Boolean(user.mustChangePassword), hasStaffCode: this.hasStaffCode(user), hasPassword: Boolean(this.passwordHashFor(user)), lastLogin: new Date().toISOString() };
+    // Phase 6 P6-6: `permissions` is the account's effective permission
+    // set, resolved from the role presets (CR-006 — the same list the
+    // auth guard enforces). Clients show/hide permission-gated surfaces
+    // (dashboard financials, charts) from THIS list instead of comparing
+    // role names, so a preset change needs no client release.
+    return { ...safeUser, permissions: [...(rolePresets[user.role] ?? [])], mustChangePassword: Boolean(user.mustChangePassword), hasStaffCode: this.hasStaffCode(user), hasPassword: Boolean(this.passwordHashFor(user)), lastLogin: new Date().toISOString() };
   }
 
   /** The live record behind a display copy (getAllUsers returns copies). */
@@ -869,8 +889,25 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   }
 
   getDashboard(user: { role?: string; branchAccess?: string } = { role: "Daet Owner", branchAccess: "Daet" }) {
-    const canViewFinancialSummary = ["System Admin", "Daet Owner", "Naga Owner"].includes(user.role ?? "");
-    const branchName = user.role === "Daet Owner" ? "Daet" : user.role === "Naga Owner" ? "Naga" : undefined;
+    // Phase 6 P6-6 — the dashboard's financial fields are gated on the
+    // reports.view PERMISSION (audit §8 P6-6), retiring the hardcoded
+    // role-name list this line used to be (["System Admin", "Daet
+    // Owner", "Naga Owner"]). The audience widens exactly where the
+    // preset says so: Delivery Admin holds reports.view and now sees
+    // the financial tiles; a future preset change moves the dashboard
+    // with it, no code edit. Branch scope likewise comes from the
+    // caller's stored branchAccess (the P5-3 rule every other read
+    // uses) instead of the role name: a caller restricted to exactly
+    // one known branch sees that branch's dashboard; anyone else
+    // (all-branches grants, multi-branch grants, non-branch access
+    // strings like "Origin Warehouse") keeps the all-branch view the
+    // role-name version gave non-owner roles.
+    const canViewFinancialSummary = this.permissionsForUser(user).includes("reports.view");
+    const accessibleBranches = this.accessibleBranchNames(user);
+    const branchName =
+      accessibleBranches && accessibleBranches.size === 1
+        ? this.branches.find((branch) => branch.name.trim().toLowerCase() === [...accessibleBranches][0])?.name
+        : undefined;
     const branchPackages = branchName ? this.packages.filter((pkg) => pkg.handlingBranchName === branchName || pkg.destination === branchName) : this.packages;
     const branchPackageIds = new Set(branchPackages.map((pkg) => pkg.id));
     const branchTrips = branchName
@@ -887,21 +924,16 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     const paymentsCollected = this.payments
       .filter((payment) => !branchName || payment.branchName === branchName || branchPackageIds.has(payment.cargoPackageId))
       .reduce((sum, payment) => sum + payment.amountPaid, 0);
-    const approvedExpenses = this.expenses
-      .filter((expense) => expense.status === "Approved" && (!branchName || (expense.tripId && branchTripIds.has(expense.tripId))))
-      .reduce((sum, expense) => sum + expense.amount, 0);
-    const deliveredRevenue = branchPackages
-      .filter((pkg) => pkg.status === "Delivered")
-      .reduce((sum, pkg) => sum + (pkg.price ?? 0), 0);
-
     // Phase 6 P6-5 — the period-scoped replacement for estimatedProfit's
     // definition (audit §4.3: the all-time figure compares lifetime
     // revenue against lifetime expenses and means less the longer the
     // system runs). profitThisMonth = revenue of packages DELIVERED this
     // calendar month (Asia/Manila) − APPROVED expenses RECORDED this
     // calendar month, on the same branch base as the tiles above.
-    // estimatedProfit stays in the response for one release, deprecated;
-    // the web tile already reads profitThisMonth.
+    // Phase 6 P6-6: the deprecated all-time estimatedProfit field is
+    // REMOVED after its one deprecated release — repo-wide grep found
+    // no remaining consumer (the web tile reads profitThisMonth; the
+    // smoke script's summary line was updated in this tranche).
     const currentMonth = this.businessDateKey(new Date()).slice(0, 7);
     const deliveredRevenueThisMonth = branchPackages
       .filter((pkg) => {
@@ -927,8 +959,6 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       failedDeliveries,
       paymentsCollected: canViewFinancialSummary ? paymentsCollected : undefined,
       expensesAwaitingApproval: canViewFinancialSummary ? this.expenses.filter((expense) => expense.status === "Submitted" && (!branchName || (expense.tripId && branchTripIds.has(expense.tripId)))).length : undefined,
-      /** @deprecated Phase 6 P6-5: all-time delivered revenue − all-time approved expenses. Kept for one release; read profitThisMonth instead. */
-      estimatedProfit: canViewFinancialSummary ? deliveredRevenue - approvedExpenses : undefined,
       /** Phase 6 P6-5: this calendar month's (Asia/Manila) delivered revenue − this month's approved expenses. The definition the dashboard tile shows. */
       profitThisMonth: canViewFinancialSummary ? deliveredRevenueThisMonth - approvedExpensesThisMonth : undefined,
       /** The YYYY-MM (Asia/Manila) profitThisMonth covers. */
@@ -936,6 +966,78 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       notifications: this.notifications.slice(-8).reverse(),
       branchScope: branchName ?? "All branches"
     };
+  }
+
+  /**
+   * Phase 6 P6-6 — GET /reports/series: the dashboard charts' daily
+   * series (audit §7.2/§8). Server-aggregated because the client only
+   * holds paginated lists and cannot chart honestly from them; the
+   * math lives here, in one tested place, like every other Phase 6
+   * figure. Definitions — each fact on its own Asia/Manila date:
+   *   deliveries  — packages reaching Delivered that day, counted on
+   *                 the latest Delivered delivery record's creation
+   *                 time (deliveredAtForPackage — the SAME anchor
+   *                 invoice due dates, balances and the profitability
+   *                 report's billed cohort use, so the charts can
+   *                 never disagree with the billing numbers);
+   *   collections — Σ amountPaid of payments created that day (the
+   *                 same population the dashboard's all-time
+   *                 paymentsCollected sums, sliced by day);
+   *   received    — packages created that day. A package's createdAt
+   *                 IS its receiving-intake time in this model:
+   *                 receiving intakes create the package rows, and no
+   *                 separate intake timestamp exists on the package.
+   * Branch scoping follows the P5-3 list rules per fact (packages by
+   * [handlingBranchName, destination]; payments by [branchName, the
+   * paid package's branches]; unattributed records stay visible).
+   * `days` defaults to 30 and clamps to 1..92 (a quarter is the most
+   * a daily bar chart can honestly show); a non-numeric value falls
+   * back to the default rather than failing the dashboard. Every day
+   * in the window is present — quiet days are explicit zeros.
+   */
+  getReportSeries(query: { days?: string | number } = {}, user?: AuthContext, now: Date = new Date()): ReportSeries {
+    const parsedDays = Number(query.days ?? 30);
+    const dayCount = Number.isFinite(parsedDays) ? Math.min(Math.max(Math.trunc(parsedDays), 1), 92) : 30;
+    const todayKey = this.businessDateKey(now);
+    const fromKey = this.addDaysToBusinessDateKey(todayKey, -(dayCount - 1));
+
+    const days: ReportSeriesDay[] = [];
+    const byDate = new Map<string, ReportSeriesDay>();
+    for (let offset = 0; offset < dayCount; offset += 1) {
+      const entry: ReportSeriesDay = { date: this.addDaysToBusinessDateKey(fromKey, offset), deliveries: 0, collections: 0, received: 0 };
+      days.push(entry);
+      byDate.set(entry.date, entry);
+    }
+
+    for (const pkg of this.packages) {
+      if (!this.branchVisibleTo(user, [pkg.handlingBranchName, pkg.destination])) continue;
+      const receivedDay = byDate.get(this.businessDateKey(pkg.createdAt));
+      if (receivedDay) receivedDay.received += 1;
+      const deliveredAt = this.deliveredAtForPackage(pkg.id);
+      if (deliveredAt) {
+        const deliveredDay = byDate.get(this.businessDateKey(deliveredAt));
+        if (deliveredDay) deliveredDay.deliveries += 1;
+      }
+    }
+
+    const packagesById = new Map(this.packages.map((pkg) => [pkg.id, pkg]));
+    for (const payment of this.payments) {
+      const day = byDate.get(this.businessDateKey(payment.createdAt));
+      if (!day) continue;
+      const pkg = packagesById.get(payment.cargoPackageId);
+      if (!this.branchVisibleTo(user, [payment.branchName, pkg?.handlingBranchName, pkg?.destination])) continue;
+      day.collections += payment.amountPaid;
+    }
+
+    const totals = days.reduce(
+      (sum, day) => ({
+        deliveries: sum.deliveries + day.deliveries,
+        collections: sum.collections + day.collections,
+        received: sum.received + day.received
+      }),
+      { deliveries: 0, collections: 0, received: 0 }
+    );
+    return { period: { from: fromKey, to: todayKey }, days, totals };
   }
 
   listPackages(query: ListQuery = {}, user?: AuthContext) {

@@ -39,7 +39,7 @@ import { parsePhilippineAddress, readDeliveryReceiptPhoto, type DrOcrConfidence,
 import { setPhotoAuditUser, setPhotoUploadContext, takeNativeCameraPhoto, uploadCompressedImage, uploadPathForPhotoType } from "./media";
 import type { PrinterDiagnosticCheck } from "@mts-lbmp/printing";
 import { printNativeText, runPrinterDiagnostic } from "./native-printer";
-import type { AuditLog, BillingInvoice, BootstrapData, Branch, CargoPackage, CustomerBalance, CustomerReminderHistoryEntry, DashboardData, DueWorklistRow, ExpenseRecord, HardwareTestRecord, OperationChatThread, PaymentRecord, PrintDocumentMeta, ProductMaster, ProfitabilityGroupBy, ProfitabilityReport, RenderedDocumentResponse, Trip } from "./types";
+import type { AuditLog, BillingInvoice, BootstrapData, Branch, CargoPackage, CustomerBalance, CustomerReminderHistoryEntry, DashboardData, DueWorklistRow, ExpenseRecord, HardwareTestRecord, OperationChatThread, PaymentRecord, PrintDocumentMeta, ProductMaster, ProfitabilityGroupBy, ProfitabilityReport, RenderedDocumentResponse, ReportSeries, ReportSeriesDay, Trip } from "./types";
 import { BILLING_TERM_OPTIONS, expenseCategoryRequiresTrip } from "./types";
 
 type Tab =
@@ -400,6 +400,20 @@ function branchOptionsForUser(user: { role: string; branchAccess?: string }, bra
 
 function isOwnerRole(role: string) {
   return ["Administrator", "System Admin", "Daet Owner", "Naga Owner"].includes(role);
+}
+
+/**
+ * Phase 6 P6-6 — permission check for shell surfaces. The session
+ * user's `permissions` are resolved server-side from the role presets
+ * (the same list the API guard enforces), so surfaces gated on a
+ * permission — the dashboard financial tiles and charts on
+ * reports.view — follow preset changes with no client release and no
+ * role-name comparisons. (isOwnerRole above still serves the older
+ * non-dashboard call sites; converting those is deliberately out of
+ * this tranche's scope.)
+ */
+function userHasPermission(user: { permissions?: string[] }, permission: string) {
+  return (user.permissions ?? []).includes(permission);
 }
 
 // Phase 5 P5-2: the demo sign-in helpers that used to live here
@@ -2179,6 +2193,7 @@ export function AppShell() {
               payments={roleScopedPayments}
               unpaidPackages={unpaidResponsibilityPackages}
               activeUser={activeUser}
+              language={language}
             />
           )}
           {activeTab === "receiving" && (
@@ -3286,6 +3301,99 @@ function AdminAudit({
   );
 }
 
+/**
+ * Phase 6 P6-6 — one hand-rolled SVG bar chart for the dashboard
+ * series (no chart library — the settled Phase 6 decision, and 30
+ * daily bars need nothing heavier). The component draws ONLY what
+ * GET /reports/series returned: every day is present in the payload,
+ * quiet days arrive as 0 and draw as no bar. An all-zero series
+ * renders its honest empty label instead of a flat fake chart. The
+ * peak day always carries its value label; every bar carries a
+ * <title> with its date + value for hover/tap. The chart is fully
+ * static — no animation at all — so prefers-reduced-motion is
+ * honoured by construction, and colours come from the shell's CSS
+ * palette variables (the theme tokens), never hard-coded hex.
+ */
+function SeriesBarChart({
+  title,
+  days,
+  metric,
+  formatValue,
+  emptyLabel,
+  tone
+}: {
+  title: string;
+  days: ReportSeriesDay[];
+  metric: "deliveries" | "collections" | "received";
+  formatValue: (value: number) => string;
+  emptyLabel: string;
+  tone: "deliveries" | "collections" | "received";
+}) {
+  const max = Math.max(0, ...days.map((day) => day[metric]));
+  const total = days.reduce((sum, day) => sum + day[metric], 0);
+  const peakIndex = days.findIndex((day) => day[metric] === max && max > 0);
+  const width = 600;
+  const plotHeight = 118;
+  const baseline = 140;
+  const height = 166;
+  const slot = width / Math.max(days.length, 1);
+  const barWidth = Math.max(slot * 0.68, 2);
+  const formatDay = (dateKey: string) =>
+    new Intl.DateTimeFormat("en", { month: "short", day: "numeric", timeZone: "UTC" }).format(new Date(`${dateKey}T00:00:00.000Z`));
+  const labelIndexes = new Set([0, Math.floor((days.length - 1) / 2), days.length - 1]);
+  return (
+    <figure className="seriesChart">
+      <figcaption>
+        <span>{title}</span>
+        <strong>{formatValue(total)}</strong>
+      </figcaption>
+      {max === 0 ? (
+        <p className="muted">{emptyLabel}</p>
+      ) : (
+        <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${title}: ${formatValue(total)} over ${days.length} days`} className="seriesChartSvg">
+          {days.map((day, index) => {
+            const value = day[metric];
+            const barHeight = (value / max) * plotHeight;
+            const x = index * slot + (slot - barWidth) / 2;
+            const y = baseline - barHeight;
+            return (
+              <g key={day.date}>
+                {value > 0 && (
+                  <rect className={`seriesBar seriesBar-${tone}`} x={x} y={y} width={barWidth} height={Math.max(barHeight, 2)} rx={2}>
+                    <title>{`${formatDay(day.date)}: ${formatValue(value)}`}</title>
+                  </rect>
+                )}
+                {index === peakIndex && (
+                  // The peak label is clamped inside the plot: centred
+                  // on an edge bar, a wide value ("PHP 1,000") would
+                  // otherwise spill past the SVG's edge and clip.
+                  <text className="seriesPeakLabel" x={Math.min(Math.max(x + barWidth / 2, 36), width - 36)} y={y - 5} textAnchor="middle">
+                    {formatValue(value)}
+                  </text>
+                )}
+                {labelIndexes.has(index) && (
+                  // Edge labels anchor to the plot edges for the same
+                  // reason: centred on the first/last slot, half the
+                  // date text would fall outside the viewBox.
+                  <text
+                    className="seriesAxisLabel"
+                    x={index === 0 ? 0 : index === days.length - 1 ? width : x + barWidth / 2}
+                    y={baseline + 18}
+                    textAnchor={index === 0 ? "start" : index === days.length - 1 ? "end" : "middle"}
+                  >
+                    {formatDay(day.date)}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+          <line className="seriesBaseline" x1={0} x2={width} y1={baseline} y2={baseline} />
+        </svg>
+      )}
+    </figure>
+  );
+}
+
 function Dashboard({
   dashboard,
   bootstrap,
@@ -3293,7 +3401,8 @@ function Dashboard({
   trips,
   payments,
   unpaidPackages,
-  activeUser
+  activeUser,
+  language
 }: {
   dashboard: DashboardData | null;
   bootstrap: BootstrapData | null;
@@ -3302,10 +3411,16 @@ function Dashboard({
   payments: PaymentRecord[];
   unpaidPackages: CargoPackage[];
   activeUser: OperatorUser;
+  language: "English" | "Tagalog";
 }) {
   type MetricKey = "waiting" | "withoutPrice" | "pendingCustomers" | "activeTrips" | "delivered" | "failedDelivery" | "collected" | "unpaid" | "payments" | "expenses" | "profit";
   const [selectedMetric, setSelectedMetric] = useState<MetricKey>("waiting");
-  const canViewFinancialSummary = isOwnerRole(activeUser.role);
+  // Phase 6 P6-6: financial tiles + charts key on the reports.view
+  // PERMISSION (resolved server-side into the session user's
+  // permission list), not on owner role names — the same permission
+  // the API now uses to decide whether the financial fields exist in
+  // the dashboard payload at all, so the two can never disagree.
+  const canViewFinancialSummary = userHasPermission(activeUser, "reports.view");
   const collectedTotal = payments.reduce((sum, payment) => sum + payment.amountPaid, 0);
   const visibleCargoWaiting = packages.filter((pkg) => ["Waiting for Loading", "Received"].includes(pkg.status)).length;
   const visibleCargoWithoutPrice = packages.filter((pkg) => pkg.price == null).length;
@@ -3325,10 +3440,10 @@ function Dashboard({
           ? [
               { key: "payments" as MetricKey, label: "Payments", value: `PHP ${(dashboard?.paymentsCollected ?? 0).toLocaleString()}` },
               { key: "expenses" as MetricKey, label: "Expenses Review", value: dashboard?.expensesAwaitingApproval ?? 0 },
-              // Phase 6 P6-5: the tile reads the period-scoped figure.
-              // Its label says what it is; the old all-time
-              // estimatedProfit stays in the API response, deprecated,
-              // for one release but is no longer displayed.
+              // Phase 6 P6-5: the tile reads the period-scoped figure
+              // and its label says what it is. (The all-time
+              // estimatedProfit it replaced was removed from the API
+              // in P6-6 after its one deprecated release.)
               { key: "profit" as MetricKey, label: "Profit This Month", value: `PHP ${(dashboard?.profitThisMonth ?? 0).toLocaleString()}` }
             ]
           : [
@@ -3344,6 +3459,60 @@ function Dashboard({
       setSelectedMetric("waiting");
     }
   }, [cards, selectedMetric]);
+
+  // Phase 6 P6-6 — the activity charts' data (GET /reports/series,
+  // reports.view — the same permission as the financial tiles, so the
+  // fetch only runs for sessions the API will answer). Definitions
+  // live server-side; the shell only draws what it is given.
+  const [series, setSeries] = useState<ReportSeries | null>(null);
+  const [seriesLoading, setSeriesLoading] = useState(false);
+  const [seriesFailed, setSeriesFailed] = useState(false);
+  useEffect(() => {
+    if (!canViewFinancialSummary) return;
+    let cancelled = false;
+    setSeriesLoading(true);
+    setSeriesFailed(false);
+    apiGet<ReportSeries>("/reports/series?days=30")
+      .then((result) => {
+        if (!cancelled) setSeries(result);
+      })
+      .catch(() => {
+        if (!cancelled) setSeriesFailed(true);
+      })
+      .finally(() => {
+        if (!cancelled) setSeriesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canViewFinancialSummary]);
+
+  // The dashboard is the one surface with an EN/TL switch today (the
+  // greeting); the new chart strings ride the same toggle.
+  const chartText =
+    language === "Tagalog"
+      ? {
+          heading: "Aktibidad — Nakaraang 30 Araw",
+          collections: "Koleksiyon",
+          deliveries: "Mga Delivery",
+          received: "Natanggap",
+          loading: "Nilo-load ang mga chart…",
+          failed: "Hindi ma-load ang mga chart. Tingnan ang koneksiyon at i-refresh.",
+          emptyCollections: "Walang koleksiyon sa nakaraang 30 araw.",
+          emptyDeliveries: "Walang delivery sa nakaraang 30 araw.",
+          emptyReceived: "Walang natanggap sa nakaraang 30 araw."
+        }
+      : {
+          heading: "Activity — Last 30 Days",
+          collections: "Collections",
+          deliveries: "Deliveries",
+          received: "Received",
+          loading: "Loading charts…",
+          failed: "Charts could not be loaded. Check the connection and refresh.",
+          emptyCollections: "No collections in the last 30 days.",
+          emptyDeliveries: "No deliveries in the last 30 days.",
+          emptyReceived: "Nothing received in the last 30 days."
+        };
 
   const visiblePackages =
     selectedMetric === "waiting"
@@ -3438,6 +3607,41 @@ function Dashboard({
           )}
         </div>
       </section>
+      {canViewFinancialSummary && (
+        <section className="panel">
+          <h3>{chartText.heading}</h3>
+          {seriesLoading && !series && <p className="muted">{chartText.loading}</p>}
+          {seriesFailed && <p className="muted">{chartText.failed}</p>}
+          {series && (
+            <div className="seriesCharts">
+              <SeriesBarChart
+                title={chartText.collections}
+                days={series.days}
+                metric="collections"
+                formatValue={(value) => `PHP ${value.toLocaleString()}`}
+                emptyLabel={chartText.emptyCollections}
+                tone="collections"
+              />
+              <SeriesBarChart
+                title={chartText.deliveries}
+                days={series.days}
+                metric="deliveries"
+                formatValue={(value) => `${value}`}
+                emptyLabel={chartText.emptyDeliveries}
+                tone="deliveries"
+              />
+              <SeriesBarChart
+                title={chartText.received}
+                days={series.days}
+                metric="received"
+                formatValue={(value) => `${value}`}
+                emptyLabel={chartText.emptyReceived}
+                tone="received"
+              />
+            </div>
+          )}
+        </section>
+      )}
       <section className="panel">
         <h3>Notification Center</h3>
         <div className="list">
