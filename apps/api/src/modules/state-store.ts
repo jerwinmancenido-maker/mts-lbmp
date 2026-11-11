@@ -11,6 +11,7 @@ import type {
   DescriptionBarcode,
   ExpenseRecord,
   HardwareTestRecord,
+  IdempotencyRecord,
   OperationChatThread,
   PackageMessage,
   PaymentRecord,
@@ -58,6 +59,7 @@ export interface ServiceState {
   hardwareTests: HardwareTestRecord[];
   printLogs: PrintLog[];
   customUsers: StaffUserRecord[];
+  idempotencyRecords: IdempotencyRecord[];
   companyProfile: CompanyProfile;
   branches: Branch[];
   paymentMethods: string[];

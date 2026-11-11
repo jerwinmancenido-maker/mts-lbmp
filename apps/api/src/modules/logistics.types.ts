@@ -248,6 +248,28 @@ export interface PrintLog {
   createdAt: string;
 }
 
+/**
+ * One processed client idempotency key (Phase 4 B1). The web clients send an
+ * `Idempotency-Key` header on every queueable write: the offline queue
+ * record's id for queued actions (identical on the first attempt and on every
+ * replay), or a per-intent id for direct submits. The service stores the key
+ * with the exact result the first execution returned; a repeat of the same
+ * key against the same endpoint returns that stored result and re-executes
+ * nothing, so a lost response, a retry, or a double-tap can never apply a
+ * payment/delivery/expense twice. Only successful executions are recorded —
+ * a submission that fails validation does not burn its key. Records are
+ * pruned lazily after a 7-day retention window (see LogisticsService).
+ */
+export interface IdempotencyRecord {
+  id: string;
+  key: string;
+  /** Logical endpoint the key was processed against, e.g. "POST /payments". Keys are scoped per endpoint. */
+  endpoint: string;
+  /** The first execution's result, kept JSON-serializable so it round-trips through both state stores verbatim. */
+  result: unknown;
+  createdAt: string;
+}
+
 export interface TruckRecord {
   id: string;
   plateNumber: string;

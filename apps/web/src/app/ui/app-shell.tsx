@@ -28,7 +28,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Ref } from "react";
 import type { PackageCondition } from "@mts-lbmp/shared";
 import { apiGet, apiPatch, apiPost, setApiToken } from "./api";
-import { appendDiagnosticLog, clearCachedRecords, clearDiagnosticLogs, deleteQueuedPhoto, enqueueOfflineAction, getOfflineStorageSummary, listDiagnosticLogs, listOfflineQueue, listQueuedPhotos, readCachedRecord, readCachedValue, replaceQueuedPhotoReferences, requestPersistentStorage, updateOfflineQueueRecord, updateQueuedPhoto, writeCachedValue, type DiagnosticLogRecord, type OfflineQueueRecord, type OfflineStorageSummary, type QueuedPhotoRecord } from "./cache";
+import { appendDiagnosticLog, clearCachedRecords, clearDiagnosticLogs, deleteQueuedPhoto, enqueueOfflineAction, getOfflineStorageSummary, listDiagnosticLogs, listOfflineQueue, listQueuedPhotos, newOfflineQueueRecordId, readCachedRecord, readCachedValue, replaceQueuedPhotoReferences, requestPersistentStorage, updateOfflineQueueRecord, updateQueuedPhoto, writeCachedValue, type DiagnosticLogRecord, type OfflineQueueRecord, type OfflineStorageSummary, type QueuedPhotoRecord } from "./cache";
 import { parsePhilippineAddress, readDeliveryReceiptPhoto, type DrOcrConfidence, type DrOcrProgress, type DrOcrResult } from "./dr-ocr";
 import { setPhotoAuditUser, setPhotoUploadContext, takeNativeCameraPhoto, uploadCompressedImage } from "./media";
 import type { PrinterDiagnosticCheck } from "@mts-lbmp/printing";
@@ -1074,8 +1074,14 @@ export function AppShell() {
   }
 
   async function queueablePost<T>(type: OfflineQueueRecord["type"], path: string, body?: unknown) {
+    // Phase 4 B1: one idempotency key per user intent, minted before the
+    // first attempt. It is sent as the Idempotency-Key header on the online
+    // attempt and becomes the queue record's id when the action is queued,
+    // so a queued replay after a lost response carries the exact same key
+    // and the API returns the original result instead of applying twice.
+    const idempotencyKey = newOfflineQueueRecordId();
     if (!isOnline || (typeof navigator !== "undefined" && !navigator.onLine)) {
-      await enqueueOfflineAction({ type, method: "POST", path, body, userId: activeUser.id, branch: branchScope });
+      await enqueueOfflineAction({ id: idempotencyKey, type, method: "POST", path, body, userId: activeUser.id, branch: branchScope });
       void appendDiagnosticLog({ level: "warning", source: "offline", message: `Queued offline ${type}`, details: { path, body }, userId: activeUser.id, branch: branchScope, module: activeTab });
       await refreshPendingSyncCount();
       setSyncState("Pending sync");
@@ -1083,11 +1089,11 @@ export function AppShell() {
       return { queued: true as const };
     }
     try {
-      const result = await apiPost<T>(path, body);
+      const result = await apiPost<T>(path, body, { idempotencyKey });
       return { queued: false as const, result };
     } catch (error) {
       if (!isNetworkError(error)) throw error;
-      await enqueueOfflineAction({ type, method: "POST", path, body, userId: activeUser.id, branch: branchScope });
+      await enqueueOfflineAction({ id: idempotencyKey, type, method: "POST", path, body, userId: activeUser.id, branch: branchScope });
       void appendDiagnosticLog({ level: "warning", source: "offline", message: `Queued failed ${type}`, details: { path, body, error }, userId: activeUser.id, branch: branchScope, module: activeTab });
       await refreshPendingSyncCount();
       setSyncState("Pending sync");
@@ -1161,10 +1167,12 @@ export function AppShell() {
       await updateOfflineQueueRecord(syncingRecord);
       await refreshPendingSyncCount();
       try {
+        // The queue record's id is the action's idempotency key (Phase 4
+        // B1): identical on the original attempt and on every replay.
         if (record.method === "PATCH") {
-          await apiPatch(record.path, record.body);
+          await apiPatch(record.path, record.body, { idempotencyKey: record.id });
         } else {
-          await apiPost(record.path, record.body);
+          await apiPost(record.path, record.body, { idempotencyKey: record.id });
         }
         await updateOfflineQueueRecord({ ...syncingRecord, status: "Synced" });
       } catch (error) {
@@ -4646,6 +4654,11 @@ function Receiving({
       if (amountPaid <= 0 && !isLastPackage) continue;
       if (amountPaid <= 0) break;
       remaining -= amountPaid;
+      // Phase 4 B1: one payment per package per receiving record is a fixed
+      // intent, so the key is derived from both ids. If this loop is re-run
+      // against the same saved receiving (e.g. retried after a mid-loop
+      // network failure), packages already paid return their original
+      // payment instead of being collected twice.
       await apiPost("/payments", {
         cargoPackageId: pkg.id,
         amountDue,
@@ -4664,7 +4677,7 @@ function Receiving({
           receivingPaymentNotes,
           receivingPaymentStatus === "Advance Payment" && totalPaid > receivingAmountDue ? `Advance/excess: PHP ${formatReceivingMoney(totalPaid - receivingAmountDue)}` : ""
         ].filter(Boolean).join(" | ")
-      });
+      }, { idempotencyKey: `receiving-payment:${receiving.id}:${pkg.id}` });
       if (remaining <= 0 && receivingPaymentStatus !== "Advance Payment") break;
     }
   }

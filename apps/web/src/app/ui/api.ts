@@ -6,10 +6,21 @@ export function setApiToken(token: string) {
   authToken = token;
 }
 
-function headers() {
+export interface ApiWriteOptions {
+  /**
+   * Phase 4 B1: stable key for one user intent (the offline queue record's
+   * id, or a per-intent id for direct submits). Sent as the `Idempotency-Key`
+   * header; the API returns the original result for a repeat key instead of
+   * applying the write twice.
+   */
+  idempotencyKey?: string;
+}
+
+function headers(options?: ApiWriteOptions) {
   return {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${authToken}`
+    Authorization: `Bearer ${authToken}`,
+    ...(options?.idempotencyKey ? { "Idempotency-Key": options.idempotencyKey } : {})
   };
 }
 
@@ -34,11 +45,11 @@ export async function apiGet<T>(path: string): Promise<T> {
   }
 }
 
-export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
+export async function apiPost<T>(path: string, body?: unknown, options?: ApiWriteOptions): Promise<T> {
   try {
     const response = await fetch(`${apiUrl()}${path}`, {
       method: "POST",
-      headers: headers(),
+      headers: headers(options),
       body: body ? JSON.stringify(body) : undefined
     });
     if (!response.ok) {
@@ -53,11 +64,11 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   }
 }
 
-export async function apiPatch<T>(path: string, body?: unknown): Promise<T> {
+export async function apiPatch<T>(path: string, body?: unknown, options?: ApiWriteOptions): Promise<T> {
   try {
     const response = await fetch(`${apiUrl()}${path}`, {
       method: "PATCH",
-      headers: headers(),
+      headers: headers(options),
       body: body ? JSON.stringify(body) : undefined
     });
     if (!response.ok) {

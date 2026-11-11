@@ -48,6 +48,7 @@ export interface PrismaStateClient {
   messageThread: PrismaDelegate;
   message: PrismaDelegate;
   auditLog: PrismaDelegate;
+  idempotencyKey: PrismaDelegate;
   rolePermission: PrismaDelegate;
   $transaction<T>(fn: (tx: PrismaStateClient) => Promise<T>): Promise<T>;
   $disconnect(): Promise<void>;
@@ -70,6 +71,7 @@ export const createGeneratedPrismaClient: PrismaClientFactory = async () => {
 // ServiceState (pricing history, role permissions) are cleared because their
 // parents (item descriptions, roles) are replaced.
 const DELETE_ORDER: Array<keyof PrismaStateRows | "pricingHistory" | "rolePermission"> = [
+  "idempotencyKeys",
   "operationChatMessages",
   "messages",
   "billingInvoicePackages",
@@ -109,6 +111,7 @@ const DELETE_ORDER: Array<keyof PrismaStateRows | "pricingHistory" | "rolePermis
 // in DELETE_ORDER after users and role permissions, so replacing them is
 // safe; they are re-derived from the custom users' role names on each save.
 const CREATE_ORDER: Array<keyof PrismaStateRows> = [
+  "idempotencyKeys",
   "branches",
   "companySettings",
   "documentSequences",
@@ -175,7 +178,8 @@ const DELEGATE_BY_ROW_KEY: Record<string, keyof PrismaStateClient> = {
   notifications: "notification",
   messageThreads: "messageThread",
   messages: "message",
-  auditLogs: "auditLog"
+  auditLogs: "auditLog",
+  idempotencyKeys: "idempotencyKey"
 };
 
 export class PrismaStateStore implements StateStore {

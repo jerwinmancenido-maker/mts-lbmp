@@ -218,7 +218,16 @@ function fixtureState(): ServiceState {
     ],
     paymentMethods: ["Cash"],
     expenseCategories: ["Fuel"],
-    userBranchAccessOverrides: {}
+    userBranchAccessOverrides: {},
+    idempotencyRecords: [
+      {
+        id: "idem_1",
+        key: "queue_1730000000000_abc123",
+        endpoint: "POST /payments",
+        result: { id: "pay_1", amountPaid: 350, status: "Paid" },
+        createdAt: "2026-11-11T00:00:00.000Z"
+      }
+    ]
   };
 }
 

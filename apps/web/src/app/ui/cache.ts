@@ -169,10 +169,23 @@ export async function writeCachedValue<T>(key: string, value: T, metadata: Omit<
   }
 }
 
-export async function enqueueOfflineAction(input: Omit<OfflineQueueRecord, "id" | "createdAt" | "status" | "attempts">): Promise<OfflineQueueRecord> {
+/**
+ * Mints an offline-queue record id. Phase 4 B1: the id doubles as the
+ * action's idempotency key — `queueablePost` mints it before the first
+ * online attempt and passes it both as the `Idempotency-Key` header and as
+ * the queue record id when the action ends up queued, so the first attempt
+ * and every later replay are the same keyed intent on the server.
+ */
+export function newOfflineQueueRecordId(): string {
+  return `queue_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export async function enqueueOfflineAction(
+  input: Omit<OfflineQueueRecord, "id" | "createdAt" | "status" | "attempts"> & { id?: string }
+): Promise<OfflineQueueRecord> {
   const record: OfflineQueueRecord = {
     ...input,
-    id: `queue_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    id: input.id ?? newOfflineQueueRecordId(),
     createdAt: new Date().toISOString(),
     status: "Pending",
     attempts: 0
