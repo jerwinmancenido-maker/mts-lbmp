@@ -158,6 +158,34 @@ export interface ReceivingDraft {
   finalizedReceivingId?: string;
 }
 
+/**
+ * The normalized payload of one duplicate wall-QR intake submission, kept on
+ * the surviving task's duplicateNotes so a merged duplicate never silently
+ * discards item/quantity/consignee data (Phase 4 audit B5).
+ */
+export interface ReceivingIntakeDuplicateSubmission {
+  customerName?: string;
+  customerDrNumber?: string;
+  dropOffPerson?: string;
+  dropOffPhone?: string;
+  consigneeName?: string;
+  destinationBranch?: string;
+  deliveryArea?: string;
+  itemDescription?: string;
+  quantity?: number;
+  unit?: string;
+}
+
+export interface ReceivingIntakeDuplicateNote {
+  id: string;
+  note?: string;
+  photoUrl?: string;
+  /** Set when the duplicate's DR photo is still queued on the device; cleared and replaced by photoUrl when the queued photo uploads and resolves. */
+  photoLocalId?: string;
+  submission?: ReceivingIntakeDuplicateSubmission;
+  createdAt: string;
+}
+
 export interface ReceivingIntakeTask {
   id: string;
   intakeNumber: string;
@@ -182,9 +210,16 @@ export interface ReceivingIntakeTask {
   quantity?: number;
   unit?: string;
   drPhotoUrl?: string;
+  /**
+   * Pending reference to a DR photo that is still queued on the submitting
+   * device (`local-photo://…` URLs are never stored in drPhotoUrl). Cleared
+   * when the queued photo uploads and `resolveReceivingIntakeQueuedPhoto`
+   * attaches the server URL.
+   */
+  drPhotoLocalId?: string;
   extraPhotoUrls: string[];
   notes?: string;
-  duplicateNotes: Array<{ id: string; note?: string; photoUrl?: string; createdAt: string }>;
+  duplicateNotes: ReceivingIntakeDuplicateNote[];
   convertedReceivingId?: string;
   createdAt: string;
   updatedAt: string;

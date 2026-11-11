@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { Camera, CheckCircle2, FileText, PackagePlus, Send, ShieldCheck } from "lucide-react";
 import { apiPost } from "../../ui/api";
 import { readDeliveryReceiptPhoto, type DrOcrConfidence, type DrOcrProgress, type DrOcrResult } from "../../ui/dr-ocr";
-import { takeNativeCameraPhoto, uploadCompressedImage } from "../../ui/media";
+import { syncQueuedPhotos, takeNativeCameraPhoto, uploadCompressedImage } from "../../ui/media";
 
 type ValidationResult = {
   customer: { matched: boolean; label: string };
@@ -81,6 +81,7 @@ export default function WarehouseIntakePage() {
   const [unit, setUnit] = useState("pcs");
   const [notes, setNotes] = useState("");
   const [drPhotoUrl, setDrPhotoUrl] = useState("");
+  const [drPhotoLocalId, setDrPhotoLocalId] = useState("");
   const [drPhotoFile, setDrPhotoFile] = useState<File | null>(null);
   const [ocrResult, setOcrResult] = useState<DrOcrResult | null>(null);
   const [ocrBusy, setOcrBusy] = useState(false);
@@ -90,6 +91,19 @@ export default function WarehouseIntakePage() {
   const [customerSuggestionOpen, setCustomerSuggestionOpen] = useState(false);
   const [status, setStatus] = useState("Fill the details and submit. Receiving staff will review before saving.");
   const [submitting, setSubmitting] = useState(false);
+
+  // This page queues DR photos (uploadCompressedImage) but has no staff
+  // shell to drain the queue — drain it here whenever the page is open and
+  // connectivity is available, so a queued photo actually reaches the server
+  // and gets attached to its intake task (Phase 4 audit A6).
+  useEffect(() => {
+    const drain = () => {
+      void syncQueuedPhotos();
+    };
+    drain();
+    window.addEventListener("online", drain);
+    return () => window.removeEventListener("online", drain);
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -146,16 +160,26 @@ export default function WarehouseIntakePage() {
         itemDescription,
         quantity: Number(quantity || 1),
         unit,
-        drPhotoUrl,
+        // A still-queued photo is submitted as a pending local reference,
+        // never as a local-photo:// URL — the server attaches the real URL
+        // when the queued photo uploads (Phase 4 audit A6).
+        drPhotoUrl: drPhotoUrl || undefined,
+        drPhotoLocalId: drPhotoLocalId || undefined,
         notes: [notes, ocrResult?.rawText ? "DR text read by device OCR and reviewed before submit." : ""].filter(Boolean).join(" | ")
       });
       setStatus(result.message);
+      if (drPhotoLocalId) {
+        // The submit just proved connectivity — try to upload the queued
+        // photo right away so it resolves onto the task immediately.
+        void syncQueuedPhotos();
+      }
       if (!result.duplicate) {
         setCustomerDrNumber("");
         setItemDescription("");
         setQuantity("1");
         setNotes("");
         setDrPhotoUrl("");
+        setDrPhotoLocalId("");
         setDrPhotoFile(null);
         setOcrResult(null);
       }
@@ -204,12 +228,17 @@ export default function WarehouseIntakePage() {
     setStatus("Processing DR photo...");
     try {
       const uploaded = await uploadCompressedImage(file, "wall-qr-dr-photo", customerDrNumber || warehouseCode);
-      setDrPhotoUrl(uploaded.fileUrl);
-      setStatus(
-        "queued" in uploaded && uploaded.queued
-          ? "DR photo saved on tablet - needs sync."
-          : "DR photo attached. Tap Read DR Photo if you want the app to suggest details."
-      );
+      if ("queued" in uploaded && uploaded.queued) {
+        // Keep only the pending reference — the local-photo:// URL in
+        // uploaded.fileUrl is a device-local placeholder, not a server URL.
+        setDrPhotoLocalId(uploaded.localPhotoId);
+        setDrPhotoUrl("");
+        setStatus("DR photo saved on this device - it will attach when the connection uploads it.");
+      } else {
+        setDrPhotoUrl(uploaded.fileUrl);
+        setDrPhotoLocalId("");
+        setStatus("DR photo attached. Tap Read DR Photo if you want the app to suggest details.");
+      }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "DR photo failed.");
     }
@@ -384,11 +413,11 @@ export default function WarehouseIntakePage() {
             <Camera />
             <div>
               <h2>Photo and submit</h2>
-              <p>{drPhotoUrl ? "DR photo attached." : "Take a clear photo of the delivery receipt."}</p>
+              <p>{drPhotoUrl ? "DR photo attached." : drPhotoLocalId ? "DR photo saved on this device — it uploads when connected." : "Take a clear photo of the delivery receipt."}</p>
             </div>
           </div>
         <div className="buttonGrid intakeActions">
-          <button className="actionButton" type="button" onClick={() => void takeDrPhoto()}><Camera /> {drPhotoUrl ? "Replace DR Image" : "Add DR Image"}</button>
+          <button className="actionButton" type="button" onClick={() => void takeDrPhoto()}><Camera /> {drPhotoUrl || drPhotoLocalId ? "Replace DR Image" : "Add DR Image"}</button>
           <button className="actionButton" type="button" disabled={!drPhotoFile || ocrBusy} onClick={() => void readDrPhoto()}><FileText /> {ocrBusy ? `Reading ${ocrProgress?.percent ?? 0}%` : "Read DR Photo"}</button>
           <button className="primaryButton" type="button" disabled={submitting} onClick={() => void submitIntake()}><Send /> Submit</button>
         </div>

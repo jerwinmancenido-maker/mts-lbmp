@@ -334,7 +334,7 @@ export interface ReceivingDraftRow extends Omit<ReceivingDraft, "customerId" | "
   updatedAt: DateValue;
 }
 
-export interface ReceivingIntakeTaskRow extends Omit<ReceivingIntakeTask, "customerId" | "customerDrNumber" | "dropOffPerson" | "dropOffPhone" | "consigneeName" | "destinationBranch" | "deliveryArea" | "productId" | "itemDescription" | "quantity" | "unit" | "drPhotoUrl" | "notes" | "convertedReceivingId" | "createdAt" | "updatedAt"> {
+export interface ReceivingIntakeTaskRow extends Omit<ReceivingIntakeTask, "customerId" | "customerDrNumber" | "dropOffPerson" | "dropOffPhone" | "consigneeName" | "destinationBranch" | "deliveryArea" | "productId" | "itemDescription" | "quantity" | "unit" | "drPhotoUrl" | "drPhotoLocalId" | "notes" | "convertedReceivingId" | "createdAt" | "updatedAt"> {
   customerId: string | null;
   customerDrNumber: string | null;
   dropOffPerson: string | null;
@@ -347,6 +347,7 @@ export interface ReceivingIntakeTaskRow extends Omit<ReceivingIntakeTask, "custo
   quantity: number | null;
   unit: string | null;
   drPhotoUrl: string | null;
+  drPhotoLocalId: string | null;
   notes: string | null;
   convertedReceivingId: string | null;
   createdAt: DateValue;
@@ -873,6 +874,7 @@ export function stateToRows(state: ServiceState): PrismaStateRows {
       quantity: task.quantity ?? null,
       unit: task.unit ?? null,
       drPhotoUrl: task.drPhotoUrl ?? null,
+      drPhotoLocalId: task.drPhotoLocalId ?? null,
       notes: task.notes ?? null,
       convertedReceivingId: task.convertedReceivingId ?? null,
       createdAt: new Date(task.createdAt),
@@ -1123,6 +1125,7 @@ export function rowsToState(rows: PrismaStateRows): LoadedServiceState {
       quantity: task.quantity ?? undefined,
       unit: task.unit ?? undefined,
       drPhotoUrl: task.drPhotoUrl ?? undefined,
+      drPhotoLocalId: task.drPhotoLocalId ?? undefined,
       notes: task.notes ?? undefined,
       convertedReceivingId: task.convertedReceivingId ?? undefined,
       createdAt: toIso(task.createdAt),

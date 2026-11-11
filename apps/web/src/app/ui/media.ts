@@ -1,5 +1,5 @@
 import { apiPost } from "./api";
-import { enqueueQueuedPhoto } from "./cache";
+import { deleteQueuedPhoto, enqueueQueuedPhoto, listQueuedPhotos, replaceQueuedPhotoReferences, updateQueuedPhoto, type QueuedPhotoRecord } from "./cache";
 
 interface PhotoAuditUser {
   id: string;
@@ -256,6 +256,61 @@ function isNetworkError(error: unknown) {
   if (typeof navigator !== "undefined" && !navigator.onLine) return true;
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
   return message.includes("failed to fetch") || message.includes("network") || message.includes("offline");
+}
+
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error("Unable to read queued photo"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Uploads photos still sitting in the device queue and, for each one, lets
+ * the server attach the real URL wherever the photo's local id was submitted
+ * as a pending reference (wall-QR intake DR photos — Phase 4 audit A6). The
+ * staff shell runs its own richer drain with sync UI; this shared helper
+ * covers pages that queue photos but have no shell, like the public intake
+ * page. Returns how many queued photos were uploaded.
+ */
+export async function syncQueuedPhotos(): Promise<number> {
+  if (typeof window === "undefined" || (typeof navigator !== "undefined" && !navigator.onLine)) return 0;
+  const photos = (await listQueuedPhotos()).filter((record) => record.status === "Pending" || record.status === "Failed");
+  let uploadedCount = 0;
+  for (const record of photos) {
+    const syncingRecord: QueuedPhotoRecord = { ...record, status: "Syncing", attempts: record.attempts + 1, lastError: undefined };
+    await updateQueuedPhoto(syncingRecord);
+    try {
+      const dataUrl = await blobToDataUrl(record.compressedBlob);
+      const uploaded = await apiPost<{ fileUrl: string }>("/uploads", {
+        dataUrl,
+        fileName: record.fileName,
+        type: record.photoType,
+        entityId: record.entityId
+      });
+      await replaceQueuedPhotoReferences(record.localPhotoId, uploaded.fileUrl);
+      // Best effort: a no-match just means no server record referenced this
+      // photo (it may only exist inside a still-pending queue body, which
+      // replaceQueuedPhotoReferences already rewrote).
+      await apiPost("/public/receiving-intake/resolve-photo", {
+        localPhotoId: record.localPhotoId,
+        fileUrl: uploaded.fileUrl
+      }).catch(() => undefined);
+      await updateQueuedPhoto({ ...syncingRecord, status: "Synced", serverUrl: uploaded.fileUrl });
+      await deleteQueuedPhoto(record.localPhotoId);
+      uploadedCount += 1;
+      notifyPhotoQueued();
+    } catch (error) {
+      await updateQueuedPhoto({
+        ...syncingRecord,
+        status: "Failed",
+        lastError: error instanceof Error ? error.message : "Photo sync failed"
+      });
+    }
+  }
+  return uploadedCount;
 }
 
 function notifyPhotoQueued() {

@@ -1127,6 +1127,12 @@ export function AppShell() {
       try {
         const uploaded = await uploadQueuedPhoto(record);
         await replaceQueuedPhotoReferences(record.localPhotoId, uploaded.fileUrl);
+        // Attach the real URL to any server record that referenced this
+        // photo by its local id while it was queued (wall-QR intake tasks).
+        await apiPost("/public/receiving-intake/resolve-photo", {
+          localPhotoId: record.localPhotoId,
+          fileUrl: uploaded.fileUrl
+        }).catch(() => undefined);
         await updateQueuedPhoto({ ...syncingRecord, status: "Synced", serverUrl: uploaded.fileUrl });
         await deleteQueuedPhoto(record.localPhotoId);
       } catch (error) {
@@ -3601,9 +3607,28 @@ interface ReceivingIntakeTask {
   quantity?: number;
   unit?: string;
   drPhotoUrl?: string;
+  drPhotoLocalId?: string;
   extraPhotoUrls: string[];
   notes?: string;
-  duplicateNotes: Array<{ id: string; note?: string; photoUrl?: string; createdAt: string }>;
+  duplicateNotes: Array<{
+    id: string;
+    note?: string;
+    photoUrl?: string;
+    photoLocalId?: string;
+    submission?: {
+      customerName?: string;
+      customerDrNumber?: string;
+      dropOffPerson?: string;
+      dropOffPhone?: string;
+      consigneeName?: string;
+      destinationBranch?: string;
+      deliveryArea?: string;
+      itemDescription?: string;
+      quantity?: number;
+      unit?: string;
+    };
+    createdAt: string;
+  }>;
   convertedReceivingId?: string;
   createdAt: string;
   updatedAt: string;
