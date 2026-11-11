@@ -585,13 +585,14 @@ model MessageThread {
 }
 
 model Message {
-  id        String        @id @default(cuid())
-  threadId  String
-  senderId  String?
-  body      String
-  createdAt DateTime      @default(now())
-  thread    MessageThread @relation(fields: [threadId], references: [id])
-  sender    User?         @relation(fields: [senderId], references: [id])
+  id         String        @id @default(cuid())
+  threadId   String
+  senderId   String?
+  senderName String?
+  body       String
+  createdAt  DateTime      @default(now())
+  thread     MessageThread @relation(fields: [threadId], references: [id])
+  sender     User?         @relation(fields: [senderId], references: [id])
 }
 
 model AuditLog {
