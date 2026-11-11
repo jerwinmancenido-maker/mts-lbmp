@@ -5,8 +5,8 @@ import type { StaffUserRecord } from "./logistics.types.js";
  * Phase 5 tranche P5-0 — test-only smoke account seeding.
  *
  * The smoke gates (tools/smoke-test.mjs, tools/permission-smoke-test.mjs) used
- * to log in as the hard-coded demo accounts. So the gates can survive the
- * demo accounts' removal (P5-2), they now use dedicated smoke accounts that
+ * to log in as the hard-coded demo accounts. So the gates could survive the
+ * demo accounts' removal (P5-2), they use dedicated smoke accounts that
  * this hook provisions into the ordinary custom-user store at API boot.
  *
  * This is a seed hook, NOT a backdoor:
@@ -49,60 +49,12 @@ export const SMOKE_SEED_DEFAULTS: SmokeSeedConfig = {
 const SMOKE_ADMIN_ID = "user_smoke_admin";
 const SMOKE_DELIVERY_ID = "user_smoke_delivery";
 
-/**
- * Phase 5 P5-1 — the demo accounts' well-known credentials, kept ONLY so
- * the gated local-dev path can provision them as hashes.
- *
- * P5-1 deleted the shared demo password hash and the plaintext staff codes
- * from the demo user records: a fresh boot gives the six demo accounts NO
- * credentials, so neither login door accepts them (fail closed). When —
- * and only when — the same gate as the smoke seeding is open
- * (ALLOW_DEMO_AUTH=true outside production), LogisticsService builds an
- * in-memory overlay from this table (see buildDemoCredentialOverlay) so
- * local development with the demo accounts keeps working. The overlay is
- * never persisted to state or the database, and it is refused in
- * production by the same resolveSmokeSeedConfig gate. P5-2 deletes the
- * demo accounts entirely; this table dies with them.
- *
- * These values are the ones the Phase 5 audit (§3.3) lists as public —
- * that is precisely why they may only ever exist behind the dev gate.
- */
-export interface DemoAccountCredentialSpec {
-  userId: string;
-  password: string;
-  staffCode?: string;
-}
-
-export const DEMO_ACCOUNT_CREDENTIALS: DemoAccountCredentialSpec[] = [
-  { userId: "user_daet_owner", password: "password", staffCode: "0000" },
-  { userId: "user_naga_owner", password: "password", staffCode: "9999" },
-  { userId: "user_system_admin", password: "password", staffCode: "0001" },
-  { userId: "user_receiving", password: "password", staffCode: "1111" },
-  { userId: "user_delivery", password: "password", staffCode: "2222" },
-  { userId: "user_customer", password: "password" }
-];
-
-export interface DemoCredentialOverlayEntry {
-  passwordHash: string;
-  staffCodeHash?: string;
-}
-
-/**
- * Hashes the demo accounts' credentials for the in-memory overlay. Called
- * once at boot by LogisticsService when the dev gate is open; the hashes
- * use fresh random salts each boot because nothing about the overlay is
- * persisted or compared across processes.
- */
-export function buildDemoCredentialOverlay(): Map<string, DemoCredentialOverlayEntry> {
-  const overlay = new Map<string, DemoCredentialOverlayEntry>();
-  for (const spec of DEMO_ACCOUNT_CREDENTIALS) {
-    overlay.set(spec.userId, {
-      passwordHash: hashSecret(spec.password),
-      staffCodeHash: spec.staffCode ? hashSecret(spec.staffCode) : undefined
-    });
-  }
-  return overlay;
-}
+// Phase 5 P5-2 removed the demo accounts entirely, and with them the
+// P5-1 in-memory demo credential overlay that used to live here
+// (DEMO_ACCOUNT_CREDENTIALS / buildDemoCredentialOverlay). ALLOW_DEMO_AUTH
+// now gates ONLY the two smoke accounts below — nothing else signs in
+// "as a demo" anymore. First-run provisioning of a real deployment is
+// the separate, production-safe bootstrap hook in bootstrap-admin.ts.
 
 /**
  * Returns the seed config when smoke seeding is explicitly enabled for a

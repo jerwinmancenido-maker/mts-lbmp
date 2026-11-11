@@ -395,6 +395,14 @@ export interface StaffUserRecord {
    */
   staffCodeHash?: string;
   /**
+   * Phase 5 P5-2: true while the account's password is a temporary one
+   * set by an admin (initial provisioning, admin reset) or by the
+   * first-boot bootstrap. Login responses surface it, and the auth guard
+   * refuses every endpoint except POST /auth/change-password until the
+   * user sets their own password (changeOwnPassword clears it).
+   */
+  mustChangePassword?: boolean;
+  /**
    * Token revocation watermark (Phase 5 P5-1). Issued JWTs carry this
    * value as their `sv` claim; the auth guard rejects a token whose claim
    * no longer matches. Bumped whenever a credential is set or changed.

@@ -28,7 +28,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Ref } from "react";
 import type { PackageCondition } from "@mts-lbmp/shared";
-import { apiGet, apiPatch, apiPost, setApiToken } from "./api";
+import { apiGet, apiPatch, apiPost, clearApiToken, setApiToken } from "./api";
 import { appendDiagnosticLog, clearCachedRecords, clearDiagnosticLogs, deleteOfflineQueueRecord, deleteQueuedPhoto, enqueueOfflineAction, getOfflineStorageSummary, listDiagnosticLogs, listOfflineQueue, listQueuedPhotos, newOfflineQueueRecordId, pruneOfflineQueue, readCachedRecord, readCachedValue, replaceQueuedPhotoReferences, requestPersistentStorage, updateOfflineQueueRecord, updateQueuedPhoto, writeCachedValue, type DiagnosticLogRecord, type OfflineQueueRecord, type OfflineStorageSummary, type QueuedPhotoRecord } from "./cache";
 import { OFFLINE_QUEUE_MAX_AUTO_ATTEMPTS, attemptQueueRecordSync, queueItemView, shouldAutoRetryQueueRecord, sortQueueItemViews, type QueueItemView } from "./queue-view";
 import { cacheReceivingFormStore, clearReceivingFormSnapshot, loadReceivingFormSnapshot, receivingFormHasContent, saveReceivingFormSnapshot, type ReceivingFormSnapshot } from "./receiving-form-persistence";
@@ -391,31 +391,11 @@ function isOwnerRole(role: string) {
   return ["Administrator", "System Admin", "Daet Owner", "Naga Owner"].includes(role);
 }
 
-function demoEmailForRole(role: string) {
-  if (role === "Daet Owner") return "daet.owner@mts.local";
-  if (role === "Naga Owner") return "naga.owner@mts.local";
-  if (role === "System Admin") return "admin@mts.local";
-  if (role === "Receiving Staff") return "receiving@mts.local";
-  if (role === "Delivery Staff") return "delivery@mts.local";
-  if (role === "Customer Owner") return "customer@mts.local";
-  return "daet.owner@mts.local";
-}
-
-function demoEmailForParam(demo?: string) {
-  if (demo === "receiving") return "receiving@mts.local";
-  if (demo === "delivery") return "delivery@mts.local";
-  if (demo === "naga" || demo === "naga-owner") return "naga.owner@mts.local";
-  if (demo === "admin" || demo === "system-admin") return "admin@mts.local";
-  if (demo === "customer" || demo === "customer-owner") return "customer@mts.local";
-  if (demo === "owner" || demo === "daet" || demo === "daet-owner") return "daet.owner@mts.local";
-  return undefined;
-}
-
-function demoEmailFromCurrentUrl() {
-  if (typeof window === "undefined") return undefined;
-  const demo = new URLSearchParams(window.location.search).get("demo")?.toLowerCase();
-  return demoEmailForParam(demo);
-}
+// Phase 5 P5-2: the demo sign-in helpers that used to live here
+// (demoEmailForRole / demoEmailForParam / demoEmailFromCurrentUrl — the
+// role→demo-email map and the ?demo= URL auto-login) are DELETED with
+// the demo accounts. The login screen is the only entry; it posts the
+// credentials the human actually typed.
 
 function formatSearchDate(value?: string) {
   if (!value) return "No date";
@@ -812,17 +792,22 @@ export function AppShell() {
   const [status, setStatus] = useState("Ready");
   const [searchQuery, setSearchQuery] = useState("");
   const [language, setLanguage] = useState<"English" | "Tagalog">("English");
+  // Phase 5 P5-2: no pre-authenticated demo identity. This placeholder is
+  // only the signed-out state — the shell renders the login screen until
+  // completeSignIn replaces it with the real signed-in user.
   const [activeUser, setActiveUser] = useState<OperatorUser>({
-    id: "user_daet_owner",
-    name: "Daet Owner Demo",
-    email: "daet.owner@mts.local",
-    role: "Daet Owner",
-    branchId: "branch_daet",
+    id: "user_signed_out",
+    name: "Not signed in",
+    email: "",
+    role: "Receiving Staff",
     branchAccess: "Daet",
-    permissionPreset: "Branch Owner",
-    canApprove: ["Daet prices", "Daet expenses", "Mixed trips"],
-    hasStaffCode: true
+    permissionPreset: "Receiving Staff",
+    canApprove: [],
+    hasStaffCode: false
   });
+  const [signedIn, setSignedIn] = useState(false);
+  const [passwordChangeRequired, setPasswordChangeRequired] = useState(false);
+  const [passwordChangeOpen, setPasswordChangeOpen] = useState(false);
   const [activeBranchContext, setActiveBranchContext] = useState("Daet");
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
@@ -835,7 +820,6 @@ export function AppShell() {
   const [syncState, setSyncState] = useState<SyncState>("Online");
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const demoLoginAppliedRef = useRef(false);
   const visibleTabs = useMemo(() => visibleTabsForRole(activeUser.role), [activeUser.role]);
   const [globalIssue, setGlobalIssue] = useState<UserIssue | null>(null);
   const [issueCount, setIssueCount] = useState(0);
@@ -1007,8 +991,11 @@ export function AppShell() {
   }, [activeBranchContext, activeUser.id]);
 
   useEffect(() => {
-    const demoEmail = demoEmailFromCurrentUrl();
-    if (demoEmail && !demoLoginAppliedRef.current) return;
+    // Phase 5 P5-2: no data loads before sign-in (there is no default
+    // token anymore), and none while a forced password change is pending
+    // (the API would refuse it anyway — the guard gates flagged accounts
+    // to the change-password endpoint).
+    if (!signedIn || passwordChangeRequired) return;
     refresh().catch((error: unknown) => {
       const message = error instanceof Error ? error.message : "Unable to load app data";
       setStatus(message);
@@ -1021,7 +1008,7 @@ export function AppShell() {
         module: "shell"
       });
     });
-  }, [refresh, showGlobalIssue]);
+  }, [refresh, showGlobalIssue, signedIn, passwordChangeRequired]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1599,39 +1586,55 @@ export function AppShell() {
     selectTab(tab);
   }
 
-  async function switchUser(user: OperatorUser) {
-    const email = demoEmailForRole(user.role);
-    const result = await apiPost<{ token: string; user: OperatorUser }>("/auth/login", {
-      email,
-      password: "password"
-    });
+  /**
+   * Phase 5 P5-2 — the only ways into the shell. Both doors post the
+   * credentials the human typed to the real auth endpoints; the demo
+   * user switcher and the ?demo= URL auto-login that used to live here
+   * are deleted. A login response flagged mustChangePassword routes to
+   * the forced-change screen instead of the shell, and no data refresh
+   * happens until the password is changed (the API refuses it anyway).
+   */
+  async function completeSignIn(result: { token: string; user: OperatorUser }) {
     setApiToken(result.token);
     setActiveUser(result.user);
-    await refresh();
+    setSignedIn(true);
+    setPasswordChangeRequired(Boolean(result.user.mustChangePassword));
+    if (!result.user.mustChangePassword) {
+      await refresh();
+    }
   }
 
-  async function switchUserByStaffCode(staffCode: string) {
+  async function signInWithPassword(email: string, password: string) {
+    const result = await apiPost<{ token: string; user: OperatorUser }>("/auth/login", { email, password });
+    await completeSignIn(result);
+  }
+
+  async function signInWithStaffCode(staffCode: string) {
     const result = await apiPost<{ token: string; user: OperatorUser }>("/auth/staff-code", { staffCode });
-    setApiToken(result.token);
-    setActiveUser(result.user);
-    await refresh();
-    setStatus(`Operator switched to ${result.user.name}`);
+    await completeSignIn(result);
+    setStatus(`Signed in as ${result.user.name}`);
   }
 
-  useEffect(() => {
-    if (demoLoginAppliedRef.current || typeof window === "undefined") return;
-    const email = demoEmailFromCurrentUrl();
-    if (!email) return;
+  /** Logout: clear the in-memory token and return to the login screen. */
+  function logout() {
+    clearApiToken();
+    setSignedIn(false);
+    setPasswordChangeRequired(false);
+    setPasswordChangeOpen(false);
+    setAccountOpen(false);
+    setHomeOpen(true);
+    setStatus("Signed out");
+  }
 
-    demoLoginAppliedRef.current = true;
-    apiPost<{ token: string; user: OperatorUser }>("/auth/login", { email, password: "password" })
-      .then(async (result) => {
-        setApiToken(result.token);
-        setActiveUser(result.user);
-        setStatus(`Demo session: ${result.user.name}`);
-      })
-      .catch((error: unknown) => setStatus(error instanceof Error ? error.message : "Unable to start demo session"));
-  }, [refresh]);
+  /** After a successful password change the API issues a fresh token. */
+  async function applyPasswordChange(result: { token: string; user: OperatorUser }) {
+    setApiToken(result.token);
+    setActiveUser(result.user);
+    setPasswordChangeRequired(false);
+    setPasswordChangeOpen(false);
+    setStatus("Password changed");
+    await refresh();
+  }
 
   function currentTabIndex() {
     return visibleTabs.findIndex((tab) => tab.id === activeTab);
@@ -1921,6 +1924,25 @@ export function AppShell() {
     syncState === "Refreshing" || syncState === "Syncing" ? "syncing" :
     "";
 
+  // Phase 5 P5-2: the login screen is the only entry, and a flagged
+  // account sees the forced password-change screen before anything else.
+  if (!signedIn) {
+    return (
+      <LoginScreen onSignInWithPassword={signInWithPassword} onSignInWithStaffCode={signInWithStaffCode} />
+    );
+  }
+  if (passwordChangeRequired || passwordChangeOpen) {
+    return (
+      <PasswordChangeScreen
+        userName={activeUser.name}
+        forced={passwordChangeRequired}
+        onChanged={applyPasswordChange}
+        onLogout={logout}
+        onCancel={passwordChangeRequired ? undefined : () => setPasswordChangeOpen(false)}
+      />
+    );
+  }
+
   return (
     <main className={`app ${roleClass(activeUser.role)}`}>
       <section className="content">
@@ -2039,11 +2061,11 @@ export function AppShell() {
         {accountOpen ? (
           <AccountPanel
             activeUser={activeUser}
-            users={bootstrap?.users ?? []}
             language={language}
             setLanguage={setLanguage}
-            switchUser={switchUser}
-            switchUserByStaffCode={switchUserByStaffCode}
+            switchUserByStaffCode={signInWithStaffCode}
+            onChangePassword={() => setPasswordChangeOpen(true)}
+            onLogout={logout}
             apiConnected={Boolean(bootstrap)}
           />
         ) : (
@@ -2778,6 +2800,8 @@ function OwnerSettings({
   const [newStaffRole, setNewStaffRole] = useState("Delivery Staff");
   const [newStaffBranchAccess, setNewStaffBranchAccess] = useState("Naga");
   const [newStaffCode, setNewStaffCode] = useState("");
+  const [newStaffPassword, setNewStaffPassword] = useState("");
+  const [userTempPasswords, setUserTempPasswords] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!bootstrap) return;
@@ -2826,7 +2850,8 @@ function OwnerSettings({
       phone: newStaffPhone,
       role: newStaffRole,
       branchAccess: newStaffBranchAccess,
-      staffCode: newStaffCode,
+      staffCode: newStaffCode || undefined,
+      password: newStaffPassword.trim() || undefined,
       status: "Active"
     });
     setNewStaffName("");
@@ -2834,6 +2859,7 @@ function OwnerSettings({
     setNewStaffRole("Delivery Staff");
     setNewStaffBranchAccess("Naga");
     setNewStaffCode("");
+    setNewStaffPassword("");
   }
 
   return (
@@ -2954,7 +2980,7 @@ function OwnerSettings({
         <div className="sectionHeader">
           <div>
             <h3>Staff & Access</h3>
-            <p className="muted">Owners can add receiving or delivery personnel, assign branch access, and set staff PINs for shared tablet login.</p>
+            <p className="muted">Owners can add receiving or delivery personnel, assign branch access, and set staff PINs for shared tablet login. An initial password can be set instead of (or as well as) a PIN — the user must replace it at first sign-in. Resetting a password signs the user out everywhere and forces a change at next sign-in.</p>
           </div>
           <button className="smallButton" onClick={() => setMode("home")}>Back</button>
         </div>
@@ -2965,9 +2991,10 @@ function OwnerSettings({
             <label>Mobile Number<input value={newStaffPhone} onChange={(event) => setNewStaffPhone(event.target.value)} placeholder="" /></label>
             <label>Role<select value={newStaffRole} onChange={(event) => setNewStaffRole(event.target.value)}>{staffRoleOptions.map((role) => <option key={role}>{role}</option>)}</select></label>
             <label>Branch Access<select value={newStaffBranchAccess} onChange={(event) => setNewStaffBranchAccess(event.target.value)}>{branchAccessOptions.map((option) => <option key={option}>{option}</option>)}</select></label>
-            <label>Staff PIN<input value={newStaffCode} onChange={(event) => setNewStaffCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="4-6 digits" /></label>
+            <label>Staff PIN<input value={newStaffCode} onChange={(event) => setNewStaffCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="4-6 digits (optional if password set)" /></label>
+            <label>Initial Password<input type="password" value={newStaffPassword} onChange={(event) => setNewStaffPassword(event.target.value)} autoComplete="new-password" placeholder="Optional, min 8 characters" /></label>
           </div>
-          <button className="primaryButton" disabled={!newStaffName.trim() || !newStaffCode.trim()} onClick={() => onAction("Create staff user", createStaffFromSettings)}>
+          <button className="primaryButton" disabled={!newStaffName.trim() || (!newStaffCode.trim() && !newStaffPassword.trim())} onClick={() => onAction("Create staff user", createStaffFromSettings)}>
             Add Staff User
           </button>
         </section>
@@ -2982,6 +3009,7 @@ function OwnerSettings({
                   <strong>{user.name}</strong>
                   <p>{user.phone ?? user.email ?? "No contact saved"}</p>
                   <p className="muted">PIN: {user.hasStaffCode ? "Enabled" : "Not set"}</p>
+                  <p className="muted">Password: {user.hasPassword ? (user.mustChangePassword ? "Temporary — change required at sign-in" : "Set") : "Not set"}</p>
                 </div>
                 <label>
                   Role
@@ -3039,6 +3067,31 @@ function OwnerSettings({
                   }
                 >
                   Save
+                </button>
+                <label>
+                  Temporary Password
+                  <input
+                    type="password"
+                    value={userTempPasswords[user.id] ?? ""}
+                    disabled={!canEdit}
+                    onChange={(event) => setUserTempPasswords((values) => ({ ...values, [user.id]: event.target.value }))}
+                    autoComplete="new-password"
+                    placeholder="Min 8 characters"
+                  />
+                </label>
+                <button
+                  className="smallButton"
+                  disabled={!canEdit || (userTempPasswords[user.id] ?? "").length < 8}
+                  onClick={() =>
+                    onAction("Reset staff password", async () => {
+                      await apiPost(`/settings/users/${user.id}/reset-password`, {
+                        temporaryPassword: userTempPasswords[user.id]
+                      });
+                      setUserTempPasswords((values) => ({ ...values, [user.id]: "" }));
+                    })
+                  }
+                >
+                  Reset Password
                 </button>
               </div>
             );
@@ -3321,21 +3374,301 @@ function Dashboard({
   );
 }
 
+/** Pulls the human-readable message out of a Nest error body, if present. */
+function apiErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) {
+    try {
+      const parsed = JSON.parse(error.message) as { message?: string };
+      if (parsed.message) return parsed.message;
+    } catch {
+      // Not a JSON error body — use the fallback.
+    }
+  }
+  return fallback;
+}
+
+/**
+ * Phase 5 P5-2 — the login screen, now the ONLY entry to the shell.
+ * Two doors, both real: email + password, and staff code (for shared
+ * warehouse tablets). There is no default token and no demo switcher —
+ * nothing renders the shell until one of these succeeds.
+ */
+function LoginScreen({
+  onSignInWithPassword,
+  onSignInWithStaffCode
+}: {
+  onSignInWithPassword: (email: string, password: string) => Promise<void>;
+  onSignInWithStaffCode: (staffCode: string) => Promise<void>;
+}) {
+  const [mode, setMode] = useState<"password" | "staffCode">("password");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [staffCode, setStaffCode] = useState("");
+  const [loginStatus, setLoginStatus] = useState("");
+  const [busy, setBusy] = useState(false);
+  const codeButtons = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "Clear", "0", "Enter"];
+
+  async function submitPassword(event: React.FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setLoginStatus("Signing in...");
+    try {
+      await onSignInWithPassword(email.trim(), password);
+    } catch (error) {
+      setLoginStatus(apiErrorMessage(error, "Unable to sign in. Check your email and password."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitStaffCode(code = staffCode) {
+    if (code.trim().length < 4) {
+      setLoginStatus("Enter the 4-digit staff code.");
+      return;
+    }
+    if (busy) return;
+    setBusy(true);
+    setLoginStatus("Checking staff code...");
+    try {
+      await onSignInWithStaffCode(code);
+      setStaffCode("");
+    } catch (error) {
+      setLoginStatus(apiErrorMessage(error, "Invalid staff code."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleCodeButton(value: string) {
+    if (value === "Clear") {
+      setStaffCode("");
+      setLoginStatus("");
+      return;
+    }
+    if (value === "Enter") {
+      void submitStaffCode();
+      return;
+    }
+    setStaffCode((current) => (current + value).slice(0, 6));
+  }
+
+  return (
+    <main className="app">
+      <section className="content">
+        <section className="panel accountPanel">
+          <div className="accountSummary">
+            <div className="accountAvatar"><UserCog size={28} /></div>
+            <div>
+              <h3>MTS LBMP</h3>
+              <p className="muted">Sign in to continue</p>
+            </div>
+          </div>
+
+          <div className="segmentedControl" role="tablist" aria-label="Sign-in method">
+            <button type="button" className={mode === "password" ? "active" : ""} onClick={() => setMode("password")}>Email &amp; Password</button>
+            <button type="button" className={mode === "staffCode" ? "active" : ""} onClick={() => setMode("staffCode")}>Staff Code</button>
+          </div>
+
+          {mode === "password" ? (
+            <form className="stack" onSubmit={submitPassword}>
+              <label>
+                Email
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  autoComplete="username"
+                  placeholder="you@example.com"
+                  aria-label="Email"
+                  required
+                />
+              </label>
+              <label>
+                Password
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  autoComplete="current-password"
+                  placeholder="Your password"
+                  aria-label="Password"
+                  required
+                />
+              </label>
+              <button className="primaryButton" type="submit" disabled={busy || !email.trim() || !password}>Sign In</button>
+            </form>
+          ) : (
+            <div className="stack">
+              <label className="operatorCodeInput">
+                <span>Staff Code</span>
+                <input
+                  value={staffCode}
+                  onChange={(event) => setStaffCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void submitStaffCode();
+                    }
+                  }}
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={6}
+                  type="password"
+                  autoComplete="off"
+                  placeholder="Type code or use keypad"
+                  aria-label="Staff code"
+                />
+              </label>
+              <div className="operatorCodeDisplay" aria-hidden="true">
+                {Array.from({ length: Math.max(4, staffCode.length || 4) }).map((_, index) => (
+                  <span className={staffCode[index] ? "filled" : ""} key={index}>{staffCode[index] ? "•" : ""}</span>
+                ))}
+              </div>
+              <div className="keypad">
+                {codeButtons.map((button) => (
+                  <button type="button" className={button === "Enter" ? "enter" : ""} key={button} onClick={() => handleCodeButton(button)}>{button}</button>
+                ))}
+              </div>
+            </div>
+          )}
+          {loginStatus && <p className="muted" role="status">{loginStatus}</p>}
+        </section>
+      </section>
+    </main>
+  );
+}
+
+/**
+ * Phase 5 P5-2 — password change screen. Rendered in two modes: FORCED
+ * (the account signed in with an admin-set temporary password; the API
+ * refuses everything else until this completes) and voluntary (from the
+ * account panel's Change Password button, with a Cancel path back).
+ */
+function PasswordChangeScreen({
+  userName,
+  forced,
+  onChanged,
+  onLogout,
+  onCancel
+}: {
+  userName: string;
+  forced: boolean;
+  onChanged: (result: { token: string; user: OperatorUser }) => Promise<void>;
+  onLogout: () => void;
+  onCancel?: () => void;
+}) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [changeStatus, setChangeStatus] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submitChange(event: React.FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    if (newPassword.length < 8) {
+      setChangeStatus("New password must be at least 8 characters.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setChangeStatus("New password and confirmation do not match.");
+      return;
+    }
+    setBusy(true);
+    setChangeStatus("Saving...");
+    try {
+      const result = await apiPost<{ token: string; user: OperatorUser }>("/auth/change-password", {
+        currentPassword,
+        newPassword
+      });
+      await onChanged(result);
+    } catch (error) {
+      setChangeStatus(apiErrorMessage(error, "Unable to change password."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="app">
+      <section className="content">
+        <section className="panel accountPanel">
+          <div className="accountSummary">
+            <div className="accountAvatar"><UserCog size={28} /></div>
+            <div>
+              <h3>{forced ? "Set your password" : "Change password"}</h3>
+              <p className="muted">
+                {forced
+                  ? `${userName}, you signed in with a temporary password. Choose your own password to continue — nothing else is available until you do.`
+                  : `${userName}, choose a new password. Your other sessions will be signed out.`}
+              </p>
+            </div>
+          </div>
+          <form className="stack" onSubmit={submitChange}>
+            <label>
+              Current password
+              <input
+                type="password"
+                value={currentPassword}
+                onChange={(event) => setCurrentPassword(event.target.value)}
+                autoComplete="current-password"
+                aria-label="Current password"
+                required
+              />
+            </label>
+            <label>
+              New password
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+                autoComplete="new-password"
+                aria-label="New password"
+                required
+              />
+            </label>
+            <label>
+              Confirm new password
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+                autoComplete="new-password"
+                aria-label="Confirm new password"
+                required
+              />
+            </label>
+            <button className="primaryButton" type="submit" disabled={busy || !currentPassword || !newPassword || !confirmPassword}>
+              {forced ? "Set Password & Continue" : "Change Password"}
+            </button>
+          </form>
+          {changeStatus && <p className="muted" role="status">{changeStatus}</p>}
+          <div className="buttonGrid two">
+            {onCancel && <button className="actionButton" type="button" onClick={onCancel}>Cancel</button>}
+            <button className="actionButton" type="button" onClick={onLogout}>Logout</button>
+          </div>
+        </section>
+      </section>
+    </main>
+  );
+}
+
 function AccountPanel({
   activeUser,
-  users,
   language,
   setLanguage,
-  switchUser,
   switchUserByStaffCode,
+  onChangePassword,
+  onLogout,
   apiConnected
 }: {
   activeUser: OperatorUser;
-  users: OperatorUser[];
   language: "English" | "Tagalog";
   setLanguage: (language: "English" | "Tagalog") => void;
-  switchUser: (user: OperatorUser) => Promise<void>;
   switchUserByStaffCode: (staffCode: string) => Promise<void>;
+  onChangePassword: () => void;
+  onLogout: () => void;
   apiConnected: boolean;
 }) {
   const [staffCode, setStaffCode] = useState("");
@@ -3459,26 +3792,10 @@ function AccountPanel({
       </div>
 
       <div className="accountSection">
-        <h3>Developer Demo Users</h3>
-        <p className="muted">Demo only. Production will hide this and use secure PIN management, lockouts, and owner reset.</p>
-        <div className="grid loginGrid">
-          {users.map((user) => (
-            <button className="userSwitchButton" key={user.id} onClick={() => switchUser(user)}>
-              <span className={`userDot ${roleClass(user.role)}`} />
-              <div>
-                <strong>{user.name}</strong>
-                <p>{user.role} - {user.branchAccess ?? "No branch set"}</p>
-              </div>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="accountSection">
         <h3>Security</h3>
         <div className="buttonGrid two">
-          <button className="actionButton" type="button">Change Password</button>
-          <button className="actionButton" type="button">Logout</button>
+          <button className="actionButton" type="button" onClick={onChangePassword}>Change Password</button>
+          <button className="actionButton" type="button" onClick={onLogout}>Logout</button>
         </div>
       </div>
 

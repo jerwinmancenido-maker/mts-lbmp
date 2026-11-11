@@ -21,10 +21,10 @@ import type { ServiceAuditLog, StaffUserRecord } from "../../apps/api/src/module
  *   codes are stored only as PBKDF2 hashes (createStaffUser hashes on
  *   set, and the persisted state file never contains the plaintext).
  * - Fail closed: an account with no credential set cannot sign in
- *   through that door — including the six demo accounts on a fresh boot
- *   without the ALLOW_DEMO_AUTH dev gate.
- * - The gated path still works: with ALLOW_DEMO_AUTH=true outside
- *   production, the demo accounts sign in via the in-memory hash overlay.
+ *   through that door. (Updated in P5-2: the six demo accounts are
+ *   deleted outright — their old emails/codes are unknown accounts now,
+ *   and the ALLOW_DEMO_AUTH gate provisions only the two smoke accounts;
+ *   the P5-1 in-memory demo credential overlay is gone.)
  * - Lockout: 10 consecutive failures (shared across both doors) lock the
  *   account for 15 minutes; a successful sign-in resets the counter;
  *   failures and lockouts are audited.
@@ -208,28 +208,35 @@ describe("fail-closed credentials", () => {
     await service.onModuleDestroy();
   });
 
-  test("the demo accounts fail closed on a fresh boot without the dev gate", async () => {
+  test("the removed demo accounts are simply unknown accounts on a fresh boot (P5-2)", async () => {
     const { service } = await bootService();
 
-    // These were the audit's §3.3 blockers #1 and #2/#4: the shared
-    // password "password" and the printed staff codes. Both doors are
-    // shut now because the demo records carry no credentials.
+    // P5-1 made the demo records credential-less (fail closed); P5-2
+    // deletes the records outright. The audit's §3.3 blockers #1 and
+    // #2/#4 — the shared password "password" and the printed staff
+    // codes — now fail because no such accounts exist at all, and a
+    // fresh boot without provisioning has an empty user directory.
     expect(() => service.login({ email: "admin@mts.local", password: "password" })).toThrow("Invalid email or password");
     expect(() => service.login({ email: "daet.owner@mts.local", password: "password" })).toThrow("Invalid email or password");
     expect(() => service.loginWithStaffCode({ staffCode: "0001" })).toThrow("Invalid staff code");
     expect(() => service.loginWithStaffCode({ staffCode: "0000" })).toThrow("Invalid staff code");
+    expect(service.getBootstrap().users).toEqual([]);
 
     await service.onModuleDestroy();
   });
 
-  test("with ALLOW_DEMO_AUTH on, the demo accounts sign in through the gated overlay", async () => {
+  test("with ALLOW_DEMO_AUTH on, only the two smoke accounts exist — the demo doors stay shut (P5-2)", async () => {
     const { service } = await bootService({ allowDemoAuth: true });
 
-    expect(service.login({ email: "admin@mts.local", password: "password" }).user.role).toBe("System Admin");
-    expect(service.loginWithStaffCode({ staffCode: "0001" }).user.id).toBe("user_system_admin");
-    expect(service.loginWithStaffCode({ staffCode: "0000" }).user.id).toBe("user_daet_owner");
-    // Wrong credentials still fail under the gate.
-    expect(() => service.login({ email: "admin@mts.local", password: "not-the-password" })).toThrow("Invalid email or password");
+    // The gate provisions the smoke accounts (P5-0) — and nothing else.
+    // The P5-1 demo credential overlay is deleted with the demo accounts.
+    expect(service.login({ email: "smoke.admin@mts-smoke.test", password: "password" }).user.role).toBe("System Admin");
+    expect(service.getBootstrap().users.map((user) => user.email).sort()).toEqual([
+      "smoke.admin@mts-smoke.test",
+      "smoke.delivery@mts-smoke.test"
+    ]);
+    expect(() => service.login({ email: "admin@mts.local", password: "password" })).toThrow("Invalid email or password");
+    expect(() => service.loginWithStaffCode({ staffCode: "0001" })).toThrow("Invalid staff code");
     expect(() => service.loginWithStaffCode({ staffCode: "5555" })).toThrow("Invalid staff code");
 
     await service.onModuleDestroy();

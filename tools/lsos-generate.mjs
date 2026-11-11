@@ -1,3 +1,29 @@
+/**
+ * LSOS sample-data generator.
+ *
+ * Phase 5 P5-2 migration: this script used to sign in as the five
+ * hard-coded DEMO accounts (admin@ / receiving@ / delivery@ /
+ * daet.owner@ / naga.owner@mts.local, shared password "password"). Those
+ * accounts are deleted, so the generator now runs on the smoke-style
+ * provisioned accounts (tools/smoke-credentials.mjs) — the same
+ * ALLOW_DEMO_AUTH-gated test provisioning the smoke gates use:
+ *
+ *   1. Boot the API with ALLOW_DEMO_AUTH=true (never in production).
+ *   2. Run this script; SMOKE_EMAIL / SMOKE_PASSWORD /
+ *      SMOKE_LIMITED_EMAIL / SMOKE_LIMITED_PASSWORD override the
+ *      throwaway defaults exactly as they do for the smoke gates.
+ *
+ * Only two provisioned accounts exist, so the old per-role tokens map
+ * onto them: "admin" is the smoke admin (System Admin — holds every
+ * permission, so it also performs the steps that used to run as
+ * receiving/owners; audit entries for those steps are therefore recorded
+ * under the smoke admin's name), and "delivery" is the smoke delivery
+ * account. Label-only roles (receiving / daetOwner / nagaOwner) fall
+ * back to the admin token via asRole(), as they did for unknown roles
+ * before. The generated data is unchanged.
+ */
+import { resolveSmokeCredentials } from "./smoke-credentials.mjs";
+
 const API_URL = process.env.API_URL ?? "http://localhost:4100";
 const BATCH = "QA-BATCH-2026-07-02-LSOS";
 
@@ -34,18 +60,24 @@ async function tryRequest(path, options = {}) {
 }
 
 async function login() {
+  const credentials = resolveSmokeCredentials(process.env);
   const accounts = {
-    admin: "admin@mts.local",
-    receiving: "receiving@mts.local",
-    delivery: "delivery@mts.local",
-    daetOwner: "daet.owner@mts.local",
-    nagaOwner: "naga.owner@mts.local"
+    admin: { email: credentials.email, secret: credentials.password },
+    delivery: { email: credentials.limitedEmail, secret: credentials.limitedPassword }
   };
-  for (const [key, email] of Object.entries(accounts)) {
-    const loginResult = await request("/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ email, password: "password" })
-    });
+  for (const [key, account] of Object.entries(accounts)) {
+    let loginResult;
+    try {
+      loginResult = await request("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ email: account.email, password: account.secret })
+      });
+    } catch (error) {
+      throw new Error(
+        `LSOS login failed for ${account.email}. Boot the API with ALLOW_DEMO_AUTH=true (outside production) ` +
+          `so the smoke accounts are provisioned, or fix SMOKE_EMAIL/SMOKE_PASSWORD. Cause: ${error.message}`
+      );
+    }
     tokens[key] = loginResult.token;
   }
   token = tokens.admin;
@@ -74,9 +106,10 @@ async function tryAsRole(role, path, options = {}) {
 }
 
 async function loginAdminOnly() {
+  const credentials = resolveSmokeCredentials(process.env);
   const loginResult = await request("/auth/login", {
     method: "POST",
-    body: JSON.stringify({ email: "admin@mts.local", password: "password" })
+    body: JSON.stringify({ email: credentials.email, password: credentials.password })
   });
   token = loginResult.token;
 }

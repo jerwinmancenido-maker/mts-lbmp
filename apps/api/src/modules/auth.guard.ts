@@ -10,15 +10,14 @@ export const REQUIRED_PERMISSIONS = "requiredPermissions";
 export const PublicRoute = () => SetMetadata(IS_PUBLIC_ROUTE, true);
 export const RequirePermissions = (...permissions: Permission[]) => SetMetadata(REQUIRED_PERMISSIONS, permissions);
 
-const demoTokens = new Map([
-  ["demo-token-user_owner", { id: "user_daet_owner", role: "Daet Owner", branchAccess: "Daet" }],
-  ["demo-token-user_daet_owner", { id: "user_daet_owner", role: "Daet Owner", branchAccess: "Daet" }],
-  ["demo-token-user_naga_owner", { id: "user_naga_owner", role: "Naga Owner", branchAccess: "Naga" }],
-  ["demo-token-user_system_admin", { id: "user_system_admin", role: "System Admin", branchAccess: "All branches" }],
-  ["demo-token-user_receiving", { id: "user_receiving", role: "Receiving Staff" }],
-  ["demo-token-user_delivery", { id: "user_delivery", role: "Delivery Staff" }],
-  ["demo-token-user_customer", { id: "user_customer", role: "Customer Owner" }]
-]);
+/**
+ * Phase 5 P5-2: the only endpoint a mustChangePassword-flagged account
+ * may reach. The flag means the account's password is an admin-set
+ * temporary (initial provisioning, admin reset, first-boot bootstrap);
+ * until the user replaces it through this endpoint, every other
+ * authenticated route is refused.
+ */
+const PASSWORD_CHANGE_PATH_SUFFIX = "/auth/change-password";
 
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -35,23 +34,35 @@ export class AuthGuard implements CanActivate {
     ]);
     if (isPublic) return true;
 
-    const request = context.switchToHttp().getRequest<{ headers: Record<string, string | undefined>; user?: unknown }>();
+    const request = context.switchToHttp().getRequest<{
+      headers: Record<string, string | undefined>;
+      user?: unknown;
+      url?: string;
+      path?: string;
+    }>();
     const header = request.headers.authorization;
     const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
     if (!token) return false;
 
+    // Phase 5 P5-2: ONLY real JWTs authenticate. The static `demo-token-*`
+    // bearer map that used to be consulted here (audit Door 3 — including
+    // a System Admin token that bypassed even account disabling) is
+    // deleted along with the demo accounts.
     const verifiedToken = this.verifyToken(token);
-    const tokenUserId = token.startsWith("demo-token-") ? token.slice("demo-token-".length) : verifiedToken?.sub ?? "";
-    const user = demoTokens.get(token) ?? (tokenUserId ? this.logistics.getAuthUserById(tokenUserId) : undefined);
+    if (!verifiedToken?.sub) return false;
+    const user = this.logistics.getAuthUserById(verifiedToken.sub);
     if (!user) return false;
     // Phase 5 P5-1 revocation: a real JWT carries the sessionVersion it was
     // issued under (`sv`). Credential changes bump the stored version, so
     // a mismatch means the token predates the change and is rejected even
-    // though its signature and expiry are still fine. (The static demo
-    // tokens carry no JWT and skip this — they are removed in P5-2.)
-    if (verifiedToken) {
-      const currentVersion = (user as { sessionVersion?: number }).sessionVersion;
-      if (currentVersion !== undefined && (verifiedToken.sv ?? 0) !== currentVersion) return false;
+    // though its signature and expiry are still fine.
+    const currentVersion = (user as { sessionVersion?: number }).sessionVersion;
+    if (currentVersion !== undefined && (verifiedToken.sv ?? 0) !== currentVersion) return false;
+    // Phase 5 P5-2 forced password change: a flagged account's token is
+    // good for exactly one thing — setting a real password.
+    if ((user as { mustChangePassword?: boolean }).mustChangePassword) {
+      const requestPath = (request.path ?? request.url ?? "").split("?")[0] ?? "";
+      if (!requestPath.endsWith(PASSWORD_CHANGE_PATH_SUFFIX)) return false;
     }
     request.user = user;
     const requiredPermissions = this.reflector.getAllAndOverride<Permission[]>(REQUIRED_PERMISSIONS, [
