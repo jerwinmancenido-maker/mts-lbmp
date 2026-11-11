@@ -1,0 +1,10 @@
+       MANCENIDO TRUCKING SERVICES
+             PACKAGE QR LABEL
+PKG-2026-11-000001
+------------------------------------------
+Description: Angle bar
+Destination: Daet
+------------------------------------------
+QR: MTS:PKG:PKG-2026-11-000001
+------------------------------------------
+Attach label securely

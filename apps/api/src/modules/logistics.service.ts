@@ -13,8 +13,7 @@ import {
   type PaymentStatus,
   type TripStatus
 } from "@mts-lbmp/shared";
-import { render80mmReceipt } from "@mts-lbmp/printing";
-import { renderDeliveryReceipt, renderLoadingManifest, renderQrLabel, toEscPosTextBytes } from "@mts-lbmp/printing";
+import { renderDeliveryReceipt, renderLoadingManifest, renderQrLabel, renderReceivingDocument, renderReceivingSlip, toEscPosTextBytes } from "@mts-lbmp/printing";
 import { hashSecret, signAuthToken, verifySecret } from "./security.js";
 import { createStateStore, type LoadedServiceState, type ServiceState, type StateStore } from "./state-store.js";
 import type {
@@ -2451,30 +2450,30 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       relatedEntityId: cargo.id,
       layout: "80mm"
     });
-    const measurement = [
-      cargo.weight != null ? `${cargo.weight} ${cargo.weightUnit ?? "kg"}` : "",
-      [cargo.length, cargo.width, cargo.height].some((value) => value != null) ? `${cargo.length ?? "?"} x ${cargo.width ?? "?"} x ${cargo.height ?? "?"} ${cargo.dimensionUnit ?? "cm"}` : ""
-    ].filter(Boolean).join(" / ");
-    return render80mmReceipt({
-      title: "RECEIVING SLIP",
+    return renderReceivingSlip({
       documentNumber: cargo.receivingRecordNumber,
-      lines: [
-        { label: "Package", value: cargo.packageNumber },
-        { label: "Customer", value: cargo.customerName },
-        { label: "Description", value: cargo.description },
-        { label: "Qty", value: `${cargo.quantity ?? 1} ${cargo.unit ?? "pcs"}` },
-        { label: "Handling Branch", value: cargo.handlingBranchName ?? cargo.destination },
-        { label: "Delivery Type", value: cargo.deliveryType ?? "Deliver to consignee" },
-        { label: "Delivery Area", value: [cargo.city, cargo.province].filter(Boolean).join(", ") || "Not provided" },
-        { label: "Condition", value: cargo.condition },
-        ...(measurement ? [{ label: "Weight/Size", value: measurement }] : []),
-        ...(cargo.unitPrice != null ? [{ label: "Unit Price", value: `PHP ${cargo.unitPrice.toFixed(2)}` }] : []),
-        { label: "Price", value: cargo.price == null ? "Waiting for Price" : `PHP ${cargo.price.toFixed(2)}` },
-        { label: "Print", value: `${printLog.action} ${printLog.createdAt}` },
-        { label: "Copy", value: String(printLog.copyNumber) }
-      ],
+      packageNumber: cargo.packageNumber,
+      customerName: cargo.customerName,
+      description: cargo.description,
+      quantity: cargo.quantity,
+      unit: cargo.unit,
+      handlingBranchName: cargo.handlingBranchName,
+      destination: cargo.destination,
+      deliveryType: cargo.deliveryType,
+      city: cargo.city,
+      province: cargo.province,
+      condition: cargo.condition,
+      weight: cargo.weight,
+      weightUnit: cargo.weightUnit,
+      length: cargo.length,
+      width: cargo.width,
+      height: cargo.height,
+      dimensionUnit: cargo.dimensionUnit,
+      unitPrice: cargo.unitPrice,
+      price: cargo.price,
       qrValue: cargo.qrValue,
-      footer: "Signature: __________________"
+      printLine: `${printLog.action} ${printLog.createdAt}`,
+      copyNumber: printLog.copyNumber
     });
   }
 
@@ -2487,34 +2486,13 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       relatedEntityId: receiving.id,
       layout: "80mm"
     });
-    const totalQuantity = receiving.packages.reduce((sum, cargo) => sum + (cargo.quantity ?? 1), 0);
-    const totalPrice = receiving.packages.reduce((sum, cargo) => sum + (cargo.price ?? 0), 0);
-    const withoutPrice = receiving.packages.filter((cargo) => cargo.price == null).length;
-    const branchSummary = Array.from(new Set(receiving.packages.map((cargo) => cargo.handlingBranchName ?? cargo.destination))).join(" / ");
-    const itemLines = receiving.packages.map((cargo, index) => {
-      const quantity = `${cargo.quantity ?? 1} ${cargo.unit ?? "pcs"}`;
-      const branch = cargo.handlingBranchName ?? cargo.destination;
-      const price = cargo.price == null ? "NP" : `P${Math.round(cargo.price)}`;
-      const compactDescription = cargo.description.length > 22 ? `${cargo.description.slice(0, 21)}...` : cargo.description;
-      return {
-        label: `${index + 1}`,
-        value: `${quantity} ${compactDescription} / ${branch} / ${price}`
-      };
-    });
-
-    return render80mmReceipt({
-      title: "RECEIVING RECEIPT",
-      documentNumber: receiving.recordNumber,
-      lines: [
-        { label: "Customer", value: receiving.customerName },
-        { label: "DR", value: receiving.customerDrNumber ?? "Not provided" },
-        { label: "Branch", value: branchSummary || receiving.destination },
-        { label: "Items", value: `${receiving.packages.length} lines / Qty ${totalQuantity}` },
-        { label: "Total", value: withoutPrice ? `PHP ${totalPrice.toFixed(2)} / ${withoutPrice} no price` : `PHP ${totalPrice.toFixed(2)}` },
-        ...itemLines,
-        { label: "Copy", value: `${printLog.copyNumber} / ${new Date(printLog.createdAt).toLocaleString("en-PH", { hour12: false })}` }
-      ],
-      footer: "Received By: _______________"
+    return renderReceivingDocument({
+      recordNumber: receiving.recordNumber,
+      customerName: receiving.customerName,
+      customerDrNumber: receiving.customerDrNumber,
+      destination: receiving.destination,
+      packages: receiving.packages,
+      copyLine: `${printLog.copyNumber} / ${new Date(printLog.createdAt).toLocaleString("en-PH", { hour12: false })}`
     });
   }
 
