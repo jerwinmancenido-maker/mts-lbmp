@@ -573,6 +573,92 @@ export interface CustomerBalance {
   aging: Record<AgingBucket, CustomerBalanceAgingCell>;
 }
 
+/**
+ * Phase 6 P6-5 — expense trip discipline (settled owner answer, audit §9
+ * Q6): an expense in one of these categories is a trip cost, so it MUST
+ * name the trip it belongs to. Enforced in createExpense (the only
+ * expense write path — there is no expense edit endpoint) with a 400,
+ * and required in the web expense form for the same categories.
+ * Categories are a settings-editable free-text list, so matching is
+ * trim + case-insensitive against these canonical names; historical
+ * records are NOT migrated — an old unlinked Fuel expense stays
+ * unlinked and surfaces in the profitability report's explicit
+ * "unallocated" bucket instead of being silently spread or dropped.
+ */
+export const TRIP_REQUIRED_EXPENSE_CATEGORIES = ["Fuel", "Toll", "Truck Rental"] as const;
+
+export function expenseCategoryRequiresTrip(category: string | undefined | null): boolean {
+  const clean = category?.trim().toLowerCase();
+  if (!clean) return false;
+  return TRIP_REQUIRED_EXPENSE_CATEGORIES.some((entry) => entry.toLowerCase() === clean);
+}
+
+export type ProfitabilityGroupBy = "trip" | "route" | "customer" | "branch";
+
+export interface ProfitabilityCategoryTotal {
+  category: string;
+  amount: number;
+}
+
+/** One row of the profitability report: a trip, a route, a customer, or a branch. */
+export interface ProfitabilityGroup {
+  /** Stable row key: the trip id, "origin → destination", the customer id, or the branch name ("no-trip" for cargo with no trip on trip/route views). */
+  key: string;
+  label: string;
+  tripId?: string;
+  tripNumber?: string;
+  origin?: string;
+  destination?: string;
+  customerId?: string;
+  branch?: string;
+  /** Σ price of this group's packages DELIVERED in the period (delivery date, Asia/Manila). */
+  billed: number;
+  /** Σ payments RECEIVED in the period for this group's packages (payment date, Asia/Manila). */
+  collected: number;
+  /** Still-unpaid balance (as of the report run) of the packages billed in this period. */
+  outstanding: number;
+  /** How many priced packages were billed in this group + period. */
+  packageCount: number;
+  /** Σ APPROVED expenses recorded in the period and linked to this group (0 on the customer view — see `margin`). */
+  linkedExpenses: number;
+  linkedExpensesByCategory: ProfitabilityCategoryTotal[];
+  /** billed − linkedExpenses. Null on the customer view: no expense is recorded against a customer, so no margin is shown rather than a fake one. */
+  margin: number | null;
+}
+
+export interface ProfitabilityExpenseBucket {
+  total: number;
+  count: number;
+  byCategory: ProfitabilityCategoryTotal[];
+}
+
+/**
+ * Phase 6 P6-5 — GET /reports/profitability, the system's first
+ * date-ranged report. Built by LogisticsService.getProfitabilityReport —
+ * the one place this math lives. Every figure is defined in
+ * `definition`, which the web prints verbatim above the table: no
+ * number on this report has an implicit meaning.
+ */
+export interface ProfitabilityReport {
+  period: { from: string; to: string };
+  groupBy: ProfitabilityGroupBy;
+  definition: string;
+  groups: ProfitabilityGroup[];
+  /** APPROVED expenses recorded in the period with NO trip link. Always present, never spread across groups. */
+  unallocatedExpenses: ProfitabilityExpenseBucket;
+  /** APPROVED expenses recorded in the period that ARE linked to a trip (the sum of the groups' linkedExpenses on trip/route/branch views). */
+  tripLinkedExpenses: ProfitabilityExpenseBucket;
+  totals: {
+    billed: number;
+    collected: number;
+    outstanding: number;
+    /** linked + unallocated approved expenses in the period. */
+    approvedExpenses: number;
+    /** billed − trip-linked expenses; null on the customer view (see ProfitabilityGroup.margin). */
+    margin: number | null;
+  };
+}
+
 export interface StaffUserRecord {
   id: string;
   name: string;

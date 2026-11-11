@@ -38,6 +38,11 @@ import type {
   PackageMessage,
   PaymentRecord,
   PrintLog,
+  ProfitabilityCategoryTotal,
+  ProfitabilityExpenseBucket,
+  ProfitabilityGroup,
+  ProfitabilityGroupBy,
+  ProfitabilityReport,
   ReceivingDraft,
   ReceivingIntakeDuplicateSubmission,
   ReceivingIntakeTask,
@@ -54,7 +59,7 @@ import type {
   Trip,
   TruckRecord
 } from "./logistics.types.js";
-import { billingTermLabel, isBillingTermDays } from "./logistics.types.js";
+import { billingTermLabel, expenseCategoryRequiresTrip, isBillingTermDays, TRIP_REQUIRED_EXPENSE_CATEGORIES } from "./logistics.types.js";
 
 function id(prefix: string) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
@@ -889,6 +894,30 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       .filter((pkg) => pkg.status === "Delivered")
       .reduce((sum, pkg) => sum + (pkg.price ?? 0), 0);
 
+    // Phase 6 P6-5 — the period-scoped replacement for estimatedProfit's
+    // definition (audit §4.3: the all-time figure compares lifetime
+    // revenue against lifetime expenses and means less the longer the
+    // system runs). profitThisMonth = revenue of packages DELIVERED this
+    // calendar month (Asia/Manila) − APPROVED expenses RECORDED this
+    // calendar month, on the same branch base as the tiles above.
+    // estimatedProfit stays in the response for one release, deprecated;
+    // the web tile already reads profitThisMonth.
+    const currentMonth = this.businessDateKey(new Date()).slice(0, 7);
+    const deliveredRevenueThisMonth = branchPackages
+      .filter((pkg) => {
+        const deliveredAt = this.deliveredAtForPackage(pkg.id);
+        return deliveredAt ? this.businessDateKey(deliveredAt).startsWith(currentMonth) : false;
+      })
+      .reduce((sum, pkg) => sum + (pkg.price ?? 0), 0);
+    const approvedExpensesThisMonth = this.expenses
+      .filter(
+        (expense) =>
+          expense.status === "Approved" &&
+          this.businessDateKey(expense.createdAt).startsWith(currentMonth) &&
+          (!branchName || (expense.tripId && branchTripIds.has(expense.tripId)))
+      )
+      .reduce((sum, expense) => sum + expense.amount, 0);
+
     return {
       cargoWaiting,
       cargoWithoutPrice,
@@ -898,7 +927,12 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       failedDeliveries,
       paymentsCollected: canViewFinancialSummary ? paymentsCollected : undefined,
       expensesAwaitingApproval: canViewFinancialSummary ? this.expenses.filter((expense) => expense.status === "Submitted" && (!branchName || (expense.tripId && branchTripIds.has(expense.tripId)))).length : undefined,
+      /** @deprecated Phase 6 P6-5: all-time delivered revenue − all-time approved expenses. Kept for one release; read profitThisMonth instead. */
       estimatedProfit: canViewFinancialSummary ? deliveredRevenue - approvedExpenses : undefined,
+      /** Phase 6 P6-5: this calendar month's (Asia/Manila) delivered revenue − this month's approved expenses. The definition the dashboard tile shows. */
+      profitThisMonth: canViewFinancialSummary ? deliveredRevenueThisMonth - approvedExpensesThisMonth : undefined,
+      /** The YYYY-MM (Asia/Manila) profitThisMonth covers. */
+      profitThisMonthPeriod: canViewFinancialSummary ? currentMonth : undefined,
       notifications: this.notifications.slice(-8).reverse(),
       branchScope: branchName ?? "All branches"
     };
@@ -1453,6 +1487,246 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       .map((customer) => this.buildCustomerBalance(customer, user, now))
       .filter((balance): balance is CustomerBalance => balance !== null)
       .sort((a, b) => b.outstanding - a.outstanding || a.customerName.localeCompare(b.customerName));
+  }
+
+  /** Strict YYYY-MM-DD calendar-date check (rejects 2026-02-31 and friends, not just malformed strings). */
+  private isBusinessDateKey(value: string): boolean {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const [year = 0, month = 0, day = 0] = value.split("-").map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+  }
+
+  /**
+   * Phase 6 P6-5 — GET /reports/profitability: the system's first
+   * date-ranged report (audit §3.3/§8). One endpoint, four groupings;
+   * TRIP is the primary view, route/customer/branch ride the same math.
+   *
+   * Period anchoring — every fact enters by its OWN date, all read as
+   * Asia/Manila calendar dates, both ends inclusive:
+   *   billed     — the package's DELIVERY date (deliveredAtForPackage,
+   *                the same anchor invoices and balances use);
+   *   collected  — the payment's createdAt (when the money arrived);
+   *   expenses   — the expense's createdAt (when it was recorded; no
+   *                separate incurred-date field exists, audit §3.3).
+   * Billed is accrual and collected is cash, so the two columns cover
+   * different packages inside one period and need not reconcile —
+   * `definition` in the payload says all of this verbatim for the UI.
+   *
+   * Attribution: a package/payment groups by the trip that carried the
+   * package (trip/route), by its customer, or — branch view — by the
+   * DESTINATION branch of its trip (the branch rule listTrips and
+   * listExpenses already use); cargo carried on no trip groups under
+   * "No trip recorded" (trip/route) or its own handling branch
+   * (branch). Expenses group by their linked trip only. On the
+   * CUSTOMER view no expense is attributed (no per-customer cost data
+   * exists — allocation would be invented, audit §3.3), so margin is
+   * null rather than a dressed-up revenue figure.
+   *
+   * Branch scoping follows the P5-3 rules per fact, exactly as the
+   * list endpoints scope them: packages by [handlingBranchName,
+   * destination], payments by [branchName, package branches], trips by
+   * [origin, destination]; an approved expense with no (resolvable)
+   * trip link is unattributed and stays visible to every caller,
+   * landing in the explicit unallocated bucket — never spread, never
+   * dropped.
+   */
+  getProfitabilityReport(
+    query: { from?: string; to?: string; groupBy?: string } = {},
+    user?: AuthContext,
+    now: Date = new Date()
+  ): ProfitabilityReport {
+    const groupBy = (query.groupBy?.trim() || "trip") as ProfitabilityGroupBy;
+    if (!["trip", "route", "customer", "branch"].includes(groupBy)) {
+      throw new BadRequestException("groupBy must be one of: trip, route, customer, branch.");
+    }
+    const todayKey = this.businessDateKey(now);
+    const from = query.from?.trim() || `${todayKey.slice(0, 7)}-01`;
+    const to = query.to?.trim() || todayKey;
+    if (!this.isBusinessDateKey(from)) throw new BadRequestException("from must be a calendar date in YYYY-MM-DD form.");
+    if (!this.isBusinessDateKey(to)) throw new BadRequestException("to must be a calendar date in YYYY-MM-DD form.");
+    if (from > to) throw new BadRequestException("from must not be after to.");
+    const inPeriod = (iso: string) => {
+      const key = this.businessDateKey(iso);
+      return key >= from && key <= to;
+    };
+
+    const customersById = new Map(this.customers.map((customer) => [customer.id, customer]));
+    const tripsById = new Map(this.trips.map((trip) => [trip.id, trip]));
+    const packagesById = new Map(this.packages.map((pkg) => [pkg.id, pkg]));
+    const tripForPackage = new Map<string, Trip>();
+    for (const trip of this.trips) {
+      for (const packageId of trip.cargoPackageIds) {
+        // A package rides one trip in this model; if data ever says
+        // otherwise, the first trip wins so a package is never counted twice.
+        if (!tripForPackage.has(packageId)) tripForPackage.set(packageId, trip);
+      }
+    }
+    const paidAllTimeByPackage = new Map<string, number>();
+    for (const payment of this.payments) {
+      paidAllTimeByPackage.set(payment.cargoPackageId, (paidAllTimeByPackage.get(payment.cargoPackageId) ?? 0) + payment.amountPaid);
+    }
+
+    const NO_TRIP_KEY = "no-trip";
+    type GroupSeed = { group: ProfitabilityGroup; billedPackageIds: Set<string> };
+    const groups = new Map<string, GroupSeed>();
+    const ensureGroup = (key: string, build: () => ProfitabilityGroup): GroupSeed => {
+      let seed = groups.get(key);
+      if (!seed) {
+        seed = { group: build(), billedPackageIds: new Set<string>() };
+        groups.set(key, seed);
+      }
+      return seed;
+    };
+    const blankGroup = (fields: Partial<ProfitabilityGroup> & { key: string; label: string }): ProfitabilityGroup => ({
+      billed: 0,
+      collected: 0,
+      outstanding: 0,
+      packageCount: 0,
+      linkedExpenses: 0,
+      linkedExpensesByCategory: [],
+      margin: 0,
+      ...fields
+    });
+    const routeKey = (trip: Trip) => `${trip.origin} → ${trip.destination}`;
+    const tripLabel = (trip: Trip) => `${trip.tripNumber} · ${routeKey(trip)}`;
+
+    /** The group a package's money facts belong to. */
+    const packageGroup = (pkg: CargoPackage): GroupSeed => {
+      const trip = tripForPackage.get(pkg.id);
+      if (groupBy === "customer") {
+        return ensureGroup(pkg.customerId, () =>
+          blankGroup({ key: pkg.customerId, label: customersById.get(pkg.customerId)?.businessName ?? pkg.customerName, customerId: pkg.customerId })
+        );
+      }
+      if (groupBy === "route") {
+        return trip
+          ? ensureGroup(routeKey(trip), () => blankGroup({ key: routeKey(trip), label: routeKey(trip), origin: trip.origin, destination: trip.destination }))
+          : ensureGroup(NO_TRIP_KEY, () => blankGroup({ key: NO_TRIP_KEY, label: "No trip recorded" }));
+      }
+      if (groupBy === "branch") {
+        const branch = trip ? trip.destination : pkg.handlingBranchName ?? pkg.destination ?? "Unassigned";
+        return ensureGroup(branch, () => blankGroup({ key: branch, label: branch, branch }));
+      }
+      return trip
+        ? ensureGroup(trip.id, () =>
+            blankGroup({ key: trip.id, label: tripLabel(trip), tripId: trip.id, tripNumber: trip.tripNumber, origin: trip.origin, destination: trip.destination })
+          )
+        : ensureGroup(NO_TRIP_KEY, () => blankGroup({ key: NO_TRIP_KEY, label: "No trip recorded" }));
+    };
+
+    /** The group a trip-linked expense belongs to; undefined on the customer view, where expenses are never attributed. */
+    const tripExpenseGroup = (trip: Trip): GroupSeed | undefined => {
+      if (groupBy === "customer") return undefined;
+      if (groupBy === "route") {
+        return ensureGroup(routeKey(trip), () => blankGroup({ key: routeKey(trip), label: routeKey(trip), origin: trip.origin, destination: trip.destination }));
+      }
+      if (groupBy === "branch") {
+        return ensureGroup(trip.destination, () => blankGroup({ key: trip.destination, label: trip.destination, branch: trip.destination }));
+      }
+      return ensureGroup(trip.id, () =>
+        blankGroup({ key: trip.id, label: tripLabel(trip), tripId: trip.id, tripNumber: trip.tripNumber, origin: trip.origin, destination: trip.destination })
+      );
+    };
+
+    const addCategory = (list: ProfitabilityCategoryTotal[], category: string, amount: number) => {
+      const entry = list.find((candidate) => candidate.category === category);
+      if (entry) entry.amount += amount;
+      else list.push({ category, amount });
+    };
+    const sortCategories = (list: ProfitabilityCategoryTotal[]) =>
+      list.sort((a, b) => b.amount - a.amount || a.category.localeCompare(b.category));
+
+    // Billed (accrual): priced packages DELIVERED in the period.
+    for (const pkg of this.packages) {
+      if (pkg.price == null) continue;
+      if (!this.branchVisibleTo(user, [pkg.handlingBranchName, pkg.destination])) continue;
+      const deliveredAt = this.deliveredAtForPackage(pkg.id);
+      if (!deliveredAt || !inPeriod(deliveredAt)) continue;
+      const seed = packageGroup(pkg);
+      seed.group.billed += Number(pkg.price);
+      seed.group.packageCount += 1;
+      seed.billedPackageIds.add(pkg.id);
+    }
+
+    // Collected (cash): payments RECEIVED in the period, grouped by the
+    // package they paid for (visibility per the listPayments rule).
+    for (const payment of this.payments) {
+      if (!inPeriod(payment.createdAt)) continue;
+      const pkg = packagesById.get(payment.cargoPackageId);
+      if (!pkg) continue;
+      if (!this.branchVisibleTo(user, [payment.branchName, pkg.handlingBranchName, pkg.destination])) continue;
+      packageGroup(pkg).group.collected += payment.amountPaid;
+    }
+
+    // Outstanding: the still-unpaid balance (all payments ever, clamped
+    // per package like buildCustomerBalance) of the billed cohort only.
+    for (const seed of groups.values()) {
+      for (const packageId of seed.billedPackageIds) {
+        const pkg = packagesById.get(packageId);
+        if (!pkg) continue;
+        seed.group.outstanding += Math.max(Number(pkg.price ?? 0) - (paidAllTimeByPackage.get(packageId) ?? 0), 0);
+      }
+    }
+
+    // Expenses: APPROVED and recorded in the period. Linked ones join
+    // their trip's group; unlinked ones collect in the explicit bucket.
+    const unallocatedExpenses: ProfitabilityExpenseBucket = { total: 0, count: 0, byCategory: [] };
+    const tripLinkedExpenses: ProfitabilityExpenseBucket = { total: 0, count: 0, byCategory: [] };
+    for (const expense of this.expenses) {
+      if (expense.status !== "Approved") continue;
+      if (!inPeriod(expense.createdAt)) continue;
+      const trip = expense.tripId ? tripsById.get(expense.tripId) : undefined;
+      if (!trip) {
+        // No trip link (or a link to a trip that no longer exists):
+        // unattributed, visible to every caller under the P5-3 rule.
+        unallocatedExpenses.total += expense.amount;
+        unallocatedExpenses.count += 1;
+        addCategory(unallocatedExpenses.byCategory, expense.category, expense.amount);
+        continue;
+      }
+      if (!this.branchVisibleTo(user, [trip.origin, trip.destination])) continue;
+      tripLinkedExpenses.total += expense.amount;
+      tripLinkedExpenses.count += 1;
+      addCategory(tripLinkedExpenses.byCategory, expense.category, expense.amount);
+      const seed = tripExpenseGroup(trip);
+      if (seed) {
+        seed.group.linkedExpenses += expense.amount;
+        addCategory(seed.group.linkedExpensesByCategory, expense.category, expense.amount);
+      }
+    }
+
+    const groupList = [...groups.values()].map((seed) => seed.group);
+    for (const group of groupList) {
+      sortCategories(group.linkedExpensesByCategory);
+      group.margin = groupBy === "customer" ? null : group.billed - group.linkedExpenses;
+    }
+    groupList.sort((a, b) => b.billed - a.billed || a.label.localeCompare(b.label));
+    sortCategories(unallocatedExpenses.byCategory);
+    sortCategories(tripLinkedExpenses.byCategory);
+
+    const totals = {
+      billed: groupList.reduce((sum, group) => sum + group.billed, 0),
+      collected: groupList.reduce((sum, group) => sum + group.collected, 0),
+      outstanding: groupList.reduce((sum, group) => sum + group.outstanding, 0),
+      approvedExpenses: tripLinkedExpenses.total + unallocatedExpenses.total,
+      margin: groupBy === "customer" ? null : groupList.reduce((sum, group) => sum + group.billed, 0) - tripLinkedExpenses.total
+    };
+
+    const definition = [
+      `Billed = total price of packages delivered between ${from} and ${to} (delivery date, Asia/Manila).`,
+      "Collected = payments received in the same period, grouped by the package they paid for; billed and collected cover different packages, so they need not match within a period.",
+      "Outstanding = the still-unpaid balance today of the packages billed in this period.",
+      groupBy === "customer"
+        ? "Margin is not shown per customer: no expense is recorded against a customer, so customer rows are revenue-side only, and trip-linked expenses are totalled separately instead of being allocated."
+        : "Margin = billed − approved expenses linked to a trip, with expenses counted in the period they were recorded.",
+      ...(groupBy === "branch"
+        ? ["Branch = the destination branch of the trip that carried the cargo; cargo not carried on a trip counts under its handling branch."]
+        : []),
+      "Approved expenses with no trip link are never spread across rows — they appear once as Unallocated expenses."
+    ].join(" ");
+
+    return { period: { from, to }, groupBy, definition, groups: groupList, unallocatedExpenses, tripLinkedExpenses, totals };
   }
 
   listAuditLogs(query: ListQuery = {}) {
@@ -3666,6 +3940,24 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
 
   private createExpenseOnce(input: Parameters<LogisticsService["createExpense"]>[0]) {
     this.assertNoLocalPhotoReference(input.receiptUrl, "Receipt");
+    // Phase 6 P6-5 — expense trip discipline (settled owner answer,
+    // audit §9 Q6): Fuel / Toll / Truck Rental are trip costs and MUST
+    // name their trip, so per-trip profit never silently loses them.
+    // This is the only expense write path (there is no expense edit
+    // endpoint), so the rule lives exactly here. Historical unlinked
+    // expenses are not migrated; they surface in the profitability
+    // report's explicit unallocated bucket.
+    if (expenseCategoryRequiresTrip(input.category)) {
+      const label = input.category.trim();
+      if (!input.tripId) {
+        throw new BadRequestException(
+          `${label} expenses must name the trip they belong to (${TRIP_REQUIRED_EXPENSE_CATEGORIES.join(", ")} are trip costs). Pick the trip before saving.`
+        );
+      }
+      if (!this.trips.some((trip) => trip.id === input.tripId)) {
+        throw new BadRequestException("The trip named for this expense was not found. Pick the trip again.");
+      }
+    }
     const expense: ExpenseRecord = {
       id: id("exp"),
       tripId: input.tripId,
