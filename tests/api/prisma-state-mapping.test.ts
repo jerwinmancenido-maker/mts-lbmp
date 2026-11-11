@@ -218,7 +218,6 @@ function fixtureState(): ServiceState {
     ],
     paymentMethods: ["Cash"],
     expenseCategories: ["Fuel"],
-    userBranchAccessOverrides: {},
     idempotencyRecords: [
       {
         id: "idem_1",
@@ -249,6 +248,38 @@ describe("Prisma state mapping", () => {
 
     const roundTripped = rowsToState(rows);
     expect(roundTripped.packages?.[0]).toEqual(cargo);
+  });
+
+  test("round-trips a fully-populated user record with full equality (Phase 5 P5-4)", () => {
+    // Every field of StaffUserRecord populated — including the credential
+    // hashes and everything P5-1/P5-2 added — must survive
+    // stateToRows → rowsToState EXACTLY (deep equality, not a subset
+    // match): any field the mapping drops is a field an API restart
+    // silently deletes from a real staff account.
+    const fullUser = {
+      id: "user_full",
+      name: "Fully Populated Staff",
+      email: "full.fixture@mts.local",
+      phone: "0917 222 3333",
+      role: "Delivery Staff",
+      passwordHash: "pbkdf2:120000:fixture-salt:fixture-password-hash",
+      staffCodeHash: "pbkdf2:120000:fixture-salt:fixture-code-hash",
+      mustChangePassword: true,
+      sessionVersion: 2,
+      failedLoginAttempts: 3,
+      loginLockedUntil: "2026-11-12T03:30:00.000Z",
+      branchId: "branch_daet",
+      branchAccess: "Daet",
+      permissionPreset: "Delivery Staff",
+      canApprove: ["Daet expenses", "Mixed trips"],
+      status: "Active" as const,
+      createdAt: "2026-11-11T00:00:00.000Z"
+    };
+    const state: ServiceState = { ...fixtureState(), customUsers: [fullUser] };
+
+    const roundTripped = rowsToState(stateToRows(state));
+    expect(roundTripped.customUsers).toHaveLength(1);
+    expect(roundTripped.customUsers?.[0]).toEqual(fullUser);
   });
 
   test("round-trips a trip through TripCargo join rows", () => {

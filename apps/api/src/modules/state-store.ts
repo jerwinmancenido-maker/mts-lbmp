@@ -64,7 +64,13 @@ export interface ServiceState {
   branches: Branch[];
   paymentMethods: string[];
   expenseCategories: string[];
-  userBranchAccessOverrides: Record<string, string>;
+  // Phase 5 P5-4 (CR-007): there is deliberately NO branch-access override
+  // map in the state shape anymore. `branchAccess` on each StaffUserRecord
+  // is the single source of truth. State persisted before P5-4 may still
+  // carry a `userBranchAccessOverrides` field; LogisticsService.loadData
+  // folds it into the user records on load and drops it (the field is
+  // ignored here — LoadedServiceState is a Partial, so its presence in a
+  // stored file neither satisfies nor breaks this type).
 }
 
 /**

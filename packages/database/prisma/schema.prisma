@@ -69,6 +69,11 @@ model Permission {
   roles       RolePermission[]
 }
 
+// Phase 5 P5-4 (CR-006): Role / Permission / RolePermission are retained
+// in the schema for shape compatibility but are NEVER written or read
+// for authorization — the role presets in packages/permissions are the
+// single authorization source of truth (see the comment there). The
+// state mapping materializes Role rows by name only.
 model RolePermission {
   id           String     @id @default(cuid())
   roleId       String

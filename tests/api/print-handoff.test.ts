@@ -273,7 +273,6 @@ describe("print hand-off logging (G4)", () => {
       branches: [],
       paymentMethods: [],
       expenseCategories: [],
-      userBranchAccessOverrides: {}
     } as unknown as ServiceState;
 
     const restored = rowsToState(stateToRows(state));

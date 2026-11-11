@@ -47,6 +47,8 @@ Closed
 | RISK-002 | 2026-07-01 | RISK | P1 | Security | npm audit reports transitive Next/Nest dependency advisories requiring forced breaking changes | Do not force downgrade; monitor patched releases and retest before production | New |
 | ASM-001 | 2026-07-01 | ASM | P1 | UX | Premium look, simple operation | Accepted design rule | Approved |
 | CR-005 | 2026-11-11 | CR | P1 | Platform | Production database is Supabase Postgres (via Prisma) instead of self-hosted MySQL | Jerwin approved 2026-11-11; hosting + pooling managed by Supabase, API and endpoints unchanged | Approved |
+| CR-006 | 2026-11-12 | CR | P2 | Security | Role presets in packages/permissions are the authorization source of truth; the RolePermission tables stay unwritten by design | Decided in Phase 5 P5-4: the auth guard has always authorized from the code presets; persisting RolePermission rows would create a second, driftable copy of the truth. The Role/Permission/RolePermission tables stay in the schema for shape compatibility, documented as intentionally unused. Revisit only via a new CR if per-role DB-editable permissions are ever required | Approved |
+| CR-007 | 2026-11-12 | CR | P2 | Security | branchAccess on the user record is the single source of truth; the branch-access override map is deleted | Decided in Phase 5 P5-4: the override map round-tripped empty on the Prisma path, silently losing admin intent. updateUserBranchAccess/updateStaffUser now write the record itself; state persisted with the old map is folded into the records on load and the map dropped. No schema change — User.branchAccess was already the only column | Approved |
 
 ## Entry Template
 

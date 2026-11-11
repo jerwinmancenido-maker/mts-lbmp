@@ -623,10 +623,11 @@ export function stateToRows(state: ServiceState): PrismaStateRows {
       roleId: roleIdForName(user.role),
       customerId: null,
       branchId: user.branchId ?? null,
-      // The service has both a per-user branchAccess and a separate override
-      // map, but User has one branchAccess column. Persist the effective
-      // value so behaviour is preserved; the distinction is a known gap.
-      branchAccess: state.userBranchAccessOverrides[user.id] ?? user.branchAccess ?? null,
+      // Phase 5 P5-4 (CR-007): branchAccess on the user record is the
+      // single source of truth — the old service-side override map is
+      // deleted, so the record's own value is what the one User column
+      // has always effectively stored.
+      branchAccess: user.branchAccess ?? null,
       permissionPreset: user.permissionPreset ?? null,
       canApprove: user.canApprove ?? [],
       lastLoginAt: null,
@@ -1377,9 +1378,8 @@ export function rowsToState(rows: PrismaStateRows): LoadedServiceState {
     })),
     paymentMethods: settings ? [...settings.paymentMethods] : undefined,
     expenseCategories: settings ? [...settings.expenseCategories] : undefined,
-    // The override map cannot be reconstructed separately from the single
-    // User.branchAccess column; stateToRows already persisted the effective
-    // value onto each custom user. See the PR's known mapping gaps.
-    userBranchAccessOverrides: {}
+    // Phase 5 P5-4 (CR-007): no override map is reconstructed — the
+    // concept is deleted and User.branchAccess (read back onto each user
+    // record above) is the single source of truth.
   };
 }
