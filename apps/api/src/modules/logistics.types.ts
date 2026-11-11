@@ -28,6 +28,15 @@ export interface Customer {
   shippingAddress?: string;
   contacts?: CustomerContact[];
   billingTerm: string;
+  /**
+   * Phase 6 P6-1: the structured billing term — a day count from the fixed
+   * BILLING_TERM_OPTIONS list (due-on-delivery / Net 7 / 15 / 30). This is
+   * the value due dates and (from P6-2) aging are computed from. The
+   * free-text `billingTerm` above stays as a display note only and is never
+   * parsed for dates. Null/absent = no structured term set, so invoices
+   * for the customer carry no due date and can never derive "Overdue".
+   */
+  billingTermDays?: number | null;
   notes?: string;
   createdFromReceivingId?: string;
   finalizedAt?: string;
@@ -356,18 +365,64 @@ export interface ReturnRecord {
   createdAt: string;
 }
 
+/**
+ * Phase 6 P6-1: billing terms are a FIXED LIST, stored as a day count on
+ * the customer (`Customer.billingTermDays`). The day count is data — due
+ * dates are computed as anchor + days for any entry, never by branching on
+ * which term it is. Jerwin can extend the list later by adding an entry.
+ */
+export const BILLING_TERM_OPTIONS = [
+  { days: 0, label: "Due on delivery" },
+  { days: 7, label: "Net 7" },
+  { days: 15, label: "Net 15" },
+  { days: 30, label: "Net 30" }
+] as const;
+
+export type BillingTermDays = (typeof BILLING_TERM_OPTIONS)[number]["days"];
+
+export function isBillingTermDays(value: unknown): value is BillingTermDays {
+  return typeof value === "number" && BILLING_TERM_OPTIONS.some((option) => option.days === value);
+}
+
+export function billingTermLabel(days: number | null | undefined): string | undefined {
+  if (days == null) return undefined;
+  return BILLING_TERM_OPTIONS.find((option) => option.days === days)?.label ?? `Net ${days}`;
+}
+
+/**
+ * Invoice statuses. "Draft" and "Issued" are the stored WORKFLOW states
+ * (plus "Void", the stored terminal state set by the void endpoint).
+ * "Paid", "Partially Paid" and "Overdue" are DERIVED at read time by
+ * LogisticsService.deriveBillingInvoice from live payments + dueDate —
+ * they are never stored. Keeping the derivation in one place is what makes
+ * list, detail and statement agree.
+ */
+export type BillingInvoiceStatus = "Draft" | "Issued" | "Partially Paid" | "Paid" | "Overdue" | "Void";
+
 export interface BillingInvoice {
   id: string;
   invoiceNumber: string;
   customerId: string;
   customerName: string;
   packageIds: string[];
+  /**
+   * CREATION SNAPSHOTS on the persisted record: the amounts computed from
+   * the packages and payments at the moment the invoice was created. They
+   * go stale the moment a later payment lands, so no read path may present
+   * them as current — every read (list, detail, create response, void
+   * response, statement) returns deriveBillingInvoice's live values in
+   * these fields instead. The snapshots survive only so the stored record
+   * shows what the invoice said when it was issued.
+   */
   amountDue: number;
   amountPaid: number;
   balance: number;
   dueRule: string;
-  status: "Draft" | "Issued" | "Paid" | "Overdue";
+  status: BillingInvoiceStatus;
+  /** ISO date the invoice falls due (anchor delivery date + term days); absent when the customer has no structured term. */
+  dueDate?: string;
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface StaffUserRecord {

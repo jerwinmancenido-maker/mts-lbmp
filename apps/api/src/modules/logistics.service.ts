@@ -13,7 +13,7 @@ import {
   type PaymentStatus,
   type TripStatus
 } from "@mts-lbmp/shared";
-import { renderDeliveryReceipt, renderLoadingManifest, renderQrLabel, renderReceivingDocument, renderReceivingSlip, summarizePrinterDiagnostic, toEscPosTextBytes, type PrinterDiagnosticCheck } from "@mts-lbmp/printing";
+import { renderBillingStatement, renderDeliveryReceipt, renderLoadingManifest, renderQrLabel, renderReceivingDocument, renderReceivingSlip, summarizePrinterDiagnostic, toEscPosTextBytes, type PrinterDiagnosticCheck } from "@mts-lbmp/printing";
 import { hashSecret, signAuthToken, verifySecret } from "./security.js";
 import { deviceLabelFromUserAgent } from "./device-label.js";
 import { createStateStore, type LoadedServiceState, type ServiceState, type StateStore } from "./state-store.js";
@@ -47,6 +47,7 @@ import type {
   Trip,
   TruckRecord
 } from "./logistics.types.js";
+import { billingTermLabel, isBillingTermDays } from "./logistics.types.js";
 
 function id(prefix: string) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
@@ -1011,18 +1012,81 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       .reverse();
   }
 
+  /**
+   * Phase 6 P6-1 — THE one invoice derivation. Every read path (list,
+   * detail, create/void responses, the printed statement) passes through
+   * here so the numbers can never disagree between screens again.
+   *
+   * Live truth comes from packages + payments, never from the invoice's
+   * stored snapshot fields: amountDue = Σ current package prices on the
+   * invoice, amountPaid = Σ payments against those packages, balance =
+   * max(due − paid, 0). Status: the stored workflow state is Draft/Issued
+   * (or Void); Paid / Partially Paid / Overdue are derived —
+   *   Void            → Void (terminal; amounts still shown live)
+   *   balance = 0 and amountDue > 0 → Paid
+   *   past dueDate (Manila calendar: the due date itself is not yet
+   *   overdue) with a balance → Overdue
+   *   some payment collected → Partially Paid
+   *   otherwise the stored Draft/Issued.
+   */
+  private deriveBillingInvoice(invoice: BillingInvoice, now: Date = new Date()): BillingInvoice {
+    const packageIdSet = new Set(invoice.packageIds);
+    const amountDue = invoice.packageIds.reduce((sum, packageId) => {
+      const cargo = this.packages.find((pkg) => pkg.id === packageId);
+      return sum + Number(cargo?.price ?? 0);
+    }, 0);
+    const amountPaid = this.payments
+      .filter((payment) => packageIdSet.has(payment.cargoPackageId))
+      .reduce((sum, payment) => sum + payment.amountPaid, 0);
+    const balance = Math.max(amountDue - amountPaid, 0);
+    let status: BillingInvoice["status"];
+    if (invoice.status === "Void") {
+      status = "Void";
+    } else if (amountDue > 0 && balance <= 0) {
+      status = "Paid";
+    } else if (invoice.dueDate && balance > 0 && this.businessDateKey(now) > this.businessDateKey(invoice.dueDate)) {
+      status = "Overdue";
+    } else if (amountPaid > 0 && balance > 0) {
+      status = "Partially Paid";
+    } else {
+      status = invoice.status === "Draft" ? "Draft" : "Issued";
+    }
+    return { ...invoice, amountDue, amountPaid, balance, status };
+  }
+
+  private findBillingInvoice(invoiceId: string) {
+    const invoice = this.billingInvoices.find((entry) => entry.id === invoiceId || entry.invoiceNumber === invoiceId);
+    if (!invoice) throw new NotFoundException("Billing invoice not found");
+    return invoice;
+  }
+
+  /** Branch rule for one invoice (P5-3): visible when any of its packages belongs to the caller's branches; a packageless invoice is unattributed and stays visible. */
+  private billingInvoiceVisibleTo(user: AuthContext | undefined, invoice: BillingInvoice): boolean {
+    const branchNames = invoice.packageIds.flatMap((packageId) => {
+      const cargo = this.packages.find((pkg) => pkg.id === packageId);
+      return [cargo?.handlingBranchName, cargo?.destination];
+    });
+    return this.branchVisibleTo(user, branchNames);
+  }
+
   listBillingInvoices(user?: AuthContext) {
     // Phase 5 P5-3 branch scoping via the invoice's packages: an invoice
     // is visible when any package on it belongs to the caller's branches.
+    // Phase 6 P6-1: amounts/status are the LIVE derivation, not snapshots.
     return [...this.billingInvoices]
-      .filter((invoice) => {
-        const branchNames = invoice.packageIds.flatMap((packageId) => {
-          const cargo = this.packages.find((pkg) => pkg.id === packageId);
-          return [cargo?.handlingBranchName, cargo?.destination];
-        });
-        return this.branchVisibleTo(user, branchNames);
-      })
-      .reverse();
+      .filter((invoice) => this.billingInvoiceVisibleTo(user, invoice))
+      .reverse()
+      .map((invoice) => this.deriveBillingInvoice(invoice));
+  }
+
+  getBillingInvoice(invoiceId: string, user?: AuthContext) {
+    const invoice = this.findBillingInvoice(invoiceId);
+    // Detail reads follow the P5-3 existence-hiding rule: an invoice
+    // outside the caller's branches answers exactly like a missing one.
+    if (!this.billingInvoiceVisibleTo(user, invoice)) {
+      throw new NotFoundException("Billing invoice not found");
+    }
+    return this.deriveBillingInvoice(invoice);
   }
 
   listAuditLogs(query: ListQuery = {}) {
@@ -1783,7 +1847,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return thread;
   }
 
-  createCustomer(input: { businessName: string; tin?: string; companyPhone?: string; contactPerson?: string; contactRole?: string; contactEmail?: string; contactIsPrimary?: boolean; phone?: string; address?: string; billingAddress?: string; shippingAddress?: string; billingTerm?: string }) {
+  createCustomer(input: { businessName: string; tin?: string; companyPhone?: string; contactPerson?: string; contactRole?: string; contactEmail?: string; contactIsPrimary?: boolean; phone?: string; address?: string; billingAddress?: string; shippingAddress?: string; billingTerm?: string; billingTermDays?: number | null }) {
     const customer: Customer = {
       id: id("cust"),
       businessName: input.businessName,
@@ -1796,7 +1860,8 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       billingAddress: input.billingAddress,
       shippingAddress: input.shippingAddress,
       contacts: buildPrimaryContact(input),
-      billingTerm: input.billingTerm ?? "Custom"
+      billingTerm: input.billingTerm ?? "Custom",
+      billingTermDays: this.normalizeBillingTermDays(input.billingTermDays) ?? null
     };
     this.customers.push(customer);
     this.audit("customers.create", "Customer", customer.id);
@@ -1837,7 +1902,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return customer;
   }
 
-  updateCustomer(customerId: string, input: { businessName?: string; tin?: string; companyPhone?: string; contactPerson?: string; phone?: string; address?: string; billingAddress?: string; shippingAddress?: string; billingTerm?: string; status?: Customer["status"] }) {
+  updateCustomer(customerId: string, input: { businessName?: string; tin?: string; companyPhone?: string; contactPerson?: string; phone?: string; address?: string; billingAddress?: string; shippingAddress?: string; billingTerm?: string; billingTermDays?: number | null; status?: Customer["status"] }) {
     const customer = this.findCustomer(customerId);
     if (input.businessName !== undefined) customer.businessName = input.businessName.trim() || customer.businessName;
     if (input.tin !== undefined) customer.tin = input.tin.trim() || undefined;
@@ -1848,18 +1913,21 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     if (input.billingAddress !== undefined) customer.billingAddress = input.billingAddress.trim() || undefined;
     if (input.shippingAddress !== undefined) customer.shippingAddress = input.shippingAddress.trim() || undefined;
     if (input.billingTerm !== undefined) customer.billingTerm = input.billingTerm.trim() || "Custom";
+    if (input.billingTermDays !== undefined) customer.billingTermDays = this.normalizeBillingTermDays(input.billingTermDays) ?? null;
     if (input.status !== undefined) customer.status = input.status;
     this.audit("customers.update", "Customer", customer.id);
     this.saveData();
     return customer;
   }
 
-  finalizeCustomer(customerId: string, input: { businessName?: string; contactPerson?: string; phone?: string; billingTerm?: string }) {
+  finalizeCustomer(customerId: string, input: { businessName?: string; contactPerson?: string; phone?: string; billingTerm?: string; billingTermDays?: number | null }) {
     const customer = this.findCustomer(customerId);
     customer.businessName = input.businessName?.trim() || customer.businessName;
     customer.contactPerson = input.contactPerson?.trim() || customer.contactPerson;
     customer.phone = input.phone?.trim() || customer.phone;
     customer.billingTerm = input.billingTerm?.trim() || "Custom";
+    const termDays = this.normalizeBillingTermDays(input.billingTermDays);
+    if (termDays !== undefined) customer.billingTermDays = termDays;
     customer.status = "Active";
     customer.finalizedAt = new Date().toISOString();
     customer.finalizedBy = "owner";
@@ -3233,12 +3301,65 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return expense;
   }
 
-  createBillingInvoice(input: { customerId: string; packageIds?: string[]; dueRule?: string }) {
+  /** Fixed-list validation (P6-1): a term is a day count from BILLING_TERM_OPTIONS, or null to clear it. Anything else is refused, never guessed. */
+  private normalizeBillingTermDays(value: number | null | undefined): number | null | undefined {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    if (!isBillingTermDays(value)) {
+      throw new BadRequestException("Billing term must be one of the fixed terms: Due on delivery (0 days), Net 7, Net 15 or Net 30.");
+    }
+    return value;
+  }
+
+  /** The non-Void invoice already holding this package, if any — the double-billing guard's lookup. Void invoices free their packages. */
+  private openInvoiceForPackage(packageId: string) {
+    return this.billingInvoices.find((invoice) => invoice.status !== "Void" && invoice.packageIds.includes(packageId));
+  }
+
+  private addDaysToBusinessDateKey(dateKey: string, days: number): string {
+    const [year = 1970, month = 1, day = 1] = dateKey.split("-").map(Number);
+    return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+  }
+
+  createBillingInvoice(input: { customerId: string; packageIds?: string[]; dueRule?: string; billingTermDays?: number | null }) {
     const customer = this.findCustomer(input.customerId);
-    const packageIds = input.packageIds?.length
-      ? input.packageIds
-      : this.packages.filter((pkg) => pkg.customerId === customer.id || pkg.customerName === customer.businessName).map((pkg) => pkg.id);
-    const invoicePackages = packageIds.map((packageId) => this.findPackage(packageId));
+    const termDaysInput = this.normalizeBillingTermDays(input.billingTermDays);
+    const effectiveTermDays = termDaysInput !== undefined ? termDaysInput : customer.billingTermDays ?? null;
+
+    // Phase 6 P6-1 — the billable set is DEFINED, not "everything":
+    // default = the customer's DELIVERED + PRICED packages that are not
+    // already on another open (non-Void) invoice, matched by customerId
+    // (the old name-string fallback match is gone — a rename used to be
+    // able to pull another customer's packages onto an invoice).
+    let invoicePackages: CargoPackage[];
+    if (input.packageIds?.length) {
+      // An explicit list stays allowed (staff may bill a specific set),
+      // but the double-billing guard still applies and names the conflict.
+      const uniqueIds = [...new Set(input.packageIds)];
+      invoicePackages = uniqueIds.map((packageId) => {
+        const cargo = this.findPackage(packageId);
+        if (cargo.customerId !== customer.id) {
+          throw new BadRequestException(`Package ${cargo.packageNumber} belongs to ${cargo.customerName}, not ${customer.businessName}. It cannot be added to this invoice.`);
+        }
+        const conflict = this.openInvoiceForPackage(cargo.id);
+        if (conflict) {
+          throw new BadRequestException(`Package ${cargo.packageNumber} is already on open invoice ${conflict.invoiceNumber}. Void that invoice first if this package must be re-billed.`);
+        }
+        return cargo;
+      });
+    } else {
+      invoicePackages = this.packages.filter(
+        (pkg) =>
+          pkg.customerId === customer.id &&
+          pkg.status === "Delivered" &&
+          pkg.price != null &&
+          !this.openInvoiceForPackage(pkg.id)
+      );
+      if (!invoicePackages.length) {
+        throw new BadRequestException(`No billable packages for ${customer.businessName}: billing covers delivered, priced packages that are not already on an open invoice.`);
+      }
+    }
+
     const amountDue = invoicePackages.reduce((sum, pkg) => sum + Number(pkg.price ?? 0), 0);
     const packageIdSet = new Set(invoicePackages.map((pkg) => pkg.id));
     const amountPaid = this.payments
@@ -3246,23 +3367,60 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       .reduce((sum, payment) => sum + payment.amountPaid, 0);
     const balance = Math.max(amountDue - amountPaid, 0);
     const now = new Date();
+
+    // Due date: term days anchored on the LATEST delivery date among the
+    // invoiced packages (the delivery record's creation time IS its
+    // delivery time in this model), falling back to the creation date
+    // when no package has a delivery record. Term 0 (Due on delivery)
+    // lands exactly on the anchor date. No structured term → no due date.
+    let dueDate: string | undefined;
+    if (effectiveTermDays != null) {
+      const deliveredTimes = invoicePackages
+        .map((pkg) => [...this.deliveries].reverse().find((entry) => entry.cargoPackageId === pkg.id && entry.status === "Delivered")?.createdAt)
+        .filter((value): value is string => Boolean(value))
+        .map((value) => new Date(value).getTime());
+      const anchor = deliveredTimes.length ? new Date(Math.max(...deliveredTimes)) : now;
+      dueDate = `${this.addDaysToBusinessDateKey(this.businessDateKey(anchor), effectiveTermDays)}T00:00:00.000+08:00`;
+    }
+
     const invoice: BillingInvoice = {
       id: id("bill"),
       invoiceNumber: this.nextDocumentNumber("BILL", now),
       customerId: customer.id,
       customerName: customer.businessName,
       packageIds: invoicePackages.map((pkg) => pkg.id),
+      // Creation snapshots — read paths replace these with the live
+      // derivation (see the BillingInvoice type note).
       amountDue,
       amountPaid,
       balance,
-      dueRule: input.dueRule?.trim() || customer.billingTerm || "Not set",
-      status: balance <= 0 ? "Paid" : "Issued",
-      createdAt: now.toISOString()
+      dueRule: input.dueRule?.trim() || billingTermLabel(effectiveTermDays) || customer.billingTerm || "Not set",
+      // Stored workflow state is Issued; Paid/Partially Paid/Overdue are
+      // derived at read time, so the create response derives too.
+      status: "Issued",
+      dueDate,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString()
     };
     this.billingInvoices.push(invoice);
     this.audit("billing.invoice.create", "BillingInvoice", invoice.id, invoice.invoiceNumber);
     this.saveData();
-    return invoice;
+    return this.deriveBillingInvoice(invoice);
+  }
+
+  voidBillingInvoice(invoiceId: string, user?: AuthContext, input: { reason?: string } = {}) {
+    const invoice = this.findBillingInvoice(invoiceId);
+    if (!this.billingInvoiceVisibleTo(user, invoice)) {
+      throw new NotFoundException("Billing invoice not found");
+    }
+    // Voiding an already-Void invoice is a no-op success — the desired
+    // end state is already true.
+    if (invoice.status === "Void") return this.deriveBillingInvoice(invoice);
+    invoice.status = "Void";
+    invoice.updatedAt = new Date().toISOString();
+    this.audit("billing.invoice.void", "BillingInvoice", invoice.id, input.reason?.trim() || invoice.invoiceNumber);
+    this.saveData();
+    return this.deriveBillingInvoice(invoice);
   }
 
   approveExpense(expenseId: string) {
@@ -3422,6 +3580,57 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         documentNumber: `DR-${cargo.packageNumber}`,
         relatedEntityType: "CargoPackage",
         relatedEntityId: cargo.id,
+        layout: "80mm"
+      }
+    };
+  }
+
+  renderBillingStatement(invoiceId: string, user?: AuthContext): RenderedDocument {
+    const invoice = this.findBillingInvoice(invoiceId);
+    if (!this.billingInvoiceVisibleTo(user, invoice)) {
+      throw new NotFoundException("Billing invoice not found");
+    }
+    // The statement is rendered from the invoice's ACTUAL package list —
+    // every package on it, with live per-package paid/balance — through
+    // the same derivation the screens use (P6-1; the old client-side
+    // statement silently listed only the customer's 8 most recent
+    // packages while its totals covered all of them).
+    const derived = this.deriveBillingInvoice(invoice);
+    const copy = this.peekPrintCopy(invoice.invoiceNumber);
+    const text = renderBillingStatement({
+      invoiceNumber: invoice.invoiceNumber,
+      customerName: invoice.customerName,
+      status: derived.status,
+      dueRule: invoice.dueRule,
+      dueDate: invoice.dueDate ? this.businessDateKey(invoice.dueDate) : undefined,
+      packages: invoice.packageIds.map((packageId) => {
+        const cargo = this.packages.find((pkg) => pkg.id === packageId);
+        const paid = this.payments
+          .filter((payment) => payment.cargoPackageId === packageId)
+          .reduce((sum, payment) => sum + payment.amountPaid, 0);
+        const price = Number(cargo?.price ?? 0);
+        return {
+          packageNumber: cargo?.packageNumber ?? packageId,
+          description: cargo?.description ?? "Package",
+          quantity: cargo?.quantity,
+          unit: cargo?.unit,
+          price: cargo?.price ?? null,
+          amountPaid: paid,
+          balance: Math.max(price - paid, 0)
+        };
+      }),
+      amountDue: derived.amountDue,
+      amountPaid: derived.amountPaid,
+      balance: derived.balance,
+      copyLine: `${copy.action} ${copy.at} / Copy ${copy.copyNumber}`
+    });
+    return {
+      text,
+      print: {
+        documentType: "Billing Statement",
+        documentNumber: invoice.invoiceNumber,
+        relatedEntityType: "BillingInvoice",
+        relatedEntityId: invoice.id,
         layout: "80mm"
       }
     };
@@ -3735,7 +3944,13 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     });
     this.expenses = data.expenses ?? [];
     this.returnRecords = data.returnRecords ?? [];
-    this.billingInvoices = data.billingInvoices ?? [];
+    // Records persisted before P6-1 have no dueDate/updatedAt; updatedAt
+    // falls back to the creation time so every loaded invoice satisfies
+    // the current shape.
+    this.billingInvoices = (data.billingInvoices ?? []).map((invoice) => ({
+      ...invoice,
+      updatedAt: invoice.updatedAt ?? invoice.createdAt
+    }));
     this.notifications = data.notifications ?? [];
     this.auditLogs = data.auditLogs ?? [];
     this.descriptionBarcodes = data.descriptionBarcodes ?? [];

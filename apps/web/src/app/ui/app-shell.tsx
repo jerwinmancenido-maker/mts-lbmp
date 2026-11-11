@@ -38,6 +38,7 @@ import { setPhotoAuditUser, setPhotoUploadContext, takeNativeCameraPhoto, upload
 import type { PrinterDiagnosticCheck } from "@mts-lbmp/printing";
 import { printNativeText, runPrinterDiagnostic } from "./native-printer";
 import type { AuditLog, BillingInvoice, BootstrapData, Branch, CargoPackage, DashboardData, ExpenseRecord, HardwareTestRecord, OperationChatThread, PaymentRecord, PrintDocumentMeta, ProductMaster, RenderedDocumentResponse, Trip } from "./types";
+import { BILLING_TERM_OPTIONS } from "./types";
 
 type Tab =
   | "dashboard"
@@ -69,6 +70,7 @@ type ModuleCacheData = {
   auditLogs?: AuditLog[];
   hardwareTests?: HardwareTestRecord[];
   operationChats?: OperationChatThread[];
+  billingInvoices?: BillingInvoice[];
 };
 
 type SyncState = "Online" | "Refreshing" | "Cached" | "Offline" | "Pending sync" | "Sync failed" | "Syncing";
@@ -783,6 +785,7 @@ export function AppShell() {
   const [productMasters, setProductMasters] = useState<ProductMaster[]>([]);
   const [trips, setTrips] = useState<Trip[]>([]);
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
+  const [billingInvoices, setBillingInvoices] = useState<BillingInvoice[]>([]);
   const [expenses, setExpenses] = useState<ExpenseRecord[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [hardwareTests, setHardwareTests] = useState<HardwareTestRecord[]>([]);
@@ -1362,6 +1365,7 @@ export function AppShell() {
     if (data.auditLogs) setAuditLogs(data.auditLogs);
     if (data.hardwareTests) setHardwareTests(data.hardwareTests);
     if (data.operationChats) setOperationChats(data.operationChats);
+    if (data.billingInvoices) setBillingInvoices(data.billingInvoices);
   }
 
   async function refreshCurrentTabData(tab = activeTab) {
@@ -1429,11 +1433,14 @@ export function AppShell() {
     }
 
     if (tab === "payments") {
-      const [cargo, paymentList] = await Promise.all([
+      const [cargo, paymentList, invoiceList] = await Promise.all([
         apiGet<CargoPackage[]>(apiQuery("/packages", { ...params, limit: 500 })),
-        apiGet<PaymentRecord[]>(apiQuery("/payments", { ...params, limit: 500 }))
+        apiGet<PaymentRecord[]>(apiQuery("/payments", { ...params, limit: 500 })),
+        // Billing reads sit behind customers.manage; roles without it
+        // simply see an empty billing list instead of failing the tab.
+        apiGet<BillingInvoice[]>("/billing/invoices").catch(() => [] as BillingInvoice[])
       ]);
-      const data = { packages: cargo, payments: paymentList };
+      const data = { packages: cargo, payments: paymentList, billingInvoices: invoiceList };
       applyModuleData(data);
       await writeCachedValue(cacheKey, data, { source: "server", userId: activeUser.id, branch, module: tab });
       setSyncState("Online");
@@ -1453,11 +1460,12 @@ export function AppShell() {
     }
 
     if (tab === "customer") {
-      const [cargo, paymentList] = await Promise.all([
+      const [cargo, paymentList, invoiceList] = await Promise.all([
         apiGet<CargoPackage[]>(apiQuery("/packages", { ...params, limit: 500 })),
-        apiGet<PaymentRecord[]>(apiQuery("/payments", { ...params, limit: 500 }))
+        apiGet<PaymentRecord[]>(apiQuery("/payments", { ...params, limit: 500 })),
+        apiGet<BillingInvoice[]>("/billing/invoices").catch(() => [] as BillingInvoice[])
       ]);
-      const data = { packages: cargo, payments: paymentList };
+      const data = { packages: cargo, payments: paymentList, billingInvoices: invoiceList };
       applyModuleData(data);
       await writeCachedValue(cacheKey, data, { source: "server", userId: activeUser.id, branch, module: tab });
       setSyncState("Online");
@@ -2191,8 +2199,11 @@ export function AppShell() {
               packages={paymentPackages}
               payments={roleScopedPayments}
               unpaidPackages={unpaidResponsibilityPackages}
+              invoices={billingInvoices}
               methods={bootstrap?.defaultPaymentMethods ?? []}
               activeUser={activeUser}
+              setReceiptPreview={setReceiptPreview}
+              setReceiptPrintMeta={setReceiptPrintMeta}
               onAction={runAction}
               queueablePost={queueablePost}
             />
@@ -2205,7 +2216,9 @@ export function AppShell() {
               customers={bootstrap?.customers ?? []}
               packages={searchedPackages}
               payments={roleScopedPayments}
+              invoices={billingInvoices}
               setReceiptPreview={setReceiptPreview}
+              setReceiptPrintMeta={setReceiptPrintMeta}
               onAction={runAction}
             />
           )}
@@ -9507,20 +9520,135 @@ function Delivery({
   );
 }
 
+/**
+ * Phase 6 P6-1: the invoice list + detail used by BOTH billing surfaces
+ * (Payments → Billing and the customer view). Amounts and status come from
+ * the API's live derivation — this component never recomputes money from
+ * snapshots. The statement reprint fetches the server-rendered document
+ * built from the invoice's actual package list.
+ */
+function InvoiceListAndDetail({
+  invoices,
+  packages,
+  payments,
+  onAction,
+  setReceiptPreview,
+  setReceiptPrintMeta,
+  customerId
+}: {
+  invoices: BillingInvoice[];
+  packages: CargoPackage[];
+  payments: PaymentRecord[];
+  onAction: <T>(label: string, action: () => Promise<T>) => Promise<void>;
+  setReceiptPreview: (value: string) => void;
+  setReceiptPrintMeta: (value: PrintDocumentMeta | null) => void;
+  customerId?: string;
+}) {
+  const [selectedInvoiceId, setSelectedInvoiceId] = useState("");
+  const visibleInvoices = customerId ? invoices.filter((invoice) => invoice.customerId === customerId) : invoices;
+  const selectedInvoice = visibleInvoices.find((invoice) => invoice.id === selectedInvoiceId);
+  const paymentTotalsByPackage = payments.reduce<Record<string, number>>((totals, payment) => {
+    totals[payment.cargoPackageId] = (totals[payment.cargoPackageId] ?? 0) + payment.amountPaid;
+    return totals;
+  }, {});
+  const formatDueDate = (invoice: BillingInvoice) => (invoice.dueDate ? invoice.dueDate.slice(0, 10) : "Not set");
+
+  async function printStatement(invoice: BillingInvoice) {
+    const result = await apiGet<RenderedDocumentResponse>(`/billing/invoices/${invoice.id}/statement`);
+    setReceiptPreview(result.text);
+    setReceiptPrintMeta(result.print);
+  }
+
+  async function voidInvoice(invoice: BillingInvoice) {
+    if (!window.confirm(`Void invoice ${invoice.invoiceNumber}? Its packages become billable again. This cannot be undone from the app.`)) return;
+    await apiPost(`/billing/invoices/${invoice.id}/void`, { reason: "Voided from invoice view" });
+    setSelectedInvoiceId("");
+  }
+
+  return (
+    <div className="stack">
+      <div className="list compactList">
+        {visibleInvoices.map((invoice) => (
+          <button className="row tappableRow compactDataRow" key={invoice.id} onClick={() => setSelectedInvoiceId(invoice.id === selectedInvoiceId ? "" : invoice.id)}>
+            <div>
+              <strong>{invoice.invoiceNumber}</strong>
+              <p>{invoice.customerName}</p>
+              <p className="muted">Due {formatDueDate(invoice)} / Balance PHP {invoice.balance.toLocaleString()}</p>
+            </div>
+            <div className="compactRowMeta">
+              <span className={invoice.status === "Overdue" || invoice.status === "Void" ? "badge warning" : "badge"}>{invoice.status}</span>
+              <span className="badge">PHP {invoice.amountDue.toLocaleString()}</span>
+            </div>
+          </button>
+        ))}
+        {!visibleInvoices.length && <p className="muted">No billing invoices yet. Create one from a customer account — it covers that customer&apos;s delivered, priced packages that are not already on an open invoice.</p>}
+      </div>
+      {selectedInvoice && (
+        <section className="subPanel">
+          <div className="sectionHeader">
+            <div>
+              <h4>{selectedInvoice.invoiceNumber}</h4>
+              <p className="muted">{selectedInvoice.customerName} / {selectedInvoice.dueRule}</p>
+            </div>
+            <button className="smallButton" onClick={() => setSelectedInvoiceId("")}>Close</button>
+          </div>
+          <div className="detailGrid compactDetailGrid paymentSummaryGrid">
+            <div><span>Status</span><strong>{selectedInvoice.status}</strong></div>
+            <div><span>Due Date</span><strong>{formatDueDate(selectedInvoice)}</strong></div>
+            <div><span>Amount Due</span><strong>PHP {selectedInvoice.amountDue.toLocaleString()}</strong></div>
+            <div><span>Amount Paid</span><strong>PHP {selectedInvoice.amountPaid.toLocaleString()}</strong></div>
+            <div><span>Balance</span><strong>PHP {selectedInvoice.balance.toLocaleString()}</strong></div>
+            <div><span>Packages</span><strong>{selectedInvoice.packageIds.length}</strong></div>
+          </div>
+          <div className="list compactList">
+            {selectedInvoice.packageIds.map((packageId) => {
+              const pkg = packages.find((entry) => entry.id === packageId);
+              const paid = paymentTotalsByPackage[packageId] ?? 0;
+              const due = Number(pkg?.price ?? 0);
+              return (
+                <div className="row compactDataRow" key={packageId}>
+                  <div>
+                    <strong>{pkg?.packageNumber ?? packageId}</strong>
+                    <p>{pkg?.description ?? "Package"}</p>
+                    <p className="muted">Due PHP {due.toLocaleString()} / Paid PHP {paid.toLocaleString()} / Balance PHP {Math.max(due - paid, 0).toLocaleString()}</p>
+                  </div>
+                  <span className="badge">{pkg?.status ?? "Unknown"}</span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="buttonGrid two">
+            <button className="actionButton" onClick={() => onAction("Print billing statement", () => printStatement(selectedInvoice))}>Print Statement</button>
+            {selectedInvoice.status !== "Void" && (
+              <button className="actionButton" onClick={() => onAction("Void billing invoice", () => voidInvoice(selectedInvoice))}>Void Invoice</button>
+            )}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
 function Payments({
   packages,
   payments,
   unpaidPackages,
+  invoices,
   methods,
   activeUser,
+  setReceiptPreview,
+  setReceiptPrintMeta,
   onAction,
   queueablePost
 }: {
   packages: CargoPackage[];
   payments: PaymentRecord[];
   unpaidPackages: CargoPackage[];
+  invoices: BillingInvoice[];
   methods: string[];
   activeUser: OperatorUser;
+  setReceiptPreview: (value: string) => void;
+  setReceiptPrintMeta: (value: PrintDocumentMeta | null) => void;
   onAction: <T>(label: string, action: () => Promise<T>) => Promise<void>;
   queueablePost: QueueablePost;
 }) {
@@ -9784,12 +9912,19 @@ function Payments({
         <section className="panel">
           <div className="sectionHeader">
             <div>
-              <h3>Billing</h3>
-              <p className="muted">Billing statements and reminders are managed from the Customers module so balances stay tied to the customer account.</p>
+              <h3>Billing Invoices</h3>
+              <p className="muted">Live invoice amounts and statuses, computed from packages and payments. Tap an invoice for its packages, statement, or void.</p>
             </div>
             <button className="smallButton" onClick={() => setMode("home")}>Back</button>
           </div>
-          <p className="notice">Open Customers, select a customer, then use Billing Invoice or Notify Owner / SMS Soon.</p>
+          <InvoiceListAndDetail
+            invoices={invoices}
+            packages={packages}
+            payments={payments}
+            onAction={onAction}
+            setReceiptPreview={setReceiptPreview}
+            setReceiptPrintMeta={setReceiptPrintMeta}
+          />
         </section>
       )}
     </div>
@@ -10407,13 +10542,17 @@ function CustomerPortal({
   customers,
   packages,
   payments,
+  invoices,
   setReceiptPreview,
+  setReceiptPrintMeta,
   onAction
 }: {
   customers: BootstrapData["customers"];
   packages: CargoPackage[];
   payments: PaymentRecord[];
+  invoices: BillingInvoice[];
   setReceiptPreview: (value: string) => void;
+  setReceiptPrintMeta: (value: PrintDocumentMeta | null) => void;
   onAction: <T>(label: string, action: () => Promise<T>) => Promise<void>;
 }) {
   const [mode, setMode] = useState<"home" | "list" | "messages">("home");
@@ -10460,11 +10599,17 @@ function CustomerPortal({
   const customerAmountPaid = selectedCustomerPackages.reduce((sum, pkg) => sum + (paymentTotalsByPackage[pkg.id] ?? 0), 0);
   const customerBalance = Math.max(customerAmountDue - customerAmountPaid, 0);
   const customerDeliveredUnpaid = selectedCustomerPackages.filter((pkg) => pkg.status === "Delivered" && Math.max(Number(pkg.price ?? 0) - (paymentTotalsByPackage[pkg.id] ?? 0), 0) > 0).length;
-  const customerDueDateLabel = selectedCustomer?.billingTerm?.toLowerCase().includes("30")
-    ? "30 days after delivery"
-    : selectedCustomer?.billingTerm?.toLowerCase().includes("upon")
-      ? "Upon delivery"
-      : selectedCustomer?.billingTerm ?? "Not set";
+  // Phase 6 P6-1: the due-date label comes from the STRUCTURED term
+  // (billingTermDays from the fixed list), never from substring-guessing
+  // the free-text note. No structured term → the note is shown as-is.
+  const customerTermOption = BILLING_TERM_OPTIONS.find((option) => option.days === selectedCustomer?.billingTermDays);
+  const customerDueDateLabel = !selectedCustomer
+    ? "Not set"
+    : customerTermOption
+      ? customerTermOption.days === 0
+        ? "Due on delivery"
+        : `${customerTermOption.label} after latest delivery`
+      : selectedCustomer.billingTerm ?? "Not set";
   const customerPaymentStatus = customerBalance <= 0 ? "Paid" : customerDeliveredUnpaid > 0 ? "Due / Follow up" : "Open";
   const customerBillingBranch = selectedCustomerPackages.find((pkg) => pkg.handlingBranchName)?.handlingBranchName ?? selectedCustomerPackages.find((pkg) => pkg.destination)?.destination ?? "Assigned branch";
   const visibleCustomers = customers
@@ -10550,38 +10695,29 @@ function CustomerPortal({
 
   async function generateBillingInvoice() {
     if (!selectedCustomer) return;
+    // Phase 6 P6-1: no package list is sent — the API's defined billable
+    // set (delivered + priced + not already on an open invoice) decides,
+    // with its double-billing guard. The preview is the SERVER-rendered
+    // statement built from the invoice's actual packages, so what prints
+    // is what the invoice says.
     const invoice = await apiPost<BillingInvoice>("/billing/invoices", {
-      customerId: selectedCustomer.id,
-      packageIds: selectedCustomerPackages.map((pkg) => pkg.id),
-      dueRule: customerDueDateLabel
+      customerId: selectedCustomer.id
     });
-    const lines = recentCustomerPackages.map((pkg, index) => {
-      const due = Number(pkg.price ?? 0);
-      const paid = paymentTotalsByPackage[pkg.id] ?? 0;
-      const balance = Math.max(due - paid, 0);
-      return `${index + 1}. ${pkg.packageNumber}
-${pkg.description}
-Due: PHP ${due.toLocaleString()} Paid: PHP ${paid.toLocaleString()}
-Bal: PHP ${balance.toLocaleString()}`;
-    }).join("\n");
-    setReceiptPreview(`MANCENIDO TRUCKING SERVICES
-BILLING STATEMENT
-${invoice.invoiceNumber}
---------------------------------
-Customer: ${selectedCustomer.businessName}
-Terms: ${selectedCustomer.billingTerm ?? "Not set"}
-Due Rule: ${invoice.dueRule}
-Status: ${invoice.status}
---------------------------------
-${lines || "No billable shipments."}
---------------------------------
-TOTAL DUE: PHP ${invoice.amountDue.toLocaleString()}
-PAID: PHP ${invoice.amountPaid.toLocaleString()}
-BALANCE: PHP ${invoice.balance.toLocaleString()}
---------------------------------
-Prepared By: LBMP
-Signature: ________________`);
+    const statement = await apiGet<RenderedDocumentResponse>(`/billing/invoices/${invoice.id}/statement`);
+    setReceiptPreview(statement.text);
+    setReceiptPrintMeta(statement.print);
     setStatus(`Billing invoice ${invoice.invoiceNumber} saved for ${selectedCustomer.businessName}.`);
+  }
+
+  async function saveBillingTermDays(value: string) {
+    if (!selectedCustomer) return;
+    const days = value === "" ? null : Number(value);
+    const option = BILLING_TERM_OPTIONS.find((entry) => entry.days === days);
+    await apiPatch(`/customers/${selectedCustomer.id}`, {
+      billingTermDays: days,
+      ...(option ? { billingTerm: option.label } : {})
+    });
+    setStatus(option ? `Billing term set to ${option.label}. New invoices will use it for their due date.` : "Billing term cleared. New invoices will have no due date.");
   }
 
   async function createBillingReminder() {
@@ -10719,18 +10855,49 @@ Signature: ________________`);
                 </div>
               </div>
               <div className="detailGrid compactDetailGrid paymentSummaryGrid">
-                <div><span>Terms</span><strong>{selectedCustomer.billingTerm ?? "Not set"}</strong></div>
+                <div><span>Terms</span><strong>{customerTermOption ? customerTermOption.label : selectedCustomer.billingTerm ?? "Not set"}</strong></div>
                 <div><span>Due Date Rule</span><strong>{customerDueDateLabel}</strong></div>
                 <div><span>Open Balance</span><strong>PHP {customerBalance.toLocaleString()}</strong></div>
                 <div><span>Status</span><strong>{customerPaymentStatus}</strong></div>
                 <div><span>Amount Due</span><strong>PHP {customerAmountDue.toLocaleString()}</strong></div>
                 <div><span>Amount Paid</span><strong>PHP {customerAmountPaid.toLocaleString()}</strong></div>
               </div>
+              <label>Billing Term
+                <select
+                  value={selectedCustomer.billingTermDays == null ? "" : String(selectedCustomer.billingTermDays)}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    void onAction("Save billing term", () => saveBillingTermDays(value));
+                  }}
+                >
+                  <option value="">Not set</option>
+                  {BILLING_TERM_OPTIONS.map((option) => (
+                    <option key={option.days} value={String(option.days)}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
               <div className="buttonGrid two">
                 <button className="actionButton" onClick={() => onAction("Create billing invoice", generateBillingInvoice)}>Billing Invoice</button>
                 <button className="primaryButton" disabled={customerBalance <= 0} onClick={() => onAction("Notify billing reminder", createBillingReminder)}>Notify Owner / SMS Soon</button>
               </div>
               <p className="muted">SMS is not sent yet. This prepares the reminder flow for future SMS API integration.</p>
+            </section>
+            <section className="subPanel">
+              <div className="sectionHeader">
+                <div>
+                  <h4>Billing Invoices</h4>
+                  <p className="muted">This customer&apos;s invoices with live amounts and statuses. Tap one for packages, statement, or void.</p>
+                </div>
+              </div>
+              <InvoiceListAndDetail
+                invoices={invoices}
+                packages={packages}
+                payments={payments}
+                onAction={onAction}
+                setReceiptPreview={setReceiptPreview}
+                setReceiptPrintMeta={setReceiptPrintMeta}
+                customerId={selectedCustomer.id}
+              />
             </section>
             <div className="list compactList">
               {(selectedCustomer.contacts ?? []).map((contact) => (

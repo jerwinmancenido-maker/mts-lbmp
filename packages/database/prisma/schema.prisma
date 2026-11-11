@@ -127,6 +127,7 @@ model Customer {
   tin                    String?
   companyPhone           String?
   billingTerm            String                @default("Custom")
+  billingTermDays        Int?
   status                 String                @default("Active")
   notes                  String?
   createdFromReceivingId String?
@@ -491,7 +492,9 @@ model BillingInvoice {
   balance       Decimal                 @db.Decimal(12, 2)
   dueRule       String
   status        String                  @default("Draft")
+  dueDate       DateTime?
   createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
   customer      Customer                @relation(fields: [customerId], references: [id])
   packages      BillingInvoicePackage[]
 }

@@ -1,0 +1,51 @@
+       MANCENIDO TRUCKING SERVICES
+            BILLING STATEMENT
+BILL-2026-11-000001
+------------------------------------------
+Customer: Fixture Customer
+Status: Partially Paid
+Terms: Net 15
+Due Date: 2026-11-27
+Items: 12
+1. Package: PKG-2026-11-000001
+Desc: 1 pcs Item 1
+Due/Paid/Bal: P1000/P400/P600
+2. Package: PKG-2026-11-000002
+Desc: 1 pcs Item 2
+Due/Paid/Bal: P1000/P0/P1000
+3. Package: PKG-2026-11-000003
+Desc: 1 pcs Item 3
+Due/Paid/Bal: P1000/P0/P1000
+4. Package: PKG-2026-11-000004
+Desc: 1 pcs Item 4
+Due/Paid/Bal: P1000/P0/P1000
+5. Package: PKG-2026-11-000005
+Desc: 1 pcs Item 5
+Due/Paid/Bal: P1000/P0/P1000
+6. Package: PKG-2026-11-000006
+Desc: 1 pcs Item 6
+Due/Paid/Bal: P1000/P0/P1000
+7. Package: PKG-2026-11-000007
+Desc: 1 pcs Item 7
+Due/Paid/Bal: P1000/P0/P1000
+8. Package: PKG-2026-11-000008
+Desc: 1 pcs Item 8
+Due/Paid/Bal: P1000/P0/P1000
+9. Package: PKG-2026-11-000009
+Desc: 1 pcs Item 9
+Due/Paid/Bal: P1000/P0/P1000
+10. Package: PKG-2026-11-000010
+Desc: 1 pcs Item 10
+Due/Paid/Bal: P1000/P0/P1000
+11. Package: PKG-2026-11-000011
+Desc: 1 pcs Item 11
+Due/Paid/Bal: P1000/P0/P1000
+12. Package: PKG-2026-11-000012
+Desc: 1 pcs Item 12
+Due/Paid/Bal: P1000/P0/P1000
+Amount Due: PHP 12000.00
+Amount Paid: PHP 400.00
+Balance: PHP 11600.00
+Copy: Copy 1
+------------------------------------------
+Signature: __________________

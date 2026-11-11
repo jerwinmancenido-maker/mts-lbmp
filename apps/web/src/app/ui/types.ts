@@ -38,7 +38,17 @@ export interface Customer {
     createdAt: string;
   }>;
   billingTerm?: string;
+  /** Phase 6 P6-1: structured term from the fixed list (0/7/15/30 days); the free-text billingTerm above is a display note only. */
+  billingTermDays?: number | null;
 }
+
+/** Phase 6 P6-1: the fixed billing-term list — day counts are data, labels are display. Mirrors the API's BILLING_TERM_OPTIONS. */
+export const BILLING_TERM_OPTIONS = [
+  { days: 0, label: "Due on delivery" },
+  { days: 7, label: "Net 7" },
+  { days: 15, label: "Net 15" },
+  { days: 30, label: "Net 30" }
+] as const;
 
 export interface ProductMaster {
   id: string;
@@ -182,12 +192,15 @@ export interface BillingInvoice {
   customerId: string;
   customerName: string;
   packageIds: string[];
+  /** Live-derived amounts from the API (packages + payments at read time) — never creation snapshots. */
   amountDue: number;
   amountPaid: number;
   balance: number;
   dueRule: string;
-  status: "Draft" | "Issued" | "Paid" | "Overdue";
+  status: "Draft" | "Issued" | "Partially Paid" | "Paid" | "Overdue" | "Void";
+  dueDate?: string;
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface AuditLog {

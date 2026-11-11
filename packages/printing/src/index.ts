@@ -307,6 +307,77 @@ export function renderQrLabel(input: { packageNumber: string; description: strin
   });
 }
 
+export interface BillingStatementPackageInput {
+  packageNumber: string;
+  description: string;
+  quantity?: number | null;
+  unit?: string | null;
+  price?: number | null;
+  amountPaid?: number | null;
+  balance?: number | null;
+}
+
+export interface BillingStatementInput {
+  invoiceNumber: string;
+  customerName: string;
+  status: string;
+  dueRule?: string | null;
+  /** Display date (YYYY-MM-DD) the invoice falls due; omitted when the customer has no structured term. */
+  dueDate?: string | null;
+  /** The invoice's ACTUAL package list — every package on the invoice, in invoice order. Never a "recent packages" subset. */
+  packages: BillingStatementPackageInput[];
+  amountDue: number;
+  amountPaid: number;
+  balance: number;
+  copyLine?: string;
+}
+
+/**
+ * Phase 6 P6-1: the billing statement as a first-class printed document.
+ * It is built from the invoice's own package list (all of them — the old
+ * client-side statement listed only the customer's 8 most recent packages
+ * while totalling all of them, so its lines never added up to its totals)
+ * and from the invoice's live derived amounts, so the paper a customer
+ * receives always matches what the screens show.
+ */
+export function renderBillingStatement(input: BillingStatementInput) {
+  // Compact money (no thousands separators, trailing .00 trimmed) keeps
+  // every line inside the 42-col render width like the other documents.
+  const compactMoney = (value: number) => {
+    const fixed = value.toFixed(2);
+    return fixed.endsWith(".00") ? fixed.slice(0, -3) : fixed;
+  };
+  const itemLines = input.packages.flatMap((cargo, index) => {
+    const quantity = `${cargo.quantity ?? 1} ${cargo.unit ?? "pcs"}`;
+    const due = Number(cargo.price ?? 0);
+    const paid = Number(cargo.amountPaid ?? 0);
+    const balance = cargo.balance != null ? Number(cargo.balance) : Math.max(due - paid, 0);
+    return [
+      { label: `${index + 1}. Package`, value: cargo.packageNumber },
+      { label: "Desc", value: `${quantity} ${cargo.description}` },
+      { label: "Due/Paid/Bal", value: `P${compactMoney(due)}/P${compactMoney(paid)}/P${compactMoney(balance)}` }
+    ];
+  });
+
+  return render80mmReceipt({
+    title: "BILLING STATEMENT",
+    documentNumber: input.invoiceNumber,
+    lines: [
+      { label: "Customer", value: input.customerName },
+      { label: "Status", value: input.status },
+      { label: "Terms", value: input.dueRule ?? "Not set" },
+      { label: "Due Date", value: input.dueDate ?? "Not set" },
+      { label: "Items", value: String(input.packages.length) },
+      ...itemLines,
+      { label: "Amount Due", value: `PHP ${input.amountDue.toFixed(2)}` },
+      { label: "Amount Paid", value: `PHP ${input.amountPaid.toFixed(2)}` },
+      { label: "Balance", value: `PHP ${input.balance.toFixed(2)}` },
+      ...(input.copyLine ? [{ label: "Copy", value: input.copyLine }] : [])
+    ],
+    footer: "Signature: __________________"
+  });
+}
+
 export function toEscPosTextBytes(text: string) {
   const encoder = new TextEncoder();
   const init = new Uint8Array([0x1b, 0x40]);
