@@ -44,6 +44,8 @@ body {
   background: var(--surface);
   color: var(--text);
   font-size: var(--font-body);
+  /* Design criteria #3: tabular figures so prices, quantities and totals align. */
+  font-variant-numeric: tabular-nums;
 }
 
 a {
@@ -4945,4 +4947,16 @@ textarea {
 .accountInfoGrid.receiveSavedSummary .settingTile {
   min-height: 44px;
   padding: 8px 10px;
+}
+
+/* Design criteria Part B: reduced motion renders the final state, no movement. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
