@@ -7463,7 +7463,7 @@ function Trips({
   const [truckOwnerName, setTruckOwnerName] = useState("");
   const [selectedPackage, setSelectedPackage] = useState("");
   const [selectedTripId, setSelectedTripId] = useState("");
-  const [tripStatusFilter, setTripStatusFilter] = useState<"Loading" | "Planned" | "Departed" | "Arrived" | "Cancelled">(
+  const [tripStatusFilter, setTripStatusFilter] = useState<"Loading" | "Planned" | "Departed" | "Arrived" | "Completed" | "Cancelled">(
     activeUserRole === "Receiving Staff" ? "Loading" : activeUserRole === "Delivery Staff" || activeUserRole === "Delivery Admin" ? "Departed" : "Loading"
   );
   const [tripListLimit, setTripListLimit] = useState(LIST_PAGE_SIZE);
@@ -7487,6 +7487,7 @@ function Trips({
     { key: "Planned", label: "Planned" },
     { key: "Departed", label: "Departed" },
     { key: "Arrived", label: "Arrived" },
+    { key: "Completed", label: "Completed" },
     { key: "Cancelled", label: "Cancelled" }
   ] as const;
   const tripMatchesStatusFilter = (trip: Trip, filter: typeof tripStatusFilter) => {
