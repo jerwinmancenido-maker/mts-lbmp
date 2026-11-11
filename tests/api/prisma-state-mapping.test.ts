@@ -174,7 +174,15 @@ function fixtureState(): ServiceState {
     notifications: [],
     auditLogs: [],
     descriptionBarcodes: [],
-    messages: [],
+    messages: [
+      {
+        id: "msg_1",
+        cargoPackageId: "pkg_1",
+        senderName: "Fixture Sender Name",
+        body: "Please handle with care",
+        createdAt: "2026-11-11T04:00:00.000Z"
+      }
+    ],
     operationChatThreads: [],
     hardwareTests: [],
     printLogs: [],
@@ -268,6 +276,26 @@ describe("Prisma state mapping", () => {
 
     const roundTripped = rowsToState(rows);
     expect(roundTripped.billingInvoices?.[0]).toEqual(invoice);
+  });
+
+  test("round-trips a package message with its sender name", () => {
+    const state = fixtureState();
+    const rows = stateToRows(state);
+
+    expect(rows.messages).toEqual([
+      expect.objectContaining({ id: "msg_1", senderId: null, senderName: "Fixture Sender Name" })
+    ]);
+
+    const roundTripped = rowsToState(rows);
+    expect(roundTripped.messages).toEqual(state.messages);
+  });
+
+  test("falls back to a placeholder for messages stored before senderName existed", () => {
+    const rows = stateToRows(fixtureState());
+    rows.messages[0]!.senderName = null;
+
+    const roundTripped = rowsToState(rows);
+    expect(roundTripped.messages?.[0]?.senderName).toBe("Unknown sender");
   });
 
   test("round-trips a receiving draft with Json fields untouched", () => {

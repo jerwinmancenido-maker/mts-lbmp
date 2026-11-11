@@ -422,6 +422,7 @@ export interface MessageRow {
   id: string;
   threadId: string;
   senderId: string | null;
+  senderName: string | null;
   body: string;
   createdAt: DateValue;
 }
@@ -552,11 +553,12 @@ export function stateToRows(state: ServiceState): PrismaStateRows {
       messages.push({
         id: message.id,
         threadId,
-        // Known mapping gap: Message has no senderName column and senderId
-        // must reference a User row, so the display name cannot be persisted
-        // in this schema. It is reported in the PR rather than encoded into
-        // another field.
+        // senderId must reference a User row and message senders are not
+        // necessarily users, so it stays null; the display name persists in
+        // the dedicated senderName column (Phase 2 step 4 — this closes
+        // known mapping gap #1 from PR #11).
         senderId: null,
+        senderName: message.senderName,
         body: message.body,
         createdAt: new Date(message.createdAt)
       });
@@ -1032,10 +1034,10 @@ export function rowsToState(rows: PrismaStateRows): LoadedServiceState {
       messages.push({
         id: message.id,
         cargoPackageId: thread.cargoPackageId,
-        // The sender display name is not representable in the current schema
-        // (see stateToRows); return a stable placeholder instead of leaking
-        // a database identifier into the UI.
-        senderName: "Unknown sender",
+        // Rows written before the senderName column existed load with a
+        // null name; keep the stable placeholder for those instead of
+        // leaking a database identifier into the UI.
+        senderName: message.senderName ?? "Unknown sender",
         body: message.body,
         createdAt: toIso(message.createdAt)
       });
