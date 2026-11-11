@@ -62,6 +62,10 @@ export function describeQueueRecord(record: OfflineQueueRecord): { label: string
     else label = "Delivery update";
   } else if (record.type === "receivingDraft") {
     label = record.method === "PATCH" ? "Receiving draft update" : "Receiving draft (new)";
+  } else if (record.type === "receivingFinalize") {
+    label = "Receiving finalize";
+  } else if (record.type === "tripCargo") {
+    label = path.endsWith("/unload") ? "Trip cargo unload" : "Trip cargo load";
   } else {
     label = "Queued action";
   }
@@ -69,6 +73,10 @@ export function describeQueueRecord(record: OfflineQueueRecord): { label: string
   const detailParts: string[] = [];
   const drNumber = bodyText(record.body, "customerDrNumber");
   if (drNumber) detailParts.push(`DR ${drNumber}`);
+  const packageNumber = bodyText(record.body, "packageNumber");
+  if (packageNumber) detailParts.push(packageNumber);
+  const tripNumber = bodyText(record.body, "tripNumber");
+  if (tripNumber) detailParts.push(`Trip ${tripNumber}`);
   const amount = bodyField(record.body, "amountPaid") ?? bodyField(record.body, "amount");
   if (typeof amount === "number" && Number.isFinite(amount) && amount > 0) {
     detailParts.push(`PHP ${amount.toLocaleString()}`);
@@ -149,8 +157,11 @@ export type QueueRecordSender = (
 export async function attemptQueueRecordSync(record: OfflineQueueRecord, send: QueueRecordSender): Promise<OfflineQueueRecord> {
   const attempted: OfflineQueueRecord = { ...record, status: "Syncing", attempts: record.attempts + 1, lastError: undefined };
   try {
-    await send(record.method, record.path, record.body, record.id);
-    return { ...attempted, status: "Synced" };
+    // B4: keep the server's response on the record. The receiving finalize
+    // flow needs the server-minted record (numbers are only assigned on
+    // replay) to finish the local finalize exactly like the online path.
+    const result = await send(record.method, record.path, record.body, record.id);
+    return { ...attempted, status: "Synced", result };
   } catch (error) {
     return {
       ...attempted,
