@@ -16,7 +16,7 @@ import {
 import { renderDeliveryReceipt, renderLoadingManifest, renderQrLabel, renderReceivingDocument, renderReceivingSlip, summarizePrinterDiagnostic, toEscPosTextBytes, type PrinterDiagnosticCheck } from "@mts-lbmp/printing";
 import { hashSecret, signAuthToken, verifySecret } from "./security.js";
 import { createStateStore, type LoadedServiceState, type ServiceState, type StateStore } from "./state-store.js";
-import { resolveSmokeSeedConfig, upsertSmokeAccounts } from "./smoke-seed.js";
+import { buildDemoCredentialOverlay, resolveSmokeSeedConfig, upsertSmokeAccounts, type DemoCredentialOverlayEntry } from "./smoke-seed.js";
 import type {
   CargoPackage,
   Customer,
@@ -151,15 +151,31 @@ function buildPrimaryContact(input: { contactPerson?: string; phone?: string; ad
   ];
 }
 
-const demoPasswordHash = hashSecret("password", "mts-lbmp-demo-password-salt");
+/**
+ * Phase 5 P5-1 login throttle: after this many consecutive failed sign-ins
+ * against one account (either door — the counter is shared), the account
+ * locks for LOGIN_LOCKOUT_MS. A successful sign-in resets the counter.
+ * Both values are env-tunable for local testing; the defaults are the
+ * audit's recommendation (§7 P5-1).
+ */
+const LOGIN_MAX_FAILED_ATTEMPTS = Number(process.env.LOGIN_MAX_FAILED_ATTEMPTS ?? 10);
+const LOGIN_LOCKOUT_MS = Number(process.env.LOGIN_LOCKOUT_MS ?? 15 * 60 * 1000);
 
+const STAFF_CODE_LOGIN_ROLES = ["System Admin", "Daet Owner", "Naga Owner", "Receiving Staff", "Delivery Staff", "Delivery Admin"];
+
+/**
+ * The six built-in demo accounts. Since P5-1 they carry NO credentials:
+ * no passwordHash and no staffCodeHash, so both login doors fail closed
+ * for them. Local development can still sign in as them only through the
+ * ALLOW_DEMO_AUTH-gated overlay (see smoke-seed.ts), which is refused in
+ * production. P5-2 removes these accounts entirely.
+ */
 const demoUsers: StaffUserRecord[] = [
   {
     id: "user_daet_owner",
     name: "Daet Owner Demo",
     email: "daet.owner@mts.local",
     role: "Daet Owner",
-    staffCode: "0000",
     branchId: "branch_daet",
     branchAccess: "Daet",
     permissionPreset: "Branch Owner",
@@ -171,7 +187,6 @@ const demoUsers: StaffUserRecord[] = [
     name: "Naga Owner Demo",
     email: "naga.owner@mts.local",
     role: "Naga Owner",
-    staffCode: "9999",
     branchId: "branch_naga",
     branchAccess: "Naga",
     permissionPreset: "Branch Owner",
@@ -183,7 +198,6 @@ const demoUsers: StaffUserRecord[] = [
     name: "System Admin Demo",
     email: "admin@mts.local",
     role: "System Admin",
-    staffCode: "0001",
     branchAccess: "All branches",
     permissionPreset: "System Admin",
     canApprove: ["System configuration", "All branch support"],
@@ -194,7 +208,6 @@ const demoUsers: StaffUserRecord[] = [
     name: "Receiving Demo",
     email: "receiving@mts.local",
     role: "Receiving Staff",
-    staffCode: "1111",
     branchAccess: "Origin Warehouse",
     permissionPreset: "Receiving Staff",
     canApprove: [],
@@ -205,7 +218,6 @@ const demoUsers: StaffUserRecord[] = [
     name: "Delivery Demo",
     email: "delivery@mts.local",
     role: "Delivery Staff",
-    staffCode: "2222",
     branchAccess: "Daet / Naga",
     permissionPreset: "Delivery Staff",
     canApprove: [],
@@ -427,6 +439,13 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   private hardwareTests: HardwareTestRecord[] = [];
   private printLogs: PrintLog[] = [];
   private customUsers: StaffUserRecord[] = [];
+  /**
+   * Phase 5 P5-1: in-memory demo-account credentials (hashes only),
+   * populated at boot ONLY when the ALLOW_DEMO_AUTH dev gate is open
+   * (see smoke-seed.ts). Empty in every other run, which is what makes
+   * the credential-less demo accounts fail closed. Never persisted.
+   */
+  private demoCredentialOverlay = new Map<string, DemoCredentialOverlayEntry>();
   private idempotencyRecords: IdempotencyRecord[] = [];
   private userBranchAccessOverrides: Record<string, string> = {};
   private notifications: ServiceNotification[] = [];
@@ -447,12 +466,18 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   private seedSmokeAccountsIfRequested() {
     const config = resolveSmokeSeedConfig(process.env);
     if (!config) return;
+    // Phase 5 P5-1: the same gate also provisions the demo accounts'
+    // credentials as an in-memory hash overlay, so local dev sign-in as
+    // the demo users keeps working while this flag is on — and only
+    // while it is on. The overlay is never written to state.
+    this.demoCredentialOverlay = buildDemoCredentialOverlay();
     const { users, changed } = upsertSmokeAccounts(this.customUsers, config);
     if (!changed) return;
     this.customUsers = users;
     console.warn(
       `[smoke-seed] ALLOW_DEMO_AUTH is on outside production: seeded smoke-test accounts ` +
-        `${config.email} (System Admin) and ${config.limitedEmail} (Delivery Staff). ` +
+        `${config.email} (System Admin) and ${config.limitedEmail} (Delivery Staff), ` +
+        `and enabled demo-account sign-in for local development. ` +
         `Never enable ALLOW_DEMO_AUTH outside local/test runs.`
     );
     this.saveData();
@@ -472,40 +497,164 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       trucks: this.listTrucks(),
       users: this.getDemoUsers()
         .filter((user) => user.role !== "Customer Owner")
-        .map(({ staffCode, passwordHash, ...user }) => ({
-          ...user,
-          hasStaffCode: Boolean(staffCode),
-          lastLogin: new Date().toISOString()
-        }))
+        .map((user) => this.toSafeUser(user))
     };
+  }
+
+  /**
+   * Phase 5 P5-1 — the only shape in which a user record may leave the
+   * service: credential hashes, the session watermark, and the login
+   * throttle state are stripped; `hasStaffCode` reports whether a staff
+   * code credential exists without exposing it.
+   */
+  private toSafeUser(user: StaffUserRecord) {
+    const { passwordHash, staffCodeHash, sessionVersion, failedLoginAttempts, loginLockedUntil, ...safeUser } = user;
+    void passwordHash;
+    void staffCodeHash;
+    void sessionVersion;
+    void failedLoginAttempts;
+    void loginLockedUntil;
+    return { ...safeUser, hasStaffCode: this.hasStaffCode(user), lastLogin: new Date().toISOString() };
+  }
+
+  /** The live record behind a display copy (getDemoUsers returns copies). */
+  private findUserRecord(userId: string): StaffUserRecord | undefined {
+    return this.customUsers.find((entry) => entry.id === userId) ?? demoUsers.find((entry) => entry.id === userId);
+  }
+
+  /**
+   * Effective credentials: the account's own stored hash wins; the demo
+   * accounts — which store none — fall back to the ALLOW_DEMO_AUTH-gated
+   * in-memory overlay (empty unless the dev gate is open).
+   */
+  private passwordHashFor(user: StaffUserRecord) {
+    return user.passwordHash ?? this.demoCredentialOverlay.get(user.id)?.passwordHash;
+  }
+
+  private staffCodeHashFor(user: StaffUserRecord) {
+    return user.staffCodeHash ?? this.demoCredentialOverlay.get(user.id)?.staffCodeHash;
+  }
+
+  private hasStaffCode(user: StaffUserRecord) {
+    return Boolean(this.staffCodeHashFor(user));
+  }
+
+  private isLoginLocked(record: StaffUserRecord) {
+    return Boolean(record.loginLockedUntil && new Date(record.loginLockedUntil).getTime() > Date.now());
+  }
+
+  /**
+   * Records a failed sign-in: always audited (failed logins were invisible
+   * before P5-1), and — when the attempt is attributable to an account —
+   * counted on that account. Reaching LOGIN_MAX_FAILED_ATTEMPTS locks the
+   * account for LOGIN_LOCKOUT_MS on BOTH doors (the counter is shared).
+   */
+  private registerLoginFailure(record: StaffUserRecord | undefined, door: "password" | "staffCode", attemptedIdentifier: string) {
+    if (!record) {
+      this.audit("auth.loginFailed", "User", attemptedIdentifier, `door=${door}; unknown or inactive account`);
+      this.saveData();
+      return;
+    }
+    record.failedLoginAttempts = (record.failedLoginAttempts ?? 0) + 1;
+    if (record.failedLoginAttempts >= LOGIN_MAX_FAILED_ATTEMPTS) {
+      record.loginLockedUntil = new Date(Date.now() + LOGIN_LOCKOUT_MS).toISOString();
+      this.audit(
+        "auth.loginLocked",
+        "User",
+        record.id,
+        `door=${door}; ${record.failedLoginAttempts} consecutive failures; locked until ${record.loginLockedUntil}`
+      );
+    } else {
+      this.audit("auth.loginFailed", "User", record.id, `door=${door}; consecutive failures=${record.failedLoginAttempts}`);
+    }
+    this.saveData();
+  }
+
+  /** A successful sign-in clears the shared failure counter and any lock. */
+  private registerLoginSuccess(record: StaffUserRecord) {
+    if (record.failedLoginAttempts || record.loginLockedUntil) {
+      record.failedLoginAttempts = 0;
+      record.loginLockedUntil = undefined;
+      this.saveData();
+    }
+  }
+
+  private lockedLoginError() {
+    return new BadRequestException("Account is temporarily locked after repeated failed sign-ins. Try again later.");
   }
 
   login(input: { email: string; password: string }) {
     const user = this.getDemoUsers().find((entry) => entry.email === input.email);
-    if (!user || user.status === "Inactive" || !verifySecret(input.password ?? "", demoPasswordHash)) {
-      throw new BadRequestException("Invalid demo credentials");
+    const record = user ? this.findUserRecord(user.id) : undefined;
+    if (!user || !record || user.status === "Inactive") {
+      this.registerLoginFailure(undefined, "password", String(input.email ?? ""));
+      throw new BadRequestException("Invalid email or password");
     }
+    if (this.isLoginLocked(record)) {
+      this.audit("auth.loginLocked", "User", user.id, "door=password; sign-in attempted during lockout");
+      throw this.lockedLoginError();
+    }
+    // Fail closed: an account with no password hash of its own cannot sign
+    // in through this door at all — there is no shared fallback password.
+    const storedHash = this.passwordHashFor(record);
+    if (!storedHash || !verifySecret(input.password ?? "", storedHash)) {
+      this.registerLoginFailure(record, "password", user.id);
+      throw new BadRequestException("Invalid email or password");
+    }
+    this.registerLoginSuccess(record);
     this.audit("auth.login", "User", user.id);
-    const { staffCode, passwordHash, ...safeUser } = user;
     return {
-      user: { ...safeUser, hasStaffCode: Boolean(staffCode), lastLogin: new Date().toISOString() },
-      token: signAuthToken({ userId: user.id, role: user.role, branchAccess: user.branchAccess }),
-      note: "Signed demo JWT. Configure JWT_SECRET/AUTH_SECRET before production."
+      user: this.toSafeUser(user),
+      token: signAuthToken({
+        userId: user.id,
+        role: user.role,
+        branchAccess: user.branchAccess,
+        sessionVersion: record.sessionVersion ?? 0
+      }),
+      note: "Signed JWT. The session is revoked when the account's credentials change."
     };
   }
 
   loginWithStaffCode(input: { staffCode: string }) {
     const cleanCode = String(input.staffCode ?? "").trim();
-    const user = this.getDemoUsers().find((entry) => entry.status !== "Inactive" && entry.staffCode === cleanCode && ["System Admin", "Daet Owner", "Naga Owner", "Receiving Staff", "Delivery Staff", "Delivery Admin"].includes(entry.role));
-    if (!user) {
+    // Codes are stored only as per-user PBKDF2 hashes, so the match is a
+    // verify against each eligible account's hash (codes are unique across
+    // accounts — createStaffUser/updateStaffUser enforce it the same way).
+    let matchedUser: StaffUserRecord | undefined;
+    let matchedRecord: StaffUserRecord | undefined;
+    if (cleanCode) {
+      for (const candidate of this.getDemoUsers()) {
+        if (candidate.status === "Inactive" || !STAFF_CODE_LOGIN_ROLES.includes(candidate.role)) continue;
+        const storedHash = this.staffCodeHashFor(candidate);
+        if (storedHash && verifySecret(cleanCode, storedHash)) {
+          matchedUser = candidate;
+          matchedRecord = this.findUserRecord(candidate.id);
+          break;
+        }
+      }
+    }
+    if (!matchedUser || !matchedRecord) {
+      // A code that matches no account cannot be attributed to one, so no
+      // per-account counter moves; the failure is still audited, and the
+      // global throttler remains the brake on unattributed guessing.
+      this.registerLoginFailure(undefined, "staffCode", "staff-code");
       throw new BadRequestException("Invalid staff code");
     }
-    this.audit("auth.staffCodeLogin", "User", user.id);
-    const { staffCode, passwordHash, ...safeUser } = user;
+    if (this.isLoginLocked(matchedRecord)) {
+      this.audit("auth.loginLocked", "User", matchedUser.id, "door=staffCode; sign-in attempted during lockout");
+      throw this.lockedLoginError();
+    }
+    this.registerLoginSuccess(matchedRecord);
+    this.audit("auth.staffCodeLogin", "User", matchedUser.id);
     return {
-      user: { ...safeUser, hasStaffCode: true, lastLogin: new Date().toISOString() },
-      token: signAuthToken({ userId: user.id, role: user.role, branchAccess: user.branchAccess }),
-      note: "Signed demo staff-code JWT. Production should hash staff PINs, lock failed attempts, and audit device/session."
+      user: this.toSafeUser(matchedUser),
+      token: signAuthToken({
+        userId: matchedUser.id,
+        role: matchedUser.role,
+        branchAccess: matchedUser.branchAccess,
+        sessionVersion: matchedRecord.sessionVersion ?? 0
+      }),
+      note: "Signed JWT. The session is revoked when the account's credentials change."
     };
   }
 
@@ -793,8 +942,21 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     this.audit("settings.user.branchAccess.update", "User", userId, branchAccess);
     this.saveData();
     const updated = this.getDemoUsers().find((entry) => entry.id === userId)!;
-    const { staffCode, passwordHash, ...safeUser } = updated;
-    return { ...safeUser, hasStaffCode: Boolean(staffCode), lastLogin: new Date().toISOString() };
+    return this.toSafeUser(updated);
+  }
+
+  /**
+   * Staff-code uniqueness under hashed storage: a candidate code is "in
+   * use" when it verifies against any other account's stored hash (the
+   * demo overlay counts while the dev gate is open). Plaintext comparison
+   * is impossible — salts differ per hash — which is the point.
+   */
+  private staffCodeInUse(code: string, exceptUserId?: string) {
+    return this.getDemoUsers().some((entry) => {
+      if (entry.id === exceptUserId) return false;
+      const storedHash = this.staffCodeHashFor(entry);
+      return Boolean(storedHash) && verifySecret(code, storedHash as string);
+    });
   }
 
   createStaffUser(input: {
@@ -810,7 +972,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     const staffCode = input.staffCode?.trim();
     if (!name) throw new BadRequestException("Staff name is required");
     if (!staffCode) throw new BadRequestException("Staff code is required");
-    if (this.getDemoUsers().some((user) => user.staffCode === staffCode)) {
+    if (this.staffCodeInUse(staffCode)) {
       throw new BadRequestException("Staff code is already used");
     }
     const allowedRoles = ["Receiving Staff", "Delivery Staff", "Delivery Admin"];
@@ -823,7 +985,12 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       phone: input.phone?.trim() || undefined,
       email: input.email?.trim() || `${name.toLowerCase().replace(/[^a-z0-9]+/g, ".").replace(/^\.+|\.+$/g, "") || "staff"}@mts.local`,
       role: input.role,
-      staffCode,
+      // Phase 5 P5-1: the code is hashed at the moment it is set and the
+      // plaintext is never stored. No password is set here — initial
+      // password provisioning is P5-2's lifecycle work, so a created
+      // account signs in via its staff code until then.
+      staffCodeHash: hashSecret(staffCode),
+      sessionVersion: 0,
       branchAccess: input.branchAccess?.trim() || "Daet / Naga",
       permissionPreset: input.role,
       canApprove: [],
@@ -833,17 +1000,27 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     this.customUsers.push(user);
     this.audit("settings.user.create", "User", user.id, `${user.name} - ${user.role} - ${user.branchAccess}`);
     this.saveData();
-    const { staffCode: hiddenCode, passwordHash, ...safeUser } = user;
-    return { ...safeUser, hasStaffCode: Boolean(hiddenCode), lastLogin: new Date().toISOString() };
+    return this.toSafeUser(user);
   }
 
-  updateStaffUser(userId: string, input: Partial<Pick<StaffUserRecord, "name" | "phone" | "email" | "role" | "branchAccess" | "staffCode" | "status">>) {
+  updateStaffUser(
+    userId: string,
+    input: Partial<Pick<StaffUserRecord, "name" | "phone" | "email" | "role" | "branchAccess" | "status">> & {
+      /** Plaintext on input only — hashed before it is stored (P5-1). */
+      staffCode?: string;
+    }
+  ) {
     const customUser = this.customUsers.find((entry) => entry.id === userId);
     const demoUser = demoUsers.find((entry) => entry.id === userId);
     const user = customUser ?? demoUser;
     if (!user) throw new NotFoundException("User not found");
 
-    if (input.staffCode?.trim() && input.staffCode.trim() !== user.staffCode && this.getDemoUsers().some((entry) => entry.id !== userId && entry.staffCode === input.staffCode?.trim())) {
+    // "Changed" under hashed storage means: does not verify against the
+    // account's current hash. Re-submitting the same code is a no-op.
+    const newStaffCode = input.staffCode?.trim();
+    const ownStaffCodeHash = this.staffCodeHashFor(user);
+    const staffCodeChanged = Boolean(newStaffCode) && !(ownStaffCodeHash && verifySecret(newStaffCode as string, ownStaffCodeHash));
+    if (newStaffCode && staffCodeChanged && this.staffCodeInUse(newStaffCode, userId)) {
       throw new BadRequestException("Staff code is already used");
     }
 
@@ -855,7 +1032,13 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         customUser.role = input.role;
         customUser.permissionPreset = input.role;
       }
-      if (input.staffCode?.trim()) customUser.staffCode = input.staffCode.trim();
+      if (newStaffCode && staffCodeChanged) {
+        // Credential change: store the new hash and bump sessionVersion so
+        // every token issued under the old credential stops working
+        // (Phase 5 P5-1 revocation mechanism).
+        customUser.staffCodeHash = hashSecret(newStaffCode);
+        customUser.sessionVersion = (customUser.sessionVersion ?? 0) + 1;
+      }
       if (input.status) customUser.status = input.status;
     } else if (input.status) {
       user.status = input.status;
@@ -868,8 +1051,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     this.audit("settings.user.update", "User", userId, `${user.name} - ${input.role ?? user.role} - ${input.branchAccess ?? this.userBranchAccessOverrides[userId] ?? user.branchAccess}`);
     this.saveData();
     const updated = this.getDemoUsers().find((entry) => entry.id === userId)!;
-    const { staffCode, passwordHash, ...safeUser } = updated;
-    return { ...safeUser, hasStaffCode: Boolean(staffCode), lastLogin: new Date().toISOString() };
+    return this.toSafeUser(updated);
   }
 
   getAuthUserById(userId: string) {
@@ -878,7 +1060,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return {
       id: user.id,
       role: user.role,
-      branchAccess: user.branchAccess
+      branchAccess: user.branchAccess,
+      // Phase 5 P5-1: the auth guard compares this against the token's
+      // `sv` claim to enforce credential-change revocation.
+      sessionVersion: user.sessionVersion ?? 0
     };
   }
 
@@ -3294,12 +3479,35 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     // Rows persisted before the hand-off rework predate the outcome column.
     this.printLogs = (data.printLogs ?? []).map((log) => ({ ...log, outcome: log.outcome ?? "HandedOff" }));
     this.customUsers = data.customUsers ?? [];
+    // Phase 5 P5-1 migration — staff codes stop being stored in plaintext.
+    // Records persisted before P5-1 carry a plaintext `staffCode`; hash it
+    // on load and drop the plaintext, then persist the migrated state so
+    // the plaintext does not survive on disk/in the database. Chosen over
+    // hash-on-first-login because it is deterministic (no account keeps a
+    // plaintext code because its owner never signed in) and one-way: the
+    // migration runs once per legacy record and is a no-op afterwards.
+    let migratedStaffCodes = false;
+    for (const customUser of this.customUsers) {
+      const legacy = customUser as StaffUserRecord & { staffCode?: string };
+      if (legacy.staffCode) {
+        if (!customUser.staffCodeHash) customUser.staffCodeHash = hashSecret(legacy.staffCode);
+        delete legacy.staffCode;
+        migratedStaffCodes = true;
+      }
+    }
     this.idempotencyRecords = data.idempotencyRecords ?? [];
     this.companyProfile = data.companyProfile ?? this.companyProfile;
     this.branches = data.branches?.length ? data.branches : this.branches;
     this.paymentMethods = data.paymentMethods?.length ? data.paymentMethods : this.paymentMethods;
     this.expenseCategories = data.expenseCategories?.length ? data.expenseCategories : this.expenseCategories;
     this.userBranchAccessOverrides = data.userBranchAccessOverrides ?? {};
+    // Persist the staff-code migration only now that every field has been
+    // loaded — saveData() snapshots the whole state, so calling it earlier
+    // would write not-yet-loaded defaults over the stored state.
+    if (migratedStaffCodes) {
+      this.audit("auth.staffCodeMigrated", "User", "customUsers", "Plaintext staff codes hashed on load (Phase 5 P5-1)");
+      this.saveData();
+    }
   }
 
   private snapshotState(): ServiceState {

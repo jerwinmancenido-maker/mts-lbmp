@@ -68,11 +68,18 @@ export interface UserRow {
   name: string;
   email: string;
   phone: string | null;
-  passwordHash: string;
+  passwordHash: string | null;
+  staffCodeHash: string | null;
+  sessionVersion: number;
+  failedLoginAttempts: number;
+  loginLockedUntil: DateValue | null;
   status: string;
   roleId: string | null;
   customerId: string | null;
+  branchId: string | null;
   branchAccess: string | null;
+  permissionPreset: string | null;
+  canApprove: string[];
   lastLoginAt: DateValue | null;
   createdAt?: DateValue;
   deletedAt: DateValue | null;
@@ -598,17 +605,26 @@ export function stateToRows(state: ServiceState): PrismaStateRows {
       name: user.name,
       email: user.email ?? `${user.id}@mts.local`,
       phone: user.phone ?? null,
-      // Phase 5 owns real credentials. The schema requires a value, so the
-      // repository writes the agreed placeholder rather than a staff code or
-      // any other reusable secret.
-      passwordHash: "",
+      // Phase 5 P5-1: the account's real credential hashes round-trip
+      // (null when unset — the account then fails closed at login). This
+      // closes the Phase 2 parked gap §4.1 together with the branchId /
+      // permissionPreset / canApprove columns below: a created staff
+      // member's staff code now survives an API restart on this path.
+      passwordHash: user.passwordHash ?? null,
+      staffCodeHash: user.staffCodeHash ?? null,
+      sessionVersion: user.sessionVersion ?? 0,
+      failedLoginAttempts: user.failedLoginAttempts ?? 0,
+      loginLockedUntil: user.loginLockedUntil ? new Date(user.loginLockedUntil) : null,
       status: user.status ?? "Active",
       roleId: roleIdForName(user.role),
       customerId: null,
+      branchId: user.branchId ?? null,
       // The service has both a per-user branchAccess and a separate override
       // map, but User has one branchAccess column. Persist the effective
       // value so behaviour is preserved; the distinction is a known gap.
       branchAccess: state.userBranchAccessOverrides[user.id] ?? user.branchAccess ?? null,
+      permissionPreset: user.permissionPreset ?? null,
+      canApprove: user.canApprove ?? [],
       lastLoginAt: null,
       createdAt: user.createdAt ? new Date(user.createdAt) : undefined,
       deletedAt: null
@@ -1333,7 +1349,18 @@ export function rowsToState(rows: PrismaStateRows): LoadedServiceState {
       email: user.email,
       phone: user.phone ?? undefined,
       role: user.roleId ? roleNameById.get(user.roleId) ?? "" : "",
+      // Phase 5 P5-1: credentials and the §4.1 fields round-trip back into
+      // the record (undefined when the column is null, matching how the
+      // in-state record represents "not set").
+      passwordHash: user.passwordHash ?? undefined,
+      staffCodeHash: user.staffCodeHash ?? undefined,
+      sessionVersion: user.sessionVersion ?? 0,
+      failedLoginAttempts: user.failedLoginAttempts ? user.failedLoginAttempts : undefined,
+      loginLockedUntil: user.loginLockedUntil ? toIso(user.loginLockedUntil) : undefined,
+      branchId: user.branchId ?? undefined,
       branchAccess: user.branchAccess ?? undefined,
+      permissionPreset: user.permissionPreset ?? undefined,
+      canApprove: user.canApprove ? [...user.canApprove] : undefined,
       status: user.status as StaffUserRecord["status"],
       createdAt: user.createdAt ? toIso(user.createdAt) : undefined
     })),
