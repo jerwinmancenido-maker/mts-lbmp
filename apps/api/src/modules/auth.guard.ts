@@ -44,6 +44,15 @@ export class AuthGuard implements CanActivate {
     const tokenUserId = token.startsWith("demo-token-") ? token.slice("demo-token-".length) : verifiedToken?.sub ?? "";
     const user = demoTokens.get(token) ?? (tokenUserId ? this.logistics.getAuthUserById(tokenUserId) : undefined);
     if (!user) return false;
+    // Phase 5 P5-1 revocation: a real JWT carries the sessionVersion it was
+    // issued under (`sv`). Credential changes bump the stored version, so
+    // a mismatch means the token predates the change and is rejected even
+    // though its signature and expiry are still fine. (The static demo
+    // tokens carry no JWT and skip this — they are removed in P5-2.)
+    if (verifiedToken) {
+      const currentVersion = (user as { sessionVersion?: number }).sessionVersion;
+      if (currentVersion !== undefined && (verifiedToken.sv ?? 0) !== currentVersion) return false;
+    }
     request.user = user;
     const requiredPermissions = this.reflector.getAllAndOverride<Permission[]>(REQUIRED_PERMISSIONS, [
       context.getHandler(),

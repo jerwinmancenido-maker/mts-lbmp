@@ -13,13 +13,28 @@ model User {
   name          String
   email         String         @unique
   phone         String?
-  passwordHash  String
+  // Phase 5 P5-1: real per-user credentials. passwordHash is nullable —
+  // an account with no hash set cannot sign in with a password (fail
+  // closed); the Phase 2 "" placeholder semantics are gone. staffCodeHash
+  // holds the PBKDF2 hash of the staff sign-in code (never plaintext) and
+  // replaces the unpersisted plaintext staffCode (Phase 2 parked gap §4.1).
+  passwordHash  String?
+  staffCodeHash String?
+  // Token revocation watermark: bumped on credential change; the auth
+  // guard rejects JWTs whose `sv` claim no longer matches (P5-1).
+  sessionVersion Int           @default(0)
+  // Per-account login throttle state, shared by both login doors (P5-1).
+  failedLoginAttempts Int      @default(0)
+  loginLockedUntil    DateTime?
   status        String         @default("Active")
   roleId        String?
   role          Role?          @relation(fields: [roleId], references: [id])
   customerId    String?
   customer      Customer?      @relation(fields: [customerId], references: [id])
+  branchId      String?
   branchAccess  String?
+  permissionPreset String?
+  canApprove    String[]
   lastLoginAt   DateTime?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt

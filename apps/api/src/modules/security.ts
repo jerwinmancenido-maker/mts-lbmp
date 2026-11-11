@@ -4,6 +4,14 @@ export type AuthTokenPayload = {
   sub: string;
   role: string;
   branchAccess?: string;
+  /**
+   * Session version at issue time (Phase 5 P5-1). The auth guard compares
+   * this against the user's current `sessionVersion`; a credential change
+   * bumps the stored version and thereby revokes every outstanding token.
+   * Optional because tokens minted before P5-1 carry no claim — they are
+   * read as version 0, matching a never-changed account.
+   */
+  sv?: number;
   iat: number;
   exp: number;
 };
@@ -27,7 +35,18 @@ function parseBase64UrlJson<T>(value: string): T | null {
 }
 
 export function getAuthSecret() {
-  return process.env.JWT_SECRET || process.env.AUTH_SECRET || DEVELOPMENT_SECRET;
+  const configured = process.env.JWT_SECRET || process.env.AUTH_SECRET;
+  if (configured) return configured;
+  // Phase 5 P5-1: the development fallback secret is printed in the source
+  // tree, so any production process that silently used it would issue
+  // forgeable tokens. Fail fast at boot instead.
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "JWT_SECRET or AUTH_SECRET must be set when NODE_ENV=production. " +
+        "Refusing to start with the development fallback secret."
+    );
+  }
+  return DEVELOPMENT_SECRET;
 }
 
 export function hashSecret(secret: string, salt = randomBytes(16).toString("base64url")) {
@@ -45,13 +64,14 @@ export function verifySecret(secret: string, storedHash: string) {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-export function signAuthToken(input: { userId: string; role: string; branchAccess?: string }) {
+export function signAuthToken(input: { userId: string; role: string; branchAccess?: string; sessionVersion?: number }) {
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: "HS256", typ: "JWT" };
   const payload: AuthTokenPayload = {
     sub: input.userId,
     role: input.role,
     branchAccess: input.branchAccess,
+    sv: input.sessionVersion ?? 0,
     iat: now,
     exp: now + TOKEN_TTL_SECONDS
   };

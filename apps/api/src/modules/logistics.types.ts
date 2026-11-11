@@ -376,14 +376,38 @@ export interface StaffUserRecord {
   email?: string;
   phone?: string;
   role: string;
-  staffCode?: string;
   /**
    * Per-user PBKDF2 password hash (security.ts format). Seeded onto the
-   * smoke-test accounts in P5-0; login() starts verifying against it in
-   * P5-1. Never serialized into API responses — every user-returning site
-   * strips it alongside staffCode.
+   * smoke-test accounts in P5-0; login() verifies against it since P5-1.
+   * An account with no hash set cannot sign in with a password at all
+   * (fail closed) — initial-password provisioning is P5-2. Never
+   * serialized into API responses — every user-returning site strips it
+   * alongside the other credential/security fields.
    */
   passwordHash?: string;
+  /**
+   * Per-user PBKDF2 hash of the staff sign-in code (Phase 5 P5-1). Staff
+   * codes are never stored in plaintext: createStaffUser/updateStaffUser
+   * hash on set, and records persisted before P5-1 are migrated on load
+   * (their plaintext `staffCode` field is hashed and dropped by
+   * LogisticsService.loadData). An account with no hash set cannot sign
+   * in through the staff-code door (fail closed).
+   */
+  staffCodeHash?: string;
+  /**
+   * Token revocation watermark (Phase 5 P5-1). Issued JWTs carry this
+   * value as their `sv` claim; the auth guard rejects a token whose claim
+   * no longer matches. Bumped whenever a credential is set or changed.
+   */
+  sessionVersion?: number;
+  /**
+   * Per-account login throttle state (Phase 5 P5-1), shared by both login
+   * doors: consecutive failure count, and the ISO timestamp until which
+   * sign-in is locked once the failure threshold trips. A successful
+   * sign-in clears both. Never serialized into API responses.
+   */
+  failedLoginAttempts?: number;
+  loginLockedUntil?: string;
   branchId?: string;
   branchAccess?: string;
   permissionPreset?: string;
