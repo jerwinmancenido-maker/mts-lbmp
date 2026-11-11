@@ -329,6 +329,14 @@ export interface PaymentRecord {
   cargoPackageId: string;
   amountDue: number;
   amountPaid: number;
+  /**
+   * HISTORICAL PER-CALL value (Phase 6 audit §2.3.1): computed at record
+   * time from THIS payment alone (max(amountDue − amountPaid, 0)). It is
+   * NOT the package's remaining balance — with instalments it can even
+   * exceed an earlier payment's value. Displays must show the cumulative
+   * figure instead (price − all payments for the package); this field is
+   * kept as the record of what that one call computed.
+   */
   balance: number;
   method: string;
   collectionPoint: "Receiving" | "Delivery" | "Owner" | "Online" | "Other";
@@ -423,6 +431,77 @@ export interface BillingInvoice {
   dueDate?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Phase 6 P6-2 — aging buckets for a customer's outstanding package
+ * balances, classified by whole Manila calendar days past the package's
+ * due date (due date itself = "current", the same boundary
+ * deriveBillingInvoice uses for Overdue). Two buckets exist so an amount
+ * is never silently guessed into aging: "termsNotSet" (the customer has
+ * no structured billing term, so no due date can be derived) and
+ * "notDelivered" (a term exists but the package has no delivery yet, so
+ * its due date does not exist yet either).
+ */
+export type AgingBucket =
+  | "current"
+  | "overdue1To30"
+  | "overdue31To60"
+  | "overdue61To90"
+  | "overdue90Plus"
+  | "termsNotSet"
+  | "notDelivered";
+
+/** One owing package on a CustomerBalance: priced, with money still outstanding. Fully-paid packages never appear. */
+export interface CustomerBalancePackage {
+  packageId: string;
+  packageNumber: string;
+  status: CargoPackage["status"];
+  price: number;
+  amountPaid: number;
+  outstanding: number;
+  /** Manila business date (YYYY-MM-DD) of the delivery the due date anchors on; absent until the package is delivered. */
+  deliveredDate?: string;
+  /** Manila business date (YYYY-MM-DD) the amount falls due: deliveredDate + the customer's term days. Absent when no due date can be derived. */
+  dueDate?: string;
+  /** Whole Manila days past dueDate; 0 whenever the amount is not overdue (including when no due date exists). */
+  daysOverdue: number;
+  agingBucket: AgingBucket;
+}
+
+export interface CustomerBalanceAgingCell {
+  amount: number;
+  count: number;
+}
+
+/**
+ * Phase 6 P6-2 — THE server-side customer balance (GET /balances,
+ * GET /customers/:id/balance). Computed live from packages + payments by
+ * LogisticsService.buildCustomerBalance — the one place this math lives,
+ * so the Customers list, the customer detail and any future surface can
+ * never disagree the way the retired client-side copies could.
+ *
+ * Scope note: figures cover the customer's packages VISIBLE to the
+ * caller under the Phase 5 P5-3 branch rule. An unrestricted caller sees
+ * the customer's full position; a branch-scoped caller sees their
+ * branches' slice of it.
+ */
+export interface CustomerBalance {
+  customerId: string;
+  customerName: string;
+  /** The customer's structured term (fixed-list day count), or null when unset. */
+  billingTermDays: number | null;
+  /** Σ price over the customer's priced (visible) packages. */
+  totalDue: number;
+  /** Σ payments over the customer's visible packages. */
+  totalCollected: number;
+  /** Σ per-package outstanding (each clamped at 0) — the collectible truth; equals totalDue − totalCollected unless a package was overpaid. */
+  outstanding: number;
+  /** Earliest dueDate (YYYY-MM-DD) among owing packages that have one; absent when nothing owing has a due date. */
+  oldestDueDate?: string;
+  /** Owing packages only, oldest due date first (rows without a due date last, by delivery then creation). */
+  packages: CustomerBalancePackage[];
+  aging: Record<AgingBucket, CustomerBalanceAgingCell>;
 }
 
 export interface StaffUserRecord {

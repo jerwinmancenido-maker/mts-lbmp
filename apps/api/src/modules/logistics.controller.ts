@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Headers, Inject, Param, Patch, Post, Query, Req } from "@nestjs/common";
-import { PublicRoute, RequirePermissions } from "./auth.guard.js";
+import { PublicRoute, RequireAnyPermissions, RequirePermissions } from "./auth.guard.js";
 import { LogisticsService } from "./logistics.service.js";
 
 @Controller()
@@ -699,6 +699,25 @@ export class LogisticsController {
   @RequirePermissions("documents.print")
   billingStatement(@Req() request: { user?: { branchAccess?: string } }, @Param("id") id: string) {
     return this.logistics.renderBillingStatement(id, request.user);
+  }
+
+  // Phase 6 P6-2: server-side customer balances + aging. This is the
+  // FIRST real enforcement of reports.view (owners and Delivery Admin
+  // reach balances through it alone); customers.manage also passes via
+  // the any-of gate because the customer-desk roles (Receiving Staff)
+  // work balances from the Customers module, and every other
+  // customer-money endpoint is already gated on customers.manage.
+  // Figures are branch-scoped in the service (P5-3 patterns).
+  @Get("balances")
+  @RequireAnyPermissions("reports.view", "customers.manage")
+  balances(@Req() request: { user?: { branchAccess?: string } }) {
+    return this.logistics.listCustomerBalances(request.user);
+  }
+
+  @Get("customers/:id/balance")
+  @RequireAnyPermissions("reports.view", "customers.manage")
+  customerBalance(@Req() request: { user?: { branchAccess?: string } }, @Param("id") id: string) {
+    return this.logistics.getCustomerBalance(id, request.user);
   }
 
   @Get("expenses")

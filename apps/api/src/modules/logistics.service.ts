@@ -20,8 +20,11 @@ import { createStateStore, type LoadedServiceState, type ServiceState, type Stat
 import { resolveSmokeSeedConfig, upsertSmokeAccounts } from "./smoke-seed.js";
 import { BOOTSTRAP_MISSING_ENV_WARNING, buildBootstrapAdminRecord, resolveBootstrapAdmin } from "./bootstrap-admin.js";
 import type {
+  AgingBucket,
   CargoPackage,
   Customer,
+  CustomerBalance,
+  CustomerBalancePackage,
   CustomerContact,
   BillingInvoice,
   DeliveryRecord,
@@ -1087,6 +1090,139 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException("Billing invoice not found");
     }
     return this.deriveBillingInvoice(invoice);
+  }
+
+  /**
+   * Phase 6 P6-2 — THE customer balance derivation, behind GET /balances
+   * and GET /customers/:id/balance. Live from packages + payments, the
+   * same sources deriveBillingInvoice reads, with the same rules:
+   * amounts are cumulative per package (never a stored per-payment
+   * figure), and a package's due date is its delivery anchor (the shared
+   * deliveredAtForPackage lookup) + the customer's structured term days
+   * — the P6-1 invoice anchoring applied per package.
+   *
+   * Returns null when the customer must be HIDDEN from this caller: the
+   * customer has packages but none of them is in the caller's branches
+   * (the P5-3 existence-hiding rule; a customer with no packages at all
+   * has nothing to hide and answers with a zero balance). A visible
+   * customer's figures cover their caller-visible packages only.
+   */
+  private buildCustomerBalance(customer: Customer, user: AuthContext | undefined, now: Date): CustomerBalance | null {
+    const customerPackages = this.packages.filter((pkg) => pkg.customerId === customer.id);
+    const visiblePackages = customerPackages.filter((pkg) => this.branchVisibleTo(user, [pkg.handlingBranchName, pkg.destination]));
+    if (customerPackages.length && !visiblePackages.length) return null;
+
+    const termDays = customer.billingTermDays ?? null;
+    const todayKey = this.businessDateKey(now);
+    const paidByPackage = new Map<string, number>();
+    for (const payment of this.payments) {
+      paidByPackage.set(payment.cargoPackageId, (paidByPackage.get(payment.cargoPackageId) ?? 0) + payment.amountPaid);
+    }
+
+    let totalDue = 0;
+    let totalCollected = 0;
+    const aging: Record<AgingBucket, { amount: number; count: number }> = {
+      current: { amount: 0, count: 0 },
+      overdue1To30: { amount: 0, count: 0 },
+      overdue31To60: { amount: 0, count: 0 },
+      overdue61To90: { amount: 0, count: 0 },
+      overdue90Plus: { amount: 0, count: 0 },
+      termsNotSet: { amount: 0, count: 0 },
+      notDelivered: { amount: 0, count: 0 }
+    };
+    const owingRows: Array<{ row: CustomerBalancePackage; sortKey: string }> = [];
+
+    for (const pkg of visiblePackages) {
+      const amountPaid = paidByPackage.get(pkg.id) ?? 0;
+      totalCollected += amountPaid;
+      if (pkg.price == null) continue;
+      const price = Number(pkg.price);
+      totalDue += price;
+      const outstanding = Math.max(price - amountPaid, 0);
+      // Fully-paid packages contribute zero outstanding and are not
+      // owing rows — they appear nowhere in the packages list.
+      if (outstanding <= 0) continue;
+
+      const deliveredAt = this.deliveredAtForPackage(pkg.id);
+      const deliveredDate = deliveredAt ? this.businessDateKey(deliveredAt) : undefined;
+      let dueDate: string | undefined;
+      let daysOverdue = 0;
+      let agingBucket: AgingBucket;
+      if (termDays == null) {
+        // No structured term → no due date exists. The amount is owed,
+        // but it is never guessed into an aging bucket.
+        agingBucket = "termsNotSet";
+      } else if (!deliveredDate) {
+        // A term exists but the package has not been delivered, so its
+        // due date (delivery + terms) does not exist yet either.
+        agingBucket = "notDelivered";
+      } else {
+        dueDate = this.addDaysToBusinessDateKey(deliveredDate, termDays);
+        daysOverdue = Math.max(0, this.businessDateDayDiff(dueDate, todayKey));
+        agingBucket =
+          daysOverdue === 0
+            ? "current"
+            : daysOverdue <= 30
+              ? "overdue1To30"
+              : daysOverdue <= 60
+                ? "overdue31To60"
+                : daysOverdue <= 90
+                  ? "overdue61To90"
+                  : "overdue90Plus";
+      }
+      const cell = aging[agingBucket];
+      cell.amount += outstanding;
+      cell.count += 1;
+      owingRows.push({
+        row: {
+          packageId: pkg.id,
+          packageNumber: pkg.packageNumber,
+          status: pkg.status,
+          price,
+          amountPaid,
+          outstanding,
+          deliveredDate,
+          dueDate,
+          daysOverdue,
+          agingBucket
+        },
+        // Oldest due date first; rows without a due date go last (they
+        // cannot be "most overdue"), ordered among themselves by
+        // delivery date, then by when the package was received.
+        sortKey: dueDate ?? `9999-12-31|${deliveredDate ?? "9999-12-31"}|${pkg.createdAt}`
+      });
+    }
+    owingRows.sort((a, b) => (a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1 : 0));
+    const rows = owingRows.map((entry) => entry.row);
+    const dueDates = rows.map((row) => row.dueDate).filter((value): value is string => Boolean(value));
+
+    return {
+      customerId: customer.id,
+      customerName: customer.businessName,
+      billingTermDays: termDays,
+      totalDue,
+      totalCollected,
+      outstanding: rows.reduce((sum, row) => sum + row.outstanding, 0),
+      oldestDueDate: dueDates.length ? dueDates.sort()[0] : undefined,
+      packages: rows,
+      aging
+    };
+  }
+
+  /** One customer's balance; hidden (other-branch-only) customers answer exactly like missing ones. */
+  getCustomerBalance(customerId: string, user?: AuthContext, now: Date = new Date()): CustomerBalance {
+    const customer = this.findCustomer(customerId);
+    const balance = this.buildCustomerBalance(customer, user, now);
+    if (!balance) throw new NotFoundException("Customer not found");
+    return balance;
+  }
+
+  /** Every visible customer's balance, biggest outstanding first (collection order), then by name. */
+  listCustomerBalances(user?: AuthContext, now: Date = new Date()): CustomerBalance[] {
+    return this.customers
+      .map((customer) => this.buildCustomerBalance(customer, user, now))
+      .filter((balance): balance is CustomerBalance => balance !== null)
+      .sort((a, b) => b.outstanding - a.outstanding || a.customerName.localeCompare(b.customerName));
   }
 
   listAuditLogs(query: ListQuery = {}) {
@@ -3252,6 +3388,9 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         );
       }
     }
+    // Per-call value only (see PaymentRecord.balance): it is stored as
+    // the historical record of this call, never as the package's
+    // remaining balance — that is always price minus ALL payments.
     const balance = Math.max(amountDue - input.amountPaid, 0);
     const status: PaymentStatus = balance === 0 ? "Paid" : input.amountPaid > 0 ? "Partially Paid" : "Unpaid";
     const payment: PaymentRecord = {
@@ -3321,6 +3460,26 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
   }
 
+  /** Whole calendar days from one Manila business date (YYYY-MM-DD) to another; negative when `toKey` is earlier. */
+  private businessDateDayDiff(fromKey: string, toKey: string): number {
+    const toUtcMs = (key: string) => {
+      const [year = 1970, month = 1, day = 1] = key.split("-").map(Number);
+      return Date.UTC(year, month - 1, day);
+    };
+    return Math.round((toUtcMs(toKey) - toUtcMs(fromKey)) / 86_400_000);
+  }
+
+  /**
+   * The delivery anchor for one package: the latest Delivered delivery
+   * record's creation time IS its delivery time in this model. This is
+   * the one lookup behind both due-date derivations (invoice dueDate in
+   * createBillingInvoice, per-package due dates in buildCustomerBalance)
+   * so the two can never anchor differently.
+   */
+  private deliveredAtForPackage(packageId: string): string | undefined {
+    return [...this.deliveries].reverse().find((entry) => entry.cargoPackageId === packageId && entry.status === "Delivered")?.createdAt;
+  }
+
   createBillingInvoice(input: { customerId: string; packageIds?: string[]; dueRule?: string; billingTermDays?: number | null }) {
     const customer = this.findCustomer(input.customerId);
     const termDaysInput = this.normalizeBillingTermDays(input.billingTermDays);
@@ -3376,7 +3535,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     let dueDate: string | undefined;
     if (effectiveTermDays != null) {
       const deliveredTimes = invoicePackages
-        .map((pkg) => [...this.deliveries].reverse().find((entry) => entry.cargoPackageId === pkg.id && entry.status === "Delivered")?.createdAt)
+        .map((pkg) => this.deliveredAtForPackage(pkg.id))
         .filter((value): value is string => Boolean(value))
         .map((value) => new Date(value).getTime());
       const anchor = deliveredTimes.length ? new Date(Math.max(...deliveredTimes)) : now;

@@ -161,6 +161,12 @@ export interface PaymentRecord {
   cargoPackageId: string;
   amountDue: number;
   amountPaid: number;
+  /**
+   * Historical PER-CALL value (audit §2.3.1) — what that one
+   * recordPayment call computed from its own amount alone. NOT the
+   * package's remaining balance; displays use the cumulative figure
+   * from payment-display.ts instead.
+   */
   balance: number;
   method: string;
   collectionPoint?: "Receiving" | "Delivery" | "Owner" | "Online" | "Other";
@@ -201,6 +207,47 @@ export interface BillingInvoice {
   dueDate?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Phase 6 P6-2 — mirrors of the API's balance read model
+ * (GET /balances, GET /customers/:id/balance). Server-computed from
+ * packages + payments; the web never recomputes these figures.
+ */
+export type AgingBucket =
+  | "current"
+  | "overdue1To30"
+  | "overdue31To60"
+  | "overdue61To90"
+  | "overdue90Plus"
+  | "termsNotSet"
+  | "notDelivered";
+
+export interface CustomerBalancePackage {
+  packageId: string;
+  packageNumber: string;
+  status: string;
+  price: number;
+  amountPaid: number;
+  outstanding: number;
+  /** Manila business date (YYYY-MM-DD) of delivery; absent until delivered. */
+  deliveredDate?: string;
+  /** Manila business date (YYYY-MM-DD) the amount falls due; absent when no due date can be derived. */
+  dueDate?: string;
+  daysOverdue: number;
+  agingBucket: AgingBucket;
+}
+
+export interface CustomerBalance {
+  customerId: string;
+  customerName: string;
+  billingTermDays: number | null;
+  totalDue: number;
+  totalCollected: number;
+  outstanding: number;
+  oldestDueDate?: string;
+  packages: CustomerBalancePackage[];
+  aging: Record<AgingBucket, { amount: number; count: number }>;
 }
 
 export interface AuditLog {
