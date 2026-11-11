@@ -38,7 +38,7 @@ import { parsePhilippineAddress, readDeliveryReceiptPhoto, type DrOcrConfidence,
 import { setPhotoAuditUser, setPhotoUploadContext, takeNativeCameraPhoto, uploadCompressedImage, uploadPathForPhotoType } from "./media";
 import type { PrinterDiagnosticCheck } from "@mts-lbmp/printing";
 import { printNativeText, runPrinterDiagnostic } from "./native-printer";
-import type { AuditLog, BillingInvoice, BootstrapData, Branch, CargoPackage, CustomerBalance, DashboardData, ExpenseRecord, HardwareTestRecord, OperationChatThread, PaymentRecord, PrintDocumentMeta, ProductMaster, RenderedDocumentResponse, Trip } from "./types";
+import type { AuditLog, BillingInvoice, BootstrapData, Branch, CargoPackage, CustomerBalance, CustomerReminderHistoryEntry, DashboardData, DueWorklistRow, ExpenseRecord, HardwareTestRecord, OperationChatThread, PaymentRecord, PrintDocumentMeta, ProductMaster, RenderedDocumentResponse, Trip } from "./types";
 import { BILLING_TERM_OPTIONS } from "./types";
 
 type Tab =
@@ -9653,6 +9653,96 @@ function InvoiceListAndDetail({
   );
 }
 
+/**
+ * Phase 6 P6-4 — the Due/Overdue worklist for Payments → Billing.
+ * Rows come from GET /billing/due-worklist: server-derived balances,
+ * oldest due first. Reading the endpoint also runs the server's due
+ * scan, so opening this view refreshes the automatic in-app reminder
+ * notifications too. Per-row actions: Notify (the in-app customer
+ * billing reminder — the server computes the amount) and the P6-3
+ * statement actions for the invoice (print render + CSV download).
+ * Reminders are in-app only: no SMS or email is sent, and the copy
+ * here says exactly that.
+ */
+function DueWorklist({
+  onAction,
+  setReceiptPreview,
+  setReceiptPrintMeta
+}: {
+  onAction: <T>(label: string, action: () => Promise<T>) => Promise<void>;
+  setReceiptPreview: (value: string) => void;
+  setReceiptPrintMeta: (value: PrintDocumentMeta | null) => void;
+}) {
+  const [rows, setRows] = useState<DueWorklistRow[]>([]);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiGet<DueWorklistRow[]>("/billing/due-worklist")
+      .then((result) => {
+        if (!cancelled) {
+          setRows(result);
+          setLoadFailed(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setLoadFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshTick]);
+
+  async function notifyRow(row: DueWorklistRow) {
+    await apiPost(`/customers/${row.customerId}/billing-reminder`, { branchName: row.branchName });
+    setRefreshTick((tick) => tick + 1);
+  }
+
+  async function printRowStatement(row: DueWorklistRow) {
+    const result = await apiGet<RenderedDocumentResponse>(`/billing/invoices/${row.invoiceId}/statement`);
+    setReceiptPreview(result.text);
+    setReceiptPrintMeta(result.print);
+  }
+
+  async function downloadRowStatementCsv(row: DueWorklistRow) {
+    await apiDownloadFile(`/billing/invoices/${row.invoiceId}/statement.csv`, `invoice-${row.invoiceNumber}.csv`);
+  }
+
+  return (
+    <section className="subPanel">
+      <div className="sectionHeader">
+        <div>
+          <h4>Due / Overdue Worklist</h4>
+          <p className="muted">Invoices due within 3 days or overdue, oldest due first. Notify sends an in-app reminder to the branch team — no SMS or email is sent.</p>
+        </div>
+        <button className="smallButton" onClick={() => setRefreshTick((tick) => tick + 1)}>Refresh</button>
+      </div>
+      <div className="list compactList">
+        {rows.map((row) => (
+          <div className="row compactDataRow" key={row.invoiceId}>
+            <div>
+              <strong>{row.invoiceNumber}</strong>
+              <p>{row.customerName}</p>
+              <p className="muted">Due {row.dueDate} / Balance PHP {row.balance.toLocaleString()}</p>
+            </div>
+            <div className="rowActions">
+              <span className={row.state === "Overdue" ? "badge warning" : "badge"}>
+                {row.state === "Overdue" ? `Overdue ${row.daysOverdue}d` : row.daysUntilDue === 0 ? "Due today" : `Due in ${row.daysUntilDue}d`}
+              </span>
+              <button className="smallButton" onClick={() => onAction("Notify billing reminder", () => notifyRow(row))}>Notify</button>
+              <button className="smallButton" onClick={() => onAction("Print billing statement", () => printRowStatement(row))}>Print Statement</button>
+              <button className="smallButton" onClick={() => onAction("Download statement CSV", () => downloadRowStatementCsv(row))}>Download CSV</button>
+            </div>
+          </div>
+        ))}
+        {!rows.length && !loadFailed && <p className="muted">Nothing due soon or overdue. The worklist fills itself as invoice due dates approach.</p>}
+        {loadFailed && <p className="muted">The worklist could not be loaded. Check the connection and refresh.</p>}
+      </div>
+    </section>
+  );
+}
+
 function Payments({
   packages,
   payments,
@@ -9948,14 +10038,21 @@ function Payments({
             </div>
             <button className="smallButton" onClick={() => setMode("home")}>Back</button>
           </div>
-          <InvoiceListAndDetail
-            invoices={invoices}
-            packages={packages}
-            payments={payments}
-            onAction={onAction}
-            setReceiptPreview={setReceiptPreview}
-            setReceiptPrintMeta={setReceiptPrintMeta}
-          />
+          <div className="stack">
+            <DueWorklist
+              onAction={onAction}
+              setReceiptPreview={setReceiptPreview}
+              setReceiptPrintMeta={setReceiptPrintMeta}
+            />
+            <InvoiceListAndDetail
+              invoices={invoices}
+              packages={packages}
+              payments={payments}
+              onAction={onAction}
+              setReceiptPreview={setReceiptPreview}
+              setReceiptPrintMeta={setReceiptPrintMeta}
+            />
+          </div>
         </section>
       )}
     </div>
@@ -10658,6 +10755,31 @@ function CustomerPortal({
       cancelled = true;
     };
   }, [selectedCustomerId, balanceRefreshTick]);
+  // Phase 6 P6-4: the customer's reminder history — manual reminders
+  // staff sent plus the due scan's automatic notices — from the API's
+  // audit-trail view (GET /customers/:id/reminder-history). Same fetch
+  // discipline as the balance: a role without access simply gets an
+  // empty history, and the refresh tick refetches after a new reminder
+  // is sent from this panel.
+  const [reminderHistory, setReminderHistory] = useState<CustomerReminderHistoryEntry[]>([]);
+  useEffect(() => {
+    if (!selectedCustomerId) {
+      setReminderHistory([]);
+      return;
+    }
+    let cancelled = false;
+    setReminderHistory([]);
+    apiGet<CustomerReminderHistoryEntry[]>(`/customers/${selectedCustomerId}/reminder-history`)
+      .then((entries) => {
+        if (!cancelled) setReminderHistory(entries);
+      })
+      .catch(() => {
+        if (!cancelled) setReminderHistory([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCustomerId, balanceRefreshTick]);
   const serverOverdueTotal = serverBalance
     ? serverBalance.aging.overdue1To30.amount + serverBalance.aging.overdue31To60.amount + serverBalance.aging.overdue61To90.amount + serverBalance.aging.overdue90Plus.amount
     : 0;
@@ -10841,14 +10963,16 @@ function CustomerPortal({
   async function createBillingReminder() {
     if (!selectedCustomer || !serverBalance) return;
     await apiPost(`/customers/${selectedCustomer.id}/billing-reminder`, {
-      // Phase 6 P6-2: the reminder carries the SERVER balance, not a
-      // client recomputation.
-      balance: serverBalance.outstanding,
-      dueRule: customerDueDateLabel,
-      branchName: customerBillingBranch,
-      smsReady: true
+      // Phase 6 P6-4: the server computes the amount from its own live
+      // balance — the client sends only the branch label. The reminder
+      // is an in-app notification to the branch team; no SMS or email
+      // is sent, and the customer is not contacted by the system.
+      branchName: customerBillingBranch
     });
-    setStatus(`Branch owner notified. SMS reminder is ready for future SMS API integration.`);
+    setStatus(`Branch owner notified in-app.`);
+    // Refetch the balance panel + reminder history so the new reminder
+    // shows in the history below.
+    setBalanceRefreshTick((tick) => tick + 1);
   }
 
   async function sendMessage() {
@@ -11033,9 +11157,9 @@ function CustomerPortal({
               </label>
               <div className="buttonGrid two">
                 <button className="actionButton" onClick={() => onAction("Create billing invoice", generateBillingInvoice)}>Billing Invoice</button>
-                <button className="primaryButton" disabled={!serverBalance || serverBalance.outstanding <= 0} onClick={() => onAction("Notify billing reminder", createBillingReminder)}>Notify Owner / SMS Soon</button>
+                <button className="primaryButton" disabled={!serverBalance || serverBalance.outstanding <= 0} onClick={() => onAction("Notify billing reminder", createBillingReminder)}>Notify Owner (In-app)</button>
               </div>
-              <p className="muted">SMS is not sent yet. This prepares the reminder flow for future SMS API integration.</p>
+              <p className="muted">Sends an in-app reminder to the branch team (Notification Center). No SMS or email is sent — the system does not contact the customer.</p>
               {serverBalance && (
                 <>
                   <div className="buttonGrid two">
@@ -11062,6 +11186,26 @@ function CustomerPortal({
                 setReceiptPrintMeta={setReceiptPrintMeta}
                 customerId={selectedCustomer.id}
               />
+            </section>
+            <section className="subPanel">
+              <div className="sectionHeader">
+                <div>
+                  <h4>Reminder History</h4>
+                  <p className="muted">Reminders recorded for this customer — the ones staff sent and the automatic due-date notices. All reminders are in-app only.</p>
+                </div>
+              </div>
+              <div className="list compactList">
+                {reminderHistory.slice(0, 8).map((entry) => (
+                  <div className="row compactDataRow" key={entry.id}>
+                    <div>
+                      <strong>{entry.kind === "manual" ? "Manual reminder" : entry.kind === "dueSoon" ? "Due-soon notice" : "Overdue notice"}{entry.invoiceNumber ? ` — ${entry.invoiceNumber}` : ""}</strong>
+                      <p className="muted">{new Date(entry.createdAt).toLocaleString()}{entry.reason ? ` / ${entry.reason}` : ""}</p>
+                    </div>
+                    <span className={entry.kind === "overdue" ? "badge warning" : "badge"}>{entry.kind === "manual" ? "Manual" : entry.kind === "dueSoon" ? "Due soon" : "Overdue"}</span>
+                  </div>
+                ))}
+                {!reminderHistory.length && <p className="muted">No reminders recorded yet for this customer.</p>}
+              </div>
             </section>
             <div className="list compactList">
               {(selectedCustomer.contacts ?? []).map((contact) => (

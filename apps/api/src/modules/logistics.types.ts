@@ -429,8 +429,77 @@ export interface BillingInvoice {
   status: BillingInvoiceStatus;
   /** ISO date the invoice falls due (anchor delivery date + term days); absent when the customer has no structured term. */
   dueDate?: string;
+  /**
+   * Phase 6 P6-4 — due-reminder markers (server bookkeeping; stripped
+   * from every read model by deriveBillingInvoice). Each holds the
+   * Manila due-date key (YYYY-MM-DD) that reminder state last fired
+   * FOR; absent = the state has never fired for any date. The due scan
+   * fires a state only when its marker differs from the invoice's
+   * current due-date key, so each state notifies exactly once per due
+   * date — and a moved due date starts a fresh cycle instead of being
+   * suppressed by a reminder sent for the old date. The markers live on
+   * the invoice record itself so they persist with it on BOTH stores
+   * (JSON field / Prisma column) and the scan's state machine stays a
+   * pure function of the record.
+   */
+  dueSoonReminderForDate?: string;
+  overdueReminderForDate?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Phase 6 P6-4 — the due scan's outcome for one run: how many open
+ * invoices were examined and which invoices each reminder state newly
+ * fired for (empty arrays = the run changed nothing).
+ */
+export interface DueReminderScanResult {
+  scannedInvoices: number;
+  dueSoonNotified: string[];
+  overdueNotified: string[];
+}
+
+/**
+ * Phase 6 P6-4 — one row of the Due/Overdue worklist
+ * (GET /billing/due-worklist). Amounts are the LIVE derivation (the same
+ * figures as the invoice list/detail); `dueDate` is the Manila business
+ * date (YYYY-MM-DD). An invoice appears only while it has a balance AND
+ * a due date that is overdue or at most 3 days away.
+ */
+export interface DueWorklistRow {
+  invoiceId: string;
+  invoiceNumber: string;
+  customerId: string;
+  customerName: string;
+  /** Handling branch of the invoice's first package (destination as fallback) — the branch the reminder addresses. */
+  branchName?: string;
+  amountDue: number;
+  amountPaid: number;
+  balance: number;
+  /** The derived invoice status at read time (Overdue / Partially Paid / Issued). */
+  status: BillingInvoiceStatus;
+  dueDate: string;
+  state: "DueSoon" | "Overdue";
+  /** Whole Manila days until the due date; 0 once overdue. */
+  daysUntilDue: number;
+  /** Whole Manila days past the due date; 0 while still due soon. */
+  daysOverdue: number;
+}
+
+/**
+ * Phase 6 P6-4 — one entry of a customer's reminder history
+ * (GET /customers/:id/reminder-history), read from the audit trail:
+ * manual reminders staff sent from the customer view (action
+ * billing.reminder) and the due scan's automatic notices for the
+ * customer's invoices (billing.reminder.dueSoon / .overdue).
+ */
+export interface CustomerReminderHistoryEntry {
+  id: string;
+  kind: "manual" | "dueSoon" | "overdue";
+  invoiceId?: string;
+  invoiceNumber?: string;
+  reason?: string;
+  createdAt: string;
 }
 
 /**

@@ -537,7 +537,7 @@ async function createPaymentsExpensesBilling(customers, trips) {
     });
     await asRole(ownerRole, `/customers/${customer.id}/billing-reminder`, {
       method: "POST",
-      body: JSON.stringify({ balance: money(0, 50000), dueRule: customer.billingTerm, branchName: customer.businessName.includes("Naga") ? "Naga" : "Daet", smsReady: true })
+      body: JSON.stringify({ branchName: customer.businessName.includes("Naga") ? "Naga" : "Daet" })
     });
     invoices += 1;
   }
@@ -728,7 +728,7 @@ async function main() {
       "Separate Driver master is not implemented; drivers are embedded in truck/trip fields.",
       "Trip completion endpoint is not implemented; arrived/delivered trips remain active from trip perspective.",
       "Persistent print/reprint logs are not exposed through public document endpoints.",
-      "SMS integration is future-ready only."
+      "Billing reminders are in-app only; no SMS/email integration exists."
     ]
   };
   console.log(JSON.stringify(report, null, 2));
