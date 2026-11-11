@@ -169,9 +169,11 @@ describe("LogisticsService smoke seeding", () => {
     });
     expect(deliveryLogin.user.role).toBe("Delivery Staff");
 
-    // Wrong passwords still fail, and demo login behaviour is unchanged.
+    // Wrong passwords still fail. And since P5-2 the gate provisions ONLY
+    // the smoke accounts: the old demo admin login is gone with the demo
+    // accounts (in P5-1 it still worked here via the credential overlay).
     expect(() => service.login({ email: SMOKE_SEED_DEFAULTS.email, password: "wrong" })).toThrow();
-    expect(service.login({ email: "admin@mts.local", password: "password" }).user.role).toBe("System Admin");
+    expect(() => service.login({ email: "admin@mts.local", password: "password" })).toThrow("Invalid email or password");
 
     await service.onModuleDestroy();
   });

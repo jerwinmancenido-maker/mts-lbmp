@@ -70,6 +70,7 @@ export interface UserRow {
   phone: string | null;
   passwordHash: string | null;
   staffCodeHash: string | null;
+  mustChangePassword: boolean;
   sessionVersion: number;
   failedLoginAttempts: number;
   loginLockedUntil: DateValue | null;
@@ -612,6 +613,9 @@ export function stateToRows(state: ServiceState): PrismaStateRows {
       // member's staff code now survives an API restart on this path.
       passwordHash: user.passwordHash ?? null,
       staffCodeHash: user.staffCodeHash ?? null,
+      // Phase 5 P5-2: the forced-password-change flag round-trips so a
+      // provisioned/reset account stays gated across API restarts.
+      mustChangePassword: user.mustChangePassword ?? false,
       sessionVersion: user.sessionVersion ?? 0,
       failedLoginAttempts: user.failedLoginAttempts ?? 0,
       loginLockedUntil: user.loginLockedUntil ? new Date(user.loginLockedUntil) : null,
@@ -1354,6 +1358,7 @@ export function rowsToState(rows: PrismaStateRows): LoadedServiceState {
       // in-state record represents "not set").
       passwordHash: user.passwordHash ?? undefined,
       staffCodeHash: user.staffCodeHash ?? undefined,
+      mustChangePassword: user.mustChangePassword ? true : undefined,
       sessionVersion: user.sessionVersion ?? 0,
       failedLoginAttempts: user.failedLoginAttempts ? user.failedLoginAttempts : undefined,
       loginLockedUntil: user.loginLockedUntil ? toIso(user.loginLockedUntil) : undefined,

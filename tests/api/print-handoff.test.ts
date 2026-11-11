@@ -10,7 +10,8 @@ import type {
   HardwareTestRecord,
   PrintLog,
   ReceivingRecord,
-  ServiceAuditLog
+  ServiceAuditLog,
+  StaffUserRecord
 } from "../../apps/api/src/modules/logistics.types";
 
 /**
@@ -64,6 +65,7 @@ type ServiceInternals = {
   printLogs: PrintLog[];
   auditLogs: ServiceAuditLog[];
   hardwareTests: HardwareTestRecord[];
+  customUsers: StaffUserRecord[];
 };
 
 function internals(service: LogisticsService): ServiceInternals {
@@ -74,6 +76,18 @@ function seededService() {
   const service = new LogisticsService();
   internals(service).packages.push(cargo);
   internals(service).receivingRecords.push(receiving);
+  // Phase 5 P5-2: the hand-off's printedByName resolves from the user
+  // store. This fixture used to lean on the hard-coded "Daet Owner Demo"
+  // account; that account is deleted, so the test seeds the equivalent
+  // real user record itself.
+  internals(service).customUsers.push({
+    id: "user_daet_owner",
+    name: "Daet Owner Demo",
+    email: "daet.owner@example.test",
+    role: "Daet Owner",
+    branchAccess: "Daet",
+    status: "Active"
+  });
   return service;
 }
 

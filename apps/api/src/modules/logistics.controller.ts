@@ -30,6 +30,20 @@ export class LogisticsController {
     return this.logistics.loginWithStaffCode(body);
   }
 
+  /**
+   * Phase 5 P5-2: self-service password change. Authenticated (no extra
+   * permission — it is the signed-in user's own credential) and, per the
+   * auth guard's forced-change gate, the ONLY authenticated endpoint a
+   * mustChangePassword-flagged account can reach.
+   */
+  @Post("auth/change-password")
+  changePassword(
+    @Req() request: { user?: { id?: string } },
+    @Body() body: Parameters<LogisticsService["changeOwnPassword"]>[1]
+  ) {
+    return this.logistics.changeOwnPassword(request.user?.id ?? "", body);
+  }
+
   @Get("dashboard")
   dashboard(@Req() request: { user?: { role?: string; branchAccess?: string } }) {
     return this.logistics.getDashboard(request.user);
@@ -83,22 +97,42 @@ export class LogisticsController {
     return this.logistics.updateBranch(id, body);
   }
 
+  // Phase 5 P5-2: user management moves from settings.manage to the
+  // purpose-built users.manage permission, which was defined in
+  // @mts-lbmp/permissions but required by no endpoint until now. The
+  // Daet/Naga Owner presets gain users.manage in the same change (they
+  // already managed their branch staff through these endpoints under
+  // settings.manage), so no existing workflow loses access; every other
+  // settings endpoint stays on settings.manage. (The audit's P5-3 note
+  // listed this swap as optional-if-small — it was small, so it lands
+  // here instead of being deferred.)
   @Patch("settings/users/:id/branch-access")
-  @RequirePermissions("settings.manage")
+  @RequirePermissions("users.manage")
   updateUserBranchAccess(@Param("id") id: string, @Body() body: Parameters<LogisticsService["updateUserBranchAccess"]>[1]) {
     return this.logistics.updateUserBranchAccess(id, body);
   }
 
   @Post("settings/users")
-  @RequirePermissions("settings.manage")
+  @RequirePermissions("users.manage")
   createStaffUser(@Body() body: Parameters<LogisticsService["createStaffUser"]>[0]) {
     return this.logistics.createStaffUser(body);
   }
 
   @Patch("settings/users/:id")
-  @RequirePermissions("settings.manage")
+  @RequirePermissions("users.manage")
   updateStaffUser(@Param("id") id: string, @Body() body: Parameters<LogisticsService["updateStaffUser"]>[1]) {
     return this.logistics.updateStaffUser(id, body);
+  }
+
+  /** Phase 5 P5-2: admin password reset (temporary password + forced change + session revocation). */
+  @Post("settings/users/:id/reset-password")
+  @RequirePermissions("users.manage")
+  resetUserPassword(
+    @Req() request: { user?: { id?: string } },
+    @Param("id") id: string,
+    @Body() body: Parameters<LogisticsService["resetUserPassword"]>[2]
+  ) {
+    return this.logistics.resetUserPassword(request.user?.id, id, body);
   }
 
   @Patch("settings/payment-methods")

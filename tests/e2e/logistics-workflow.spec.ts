@@ -3,8 +3,14 @@ import { expect, request, test, type APIRequestContext } from "@playwright/test"
 const apiBaseURL = process.env.E2E_API_BASE_URL ?? "http://localhost:4100";
 
 async function loginAsAdmin(api: APIRequestContext) {
+  // Phase 5 P5-2: the demo admin account is deleted. This spec runs
+  // against an API booted with ALLOW_DEMO_AUTH=true, which provisions
+  // the smoke accounts — defaults kept in sync with
+  // tools/smoke-credentials.mjs (SMOKE_EMAIL / SMOKE_PASSWORD override).
+  const email = process.env.SMOKE_EMAIL?.trim() || "smoke.admin@mts-smoke.test";
+  const secret = process.env.SMOKE_PASSWORD || "password";
   const response = await api.post("/auth/login", {
-    data: { email: "admin@mts.local", password: "password" }
+    data: { email, password: secret }
   });
   expect(response.ok()).toBeTruthy();
   const body = await response.json();

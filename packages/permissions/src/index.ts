@@ -61,6 +61,7 @@ export const rolePresets: Record<string, Permission[]> = {
     "documents.reprint",
     "messages.reply",
     "settings.manage",
+    "users.manage",
     "reports.view",
     "records.softDelete",
     "records.restore"
@@ -89,6 +90,7 @@ export const rolePresets: Record<string, Permission[]> = {
     "documents.reprint",
     "messages.reply",
     "settings.manage",
+    "users.manage",
     "reports.view",
     "records.softDelete",
     "records.restore"

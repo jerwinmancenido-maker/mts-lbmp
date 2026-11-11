@@ -1,9 +1,26 @@
 import { appendDiagnosticLog } from "./cache";
 
-let authToken = "demo-token-user_owner";
+/**
+ * The session JWT lives ONLY in this module variable (Phase 5 audit §6:
+ * never localStorage/cookies, so nothing persists for XSS to steal and a
+ * page reload ends the session). Phase 5 P5-2 removed the built-in
+ * default demo token — the shell starts signed OUT and the login screen
+ * is the only entry; setApiToken is called with the real token issued by
+ * POST /auth/login or /auth/staff-code.
+ */
+let authToken = "";
 
 export function setApiToken(token: string) {
   authToken = token;
+}
+
+/** Logout: drop the in-memory token. The next API call is unauthenticated. */
+export function clearApiToken() {
+  authToken = "";
+}
+
+export function hasApiToken() {
+  return authToken.length > 0;
 }
 
 export interface ApiWriteOptions {

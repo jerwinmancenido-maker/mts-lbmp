@@ -72,6 +72,9 @@ export interface BootstrapData {
     canApprove?: string[];
     status?: "Active" | "Inactive";
     hasStaffCode?: boolean;
+    /** Phase 5 P5-2: mirrors the API's safe-user shape (login responses included). */
+    hasPassword?: boolean;
+    mustChangePassword?: boolean;
     lastLogin?: string;
   }>;
   companyProfile: CompanyProfile;

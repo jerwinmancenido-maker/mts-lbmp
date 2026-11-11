@@ -20,6 +20,11 @@ model User {
   // replaces the unpersisted plaintext staffCode (Phase 2 parked gap §4.1).
   passwordHash  String?
   staffCodeHash String?
+  // Phase 5 P5-2: set when an admin provisions or resets the account's
+  // password (and on the first-boot bootstrap admin). The auth guard
+  // refuses every endpoint except the change-password endpoint until the
+  // user replaces the temporary password with their own.
+  mustChangePassword Boolean  @default(false)
   // Token revocation watermark: bumped on credential change; the auth
   // guard rejects JWTs whose `sv` claim no longer matches (P5-1).
   sessionVersion Int           @default(0)
