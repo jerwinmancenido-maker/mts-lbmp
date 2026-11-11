@@ -1833,9 +1833,29 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   }
 
   finalizeReceivingDraft(draftId: string, input: Parameters<LogisticsService["createReceiving"]>[0]) {
+    // The idempotency scope names the draft itself, so a key can never be
+    // mistaken for a different draft's finalize.
+    return this.runIdempotent(`POST /receiving/drafts/${draftId}/finalize`, input.idempotencyKey, () =>
+      this.finalizeReceivingDraftOnce(draftId, input)
+    );
+  }
+
+  private finalizeReceivingDraftOnce(draftId: string, input: Parameters<LogisticsService["createReceiving"]>[0]) {
     const draft = this.findReceivingDraft(draftId);
+    // B4 replay safety: an offline finalize queued on one device may replay
+    // after the same draft was already finalized online (staff re-did the
+    // work at a connected terminal). Minting a second receiving record
+    // would duplicate every package, so a replay against an
+    // already-finalized draft returns the record the draft points at —
+    // the same shape as the original finalize result. Keyed replays never
+    // reach here (B1 returns the stored result first); this guard covers
+    // the different-key and unkeyed cases.
+    if (draft.status === "Finalized" && draft.finalizedReceivingId) {
+      const existing = this.receivingRecords.find((record) => record.id === draft.finalizedReceivingId);
+      if (existing) return { draft, receiving: existing };
+    }
     if (draft.status !== "Draft") throw new BadRequestException("Only draft records can be finalized");
-    const receiving = this.createReceiving(input);
+    const receiving = this.createReceivingOnce(input);
     draft.status = "Finalized";
     draft.finalizedReceivingId = receiving.id;
     draft.updatedAt = new Date().toISOString();
@@ -1844,8 +1864,30 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return { draft, receiving };
   }
 
-  createReceiving(input: {
+  createReceiving(input: Parameters<LogisticsService["createReceivingOnce"]>[0]) {
+    return this.runIdempotent("POST /receiving", input.idempotencyKey, () => this.createReceivingOnce(input));
+  }
+
+  private createReceivingOnce(input: {
     customerId: string;
+    idempotencyKey?: string;
+    /**
+     * B4: the payment collected at the receiving counter, applied by the
+     * server as part of the finalize unit. The offline queue cannot replay
+     * the client's follow-up /payments calls (they need the server-minted
+     * receiving and package ids), so a queued finalize carries the
+     * collection with it and the server applies it exactly once — see
+     * applyReceivingCollectPayment. Online clients may omit it and keep
+     * posting /payments themselves.
+     */
+    collectPayment?: {
+      totalPaid: number;
+      paymentStatus?: string;
+      method?: string;
+      reference?: string;
+      proofUrl?: string;
+      notes?: string;
+    };
     customerDrNumber?: string;
     sender?: string;
     consignee?: string;
@@ -1891,6 +1933,9 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     if (!input.packages.length) throw new BadRequestException("At least one package is required");
     this.assertNoLocalPhotoReference(input.drPhotoUrl, "DR photo");
     for (const pkg of input.packages) this.assertNoLocalPhotoReference(pkg.photoUrls, "Package photo");
+    // Validate the counter payment's proof up front too, so a bad proof
+    // URL fails the whole finalize before any record or number is minted.
+    if (input.collectPayment) this.assertNoLocalPhotoReference(input.collectPayment.proofUrl, "Payment proof");
 
     const now = new Date();
     const recordNumber = this.nextDocumentNumber(documentPrefixes.receivingRecord, now);
@@ -2002,8 +2047,66 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       );
     }
     this.audit("receiving.create", "ReceivingRecord", receiving.id);
+    if (input.collectPayment) this.applyReceivingCollectPayment(receiving, input.collectPayment);
     this.saveData();
     return receiving;
+  }
+
+  /**
+   * B4: applies the payment collected at the receiving counter as part of
+   * the finalize unit. Mirrors the web client's recordReceivingPayments
+   * distribution exactly — packages in order, each capped at its amount
+   * due; an Advance Payment larger than the total due puts the excess on
+   * the first package — and records each collection through recordPayment
+   * with the same deterministic per-package key the client derives
+   * (`receiving-payment:<receivingId>:<packageId>`), so a replayed
+   * finalize can never double-collect. The collector identity fields the
+   * online client sends are not available server-side and stay unset.
+   */
+  private applyReceivingCollectPayment(
+    receiving: ReceivingRecord,
+    collectPayment: NonNullable<Parameters<LogisticsService["createReceivingOnce"]>[0]["collectPayment"]>
+  ) {
+    const paymentStatus = collectPayment.paymentStatus ?? "";
+    if (paymentStatus === "Unpaid") return;
+    const totalPaid = Number(collectPayment.totalPaid ?? 0);
+    if (!Number.isFinite(totalPaid) || totalPaid <= 0) return;
+    const totalAmountDue = receiving.packages.reduce((sum, pkg) => sum + Number(pkg.price ?? 0), 0);
+    let remaining = totalPaid;
+    receiving.packages.forEach((pkg, index) => {
+      const amountDue = Number(pkg.price ?? 0);
+      const isLastPackage = index === receiving.packages.length - 1;
+      const amountPaid =
+        paymentStatus === "Advance Payment" && index === 0 && totalPaid > totalAmountDue
+          ? totalPaid - receiving.packages.slice(1).reduce((sum, item) => sum + Number(item.price ?? 0), 0)
+          : Math.min(Math.max(remaining, 0), amountDue);
+      if (amountPaid <= 0 && !isLastPackage) return;
+      if (amountPaid <= 0) return;
+      remaining -= amountPaid;
+      this.recordPayment({
+        cargoPackageId: pkg.id,
+        amountDue,
+        amountPaid,
+        method: collectPayment.method?.trim() || "Cash",
+        collectionPoint: "Receiving",
+        branchName: pkg.handlingBranchName ?? pkg.destination,
+        proofUrl: collectPayment.proofUrl,
+        notes:
+          [
+            `Collected during receiving ${receiving.recordNumber}`,
+            paymentStatus,
+            collectPayment.reference ? `Reference: ${collectPayment.reference}` : "",
+            collectPayment.notes ?? "",
+            paymentStatus === "Advance Payment" && totalPaid > totalAmountDue
+              ? `Advance/excess: PHP ${(totalPaid - totalAmountDue).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              : ""
+          ]
+            .filter(Boolean)
+            .join(" | ") || undefined,
+        idempotencyKey: `receiving-payment:${receiving.id}:${pkg.id}`
+      });
+      if (remaining <= 0 && paymentStatus !== "Advance Payment") return;
+    });
   }
 
   attachReceivingDrPhoto(receivingRecordId: string, input: { drPhotoUrl: string; reason?: string; idempotencyKey?: string }) {
@@ -2282,9 +2385,31 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return trip;
   }
 
-  loadCargo(tripId: string, input: { cargoPackageId: string; overrideReason?: string }) {
+  loadCargo(tripId: string, input: { cargoPackageId: string; overrideReason?: string; idempotencyKey?: string }) {
+    return this.runIdempotent(`POST /trips/${tripId}/load`, input.idempotencyKey, () => this.loadCargoOnce(tripId, input));
+  }
+
+  private loadCargoOnce(tripId: string, input: Parameters<LogisticsService["loadCargo"]>[1]) {
     const trip = this.findTrip(tripId);
     const cargo = this.findPackage(input.cargoPackageId);
+    // B4 replay semantics: a load of a package that is already on THIS
+    // trip is the original load replayed (queued offline, response lost,
+    // or a double-tap) — return the current outcome without re-stamping
+    // statuses or auditing a second load. A load replaying after the
+    // package was put on ANOTHER active trip is a real conflict and fails
+    // loudly below, so the offline queue surfaces it as a per-item failure
+    // with this reason instead of silently moving the cargo.
+    if (trip.cargoPackageIds.includes(cargo.id) && !["Completed", "Cancelled"].includes(trip.status)) {
+      return { trip, cargo };
+    }
+    const otherTrip = this.trips.find(
+      (entry) => entry.id !== trip.id && !["Completed", "Cancelled"].includes(entry.status) && entry.cargoPackageIds.includes(cargo.id)
+    );
+    if (otherTrip) {
+      throw new BadRequestException(
+        `${cargo.packageNumber} is already loaded on trip ${otherTrip.tripNumber} (${otherTrip.status}). It stays on that trip — unload it there before loading it elsewhere.`
+      );
+    }
     const customer = this.findCustomer(cargo.customerId);
     if (customer.status === "Pending") {
       this.notify("Pending customer loaded", `${cargo.packageNumber} loaded for ${customer.businessName}. Customer is still pending branch owner review.`, "Normal");
@@ -2296,6 +2421,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException("This package has no price yet. Owner approval/pricing is required before loading.");
     }
     if (cargo.status === "Delivered") throw new BadRequestException("Delivered cargo cannot be loaded.");
+    if (cargo.status === "Cancelled") throw new BadRequestException("Cancelled cargo cannot be loaded.");
     if (cargo.condition !== "Good" && !input.overrideReason) {
       throw new BadRequestException("Package condition requires review before loading.");
     }
@@ -2314,7 +2440,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return { trip, cargo };
   }
 
-  unloadCargo(tripId: string, input: { cargoPackageId: string; reason?: string }) {
+  unloadCargo(tripId: string, input: { cargoPackageId: string; reason?: string; idempotencyKey?: string }) {
+    return this.runIdempotent(`POST /trips/${tripId}/unload`, input.idempotencyKey, () => this.unloadCargoOnce(tripId, input));
+  }
+
+  private unloadCargoOnce(tripId: string, input: Parameters<LogisticsService["unloadCargo"]>[1]) {
     const trip = this.findTrip(tripId);
     if (!["Planned", "Loading"].includes(trip.status)) {
       throw new BadRequestException("Cargo can only be removed before the trip departs.");

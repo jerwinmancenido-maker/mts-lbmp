@@ -30,7 +30,7 @@ import type { Ref } from "react";
 import type { PackageCondition } from "@mts-lbmp/shared";
 import { apiGet, apiPatch, apiPost, setApiToken } from "./api";
 import { appendDiagnosticLog, clearCachedRecords, clearDiagnosticLogs, deleteOfflineQueueRecord, deleteQueuedPhoto, enqueueOfflineAction, getOfflineStorageSummary, listDiagnosticLogs, listOfflineQueue, listQueuedPhotos, newOfflineQueueRecordId, pruneOfflineQueue, readCachedRecord, readCachedValue, replaceQueuedPhotoReferences, requestPersistentStorage, updateOfflineQueueRecord, updateQueuedPhoto, writeCachedValue, type DiagnosticLogRecord, type OfflineQueueRecord, type OfflineStorageSummary, type QueuedPhotoRecord } from "./cache";
-import { attemptQueueRecordSync, queueItemView, shouldAutoRetryQueueRecord, sortQueueItemViews, type QueueItemView } from "./queue-view";
+import { OFFLINE_QUEUE_MAX_AUTO_ATTEMPTS, attemptQueueRecordSync, queueItemView, shouldAutoRetryQueueRecord, sortQueueItemViews, type QueueItemView } from "./queue-view";
 import { cacheReceivingFormStore, clearReceivingFormSnapshot, loadReceivingFormSnapshot, receivingFormHasContent, saveReceivingFormSnapshot, type ReceivingFormSnapshot } from "./receiving-form-persistence";
 import { parsePhilippineAddress, readDeliveryReceiptPhoto, type DrOcrConfidence, type DrOcrProgress, type DrOcrResult } from "./dr-ocr";
 import { setPhotoAuditUser, setPhotoUploadContext, takeNativeCameraPhoto, uploadCompressedImage } from "./media";
@@ -3765,6 +3765,52 @@ interface PriceSuggestion {
   warnings: string[];
 }
 
+/**
+ * Phase 4 B4 — queued finalize bookkeeping. A finalize queued offline is
+ * an INTENT only: the server mints the record and package numbers when
+ * the queue replays it. These helpers match queue records back to the
+ * form/draft they belong to and recover the server-minted record from
+ * the response the replayer now retains on the synced record.
+ */
+type QueuedFinalizeInfo = { draftId: string; drNumber: string; intakeId: string };
+
+function finalizeRecordDraftId(record: OfflineQueueRecord): string {
+  const match = record.path.match(/^\/receiving\/drafts\/([^/]+)\/finalize$/);
+  return match?.[1] ?? "";
+}
+
+function finalizeRecordMatches(record: OfflineQueueRecord, target: { draftId: string; drNumber: string }): boolean {
+  if (target.draftId) return finalizeRecordDraftId(record) === target.draftId;
+  if (record.path !== "/receiving") return false;
+  const body = record.body as { customerDrNumber?: string } | undefined;
+  return Boolean(target.drNumber) && body?.customerDrNumber === target.drNumber;
+}
+
+function extractFinalizeReceiving(record: OfflineQueueRecord): ReceivingSaveResponse | null {
+  const result = record.result as { receiving?: ReceivingSaveResponse } | ReceivingSaveResponse | undefined;
+  if (!result || typeof result !== "object") return null;
+  const receiving = "receiving" in result && result.receiving ? result.receiving : (result as ReceivingSaveResponse);
+  return receiving?.id && receiving.recordNumber ? receiving : null;
+}
+
+function savedSummaryFromFinalizeRecord(record: OfflineQueueRecord, receiving: ReceivingSaveResponse): SavedReceivingSummary {
+  const body = (record.body ?? {}) as {
+    collectPayment?: { paymentStatus?: string; totalPaid?: number };
+    packages?: Array<{ price?: number | null; handlingBranchName?: string; destination?: string }>;
+  };
+  const lines = Array.isArray(body.packages) ? body.packages : [];
+  const amountDue = receiving.packages.reduce((sum, pkg) => sum + Number(pkg.price ?? 0), 0);
+  const amountPaid = Number(body.collectPayment?.totalPaid ?? 0);
+  const paymentStatus = (body.collectPayment?.paymentStatus ?? "Unpaid") as SavedReceivingSummary["paymentStatus"];
+  return {
+    branchSummary: [...new Set(lines.map((line) => line.handlingBranchName || line.destination || "").filter(Boolean))].join(" / "),
+    amountDue,
+    paymentStatus,
+    amountPaid: Number.isFinite(amountPaid) ? amountPaid : 0,
+    balance: Math.max(amountDue - (Number.isFinite(amountPaid) ? amountPaid : 0), 0)
+  };
+}
+
 function Receiving({
   customers,
   branches,
@@ -3881,6 +3927,11 @@ function Receiving({
   const [printStatus, setPrintStatus] = useState("");
   const [draftSaveStatus, setDraftSaveStatus] = useState("");
   const [drafts, setDrafts] = useState<ReceivingDraftRecord[]>([]);
+  // B4: the finalize this form queued offline (if any) and the set of
+  // draft ids with a finalize still waiting in the offline queue.
+  const [queuedFinalize, setQueuedFinalize] = useState<QueuedFinalizeInfo | null>(null);
+  const queuedFinalizeRef = useRef<QueuedFinalizeInfo | null>(null);
+  const [queuedFinalizeDraftIds, setQueuedFinalizeDraftIds] = useState<Set<string>>(new Set());
   const [draftFilter, setDraftFilter] = useState<"Draft" | "Cancelled">("Draft");
   const [recordsView, setRecordsView] = useState<"saved" | "drafts" | "cancelled">("saved");
   const [intakeTasks, setIntakeTasks] = useState<ReceivingIntakeTask[]>([]);
@@ -4756,49 +4807,6 @@ function Receiving({
     setReceiveMessage("Product fields cleared. DR details were kept.");
   }
 
-  async function recordReceivingPayments(receiving: ReceivingSaveResponse) {
-    if (receivingPaymentStatus === "Unpaid") return;
-    const totalPaid = Number(receivingAmountPaid || 0);
-    if (!Number.isFinite(totalPaid) || totalPaid <= 0) return;
-
-    let remaining = receivingPaymentStatus === "Paid" && totalPaid === 0 ? receivingAmountDue : totalPaid;
-    for (const [index, pkg] of receiving.packages.entries()) {
-      const amountDue = Number(pkg.price ?? 0);
-      const isLastPackage = index === receiving.packages.length - 1;
-      const amountPaid = receivingPaymentStatus === "Advance Payment" && index === 0 && totalPaid > receivingAmountDue
-        ? totalPaid - receiving.packages.slice(1).reduce((sum, item) => sum + Number(item.price ?? 0), 0)
-        : Math.min(Math.max(remaining, 0), amountDue);
-      if (amountPaid <= 0 && !isLastPackage) continue;
-      if (amountPaid <= 0) break;
-      remaining -= amountPaid;
-      // Phase 4 B1: one payment per package per receiving record is a fixed
-      // intent, so the key is derived from both ids. If this loop is re-run
-      // against the same saved receiving (e.g. retried after a mid-loop
-      // network failure), packages already paid return their original
-      // payment instead of being collected twice.
-      await apiPost("/payments", {
-        cargoPackageId: pkg.id,
-        amountDue,
-        amountPaid,
-        method: receivingPaymentMethod,
-        collectionPoint: "Receiving",
-        collectedByUserId: activeUser.id,
-        collectedByName: activeUser.name,
-        collectedByRole: activeUser.role,
-        branchName: pkg.handlingBranchName ?? pkg.destination,
-        proofUrl: receivingPaymentProofUrl || undefined,
-        notes: [
-          `Collected during receiving ${receiving.recordNumber}`,
-          receivingPaymentStatus,
-          receivingPaymentReference ? `Reference: ${receivingPaymentReference}` : "",
-          receivingPaymentNotes,
-          receivingPaymentStatus === "Advance Payment" && totalPaid > receivingAmountDue ? `Advance/excess: PHP ${formatReceivingMoney(totalPaid - receivingAmountDue)}` : ""
-        ].filter(Boolean).join(" | ")
-      }, { idempotencyKey: `receiving-payment:${receiving.id}:${pkg.id}` });
-      if (remaining <= 0 && receivingPaymentStatus !== "Advance Payment") break;
-    }
-  }
-
   function editProductLine(line: ReceivingLineDraft) {
     setDescription(line.description);
     setBarcode(line.productBarcode ?? "");
@@ -5118,6 +5126,28 @@ function Receiving({
     formRestoreAttemptedRef.current = true;
     const snapshot = await loadReceivingFormSnapshot(cacheReceivingFormStore, activeUser.id).catch(() => null);
     if (!snapshot) return;
+    // B4: if this form's finalize was queued offline and has since
+    // synced, the receiving already exists on the server with official
+    // numbers — restoring the local copy would invite a duplicate
+    // finalize. Complete the finalize locally instead of restoring.
+    const queue = await listOfflineQueue().catch(() => [] as OfflineQueueRecord[]);
+    const syncedFinalize = queue.find(
+      (record) =>
+        record.type === "receivingFinalize" &&
+        record.status === "Synced" &&
+        finalizeRecordMatches(record, { draftId: snapshot.activeDraftId, drNumber: snapshot.payload.customerDrNumber ?? "" })
+    );
+    if (syncedFinalize) {
+      const receiving = extractFinalizeReceiving(syncedFinalize);
+      if (receiving) {
+        completeReceivingFinalize(receiving, savedSummaryFromFinalizeRecord(syncedFinalize, receiving), "");
+        setReceiveMessage(`${receiving.recordNumber} was finalized while this tablet was offline — official numbers are assigned and the local copy was closed.`);
+      } else {
+        void clearReceivingFormSnapshot(cacheReceivingFormStore, activeUser.id).catch(() => undefined);
+        setReceiveMessage("A receiving finalized on this tablet has synced — the official record is on the server, so the local copy was closed instead of restored. Open Records to view it.");
+      }
+      return;
+    }
     setActiveDraftId(snapshot.activeDraftId);
     setActiveDraftNumber(snapshot.activeDraftNumber);
     applyDraftFormState(snapshot.payload.formState as ReceivingDraftRecord["formState"], {
@@ -5774,6 +5804,13 @@ function Receiving({
   async function submitReceivingDocument() {
     if (!productsToSave.length) return;
     setConfirmReceivingOpen(false);
+    // B4: one queued finalize per form/draft. The queued payload is the
+    // contract — re-finalizing while it waits would queue a second,
+    // divergent intent for the same work.
+    if (queuedFinalize && queuedFinalize.draftId === activeDraftId) {
+      setReceiveMessage("This finalize is already queued — waiting for connection. Official record and package numbers arrive on sync.");
+      return;
+    }
     await onAction("Save receiving", async () => {
       const saveSummary: SavedReceivingSummary = {
         branchSummary: Object.keys(productBranchCounts).join(" / ") || handlingBranchName,
@@ -5831,51 +5868,154 @@ function Receiving({
           photoUrls: [line.photoUrl].filter(Boolean)
         }))
       };
-      const receiving = activeDraftId
-        ? (await apiPost<{ receiving: ReceivingSaveResponse }>(`/receiving/drafts/${activeDraftId}/finalize`, receivingPayload)).receiving
-        : await apiPost<ReceivingSaveResponse>("/receiving", receivingPayload);
-
-      // The official RR is already created here. Move staff to the print-ready page
-      // before doing any secondary cleanup so they never get stranded in the form.
-      setRecordedReceiving(receiving);
-      setSavedReceivingSummary(saveSummary);
-      setSavedItemsExpanded(false);
-      setSavedPaperWidth(readDevicePaperWidth());
-      setReceiptPreview("");
-      // The receiving is finalized on the server; the local form guard
-      // must not resurrect it on the next open.
-      void clearReceivingFormSnapshot(cacheReceivingFormStore, activeUser.id).catch(() => undefined);
-      setRestoredForm(null);
-      setMode("saved");
-      setPrintStatus(`${receiving.recordNumber} saved. Print the receiving receipt when ready.`);
-      window.setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
-
-      try {
-        await recordReceivingPayments(receiving);
-      } catch (error) {
-        setPrintStatus(`${receiving.recordNumber} saved. Payment recording needs review: ${error instanceof Error ? error.message : "unable to record payment"}.`);
+      // B4: finalize is one queueable unit. The payload carries the
+      // counter payment (when any) so the server applies it inside the
+      // finalize — a queued finalize cannot run follow-up /payments
+      // calls, because they need the server-minted receiving and package
+      // ids. Record and package numbers are minted by the server when
+      // the finalize actually applies (immediately when online, on
+      // replay when offline) — never on this device.
+      const finalizeBody = {
+        ...receivingPayload,
+        collectPayment: {
+          totalPaid: Number.isFinite(numericReceivingAmountPaid) ? numericReceivingAmountPaid : 0,
+          paymentStatus: receivingPaymentStatus,
+          method: receivingPaymentMethod,
+          reference: receivingPaymentReference || undefined,
+          proofUrl: receivingPaymentProofUrl || undefined,
+          notes: receivingPaymentNotes || undefined
+        }
+      };
+      let receiving: ReceivingSaveResponse;
+      if (activeDraftId) {
+        const outcome = await queueablePost<{ receiving: ReceivingSaveResponse }>(
+          "receivingFinalize",
+          `/receiving/drafts/${activeDraftId}/finalize`,
+          finalizeBody
+        );
+        if (outcome.queued) {
+          markFinalizeQueued(activeDraftId, receivingPayload.customerDrNumber, activeIntakeId);
+          return;
+        }
+        receiving = outcome.result.receiving;
+      } else {
+        const outcome = await queueablePost<ReceivingSaveResponse>("receivingFinalize", "/receiving", finalizeBody);
+        if (outcome.queued) {
+          markFinalizeQueued("", receivingPayload.customerDrNumber, activeIntakeId);
+          return;
+        }
+        receiving = outcome.result;
       }
-      if (activeIntakeId) {
-        apiPost(`/receiving/intake/${activeIntakeId}/convert`, { receivingId: receiving.id })
-          .catch(() => setReceiveMessage("Receiving saved. Wall QR intake link was not updated; check Intake Tasks later."));
-      }
-      setActiveIntakeId("");
-      setActiveDraftId("");
-      setActiveDraftNumber("");
-      setProductLines([]);
-      setDraftSaveStatus("");
-      lastAutoSavedDraftRef.current = "";
-      setCustomerDrNumber("");
-      setDrPhotoUrl("");
-      setReceivingPaymentStatus("Unpaid");
-      setReceivingAmountPaid("");
-      setReceivingPaymentReference("");
-      setReceivingPaymentProofUrl("");
-      setReceivingPaymentNotes("");
-      loadDrafts().catch(() => setReceiveMessage("Receiving saved. Draft list refresh failed; open Records later."));
-      loadIntakeTasks().catch(() => setReceiveMessage("Receiving saved. Intake list refresh failed; open Intake Tasks later."));
+      completeReceivingFinalize(receiving, saveSummary, activeIntakeId);
     });
   }
+
+  /**
+   * The local half of a completed finalize: show the saved record, clear
+   * the form and its persisted snapshot, and run the follow-ups. Shared
+   * by the online finalize and the B4 queued-finalize watcher/mount
+   * guard, which call it with the server-minted record once a queued
+   * finalize syncs. The counter payment is NOT recorded here — it
+   * travels inside the finalize payload and the server applies it as
+   * part of the finalize unit (the client's old follow-up /payments loop
+   * now lives server-side as applyReceivingCollectPayment, with the same
+   * distribution and the same derived per-package idempotency keys).
+   */
+  function completeReceivingFinalize(receiving: ReceivingSaveResponse, saveSummary: SavedReceivingSummary, intakeId: string) {
+    // The official RR already exists here. Move staff to the print-ready page
+    // before doing any secondary cleanup so they never get stranded in the form.
+    setRecordedReceiving(receiving);
+    setSavedReceivingSummary(saveSummary);
+    setSavedItemsExpanded(false);
+    setSavedPaperWidth(readDevicePaperWidth());
+    setReceiptPreview("");
+    // The receiving is finalized on the server; the local form guard
+    // must not resurrect it on the next open.
+    void clearReceivingFormSnapshot(cacheReceivingFormStore, activeUser.id).catch(() => undefined);
+    setRestoredForm(null);
+    setMode("saved");
+    setPrintStatus(`${receiving.recordNumber} saved. Print the receiving receipt when ready.`);
+    window.setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
+    if (intakeId) {
+      apiPost(`/receiving/intake/${intakeId}/convert`, { receivingId: receiving.id })
+        .catch(() => setReceiveMessage("Receiving saved. Wall QR intake link was not updated; check Intake Tasks later."));
+    }
+    setActiveIntakeId("");
+    setActiveDraftId("");
+    setActiveDraftNumber("");
+    setProductLines([]);
+    setDraftSaveStatus("");
+    lastAutoSavedDraftRef.current = "";
+    setCustomerDrNumber("");
+    setDrPhotoUrl("");
+    setReceivingPaymentStatus("Unpaid");
+    setReceivingAmountPaid("");
+    setReceivingPaymentReference("");
+    setReceivingPaymentProofUrl("");
+    setReceivingPaymentNotes("");
+    loadDrafts().catch(() => setReceiveMessage("Receiving saved. Draft list refresh failed; open Records later."));
+    loadIntakeTasks().catch(() => setReceiveMessage("Receiving saved. Intake list refresh failed; open Intake Tasks later."));
+  }
+
+  function markFinalizeQueued(draftId: string, drNumber: string, intakeId: string) {
+    const info: QueuedFinalizeInfo = { draftId, drNumber, intakeId };
+    queuedFinalizeRef.current = info;
+    setQueuedFinalize(info);
+    void checkQueuedFinalize();
+    setReceiveMessage(
+      "Finalize queued — waiting for connection. Official record and package numbers arrive on sync; nothing is final yet. Keep this form as-is until it syncs."
+    );
+  }
+
+  // B4: watch the offline queue for finalize records. The draft badges
+  // come from the same pass. When this form's queued finalize syncs, the
+  // local finalize completes with the server-minted record exactly like
+  // the online path; when it parks as failed, say so plainly and leave
+  // the form untouched so staff can retry or re-finalize.
+  async function checkQueuedFinalize() {
+    const queue = await listOfflineQueue().catch(() => [] as OfflineQueueRecord[]);
+    const finalizeRecords = queue.filter((record) => record.type === "receivingFinalize");
+    const waitingIds = finalizeRecords
+      .filter((record) => record.status === "Pending" || record.status === "Syncing" || record.status === "Failed")
+      .map(finalizeRecordDraftId)
+      .filter(Boolean);
+    setQueuedFinalizeDraftIds((previous) => {
+      const next = new Set(waitingIds);
+      return previous.size === next.size && [...next].every((entry) => previous.has(entry)) ? previous : next;
+    });
+    const pending = queuedFinalizeRef.current;
+    if (!pending) return;
+    const mine = finalizeRecords.find((record) => finalizeRecordMatches(record, pending));
+    if (!mine) return;
+    if (mine.status === "Synced") {
+      queuedFinalizeRef.current = null;
+      setQueuedFinalize(null);
+      const receiving = extractFinalizeReceiving(mine);
+      if (receiving) {
+        completeReceivingFinalize(receiving, savedSummaryFromFinalizeRecord(mine, receiving), pending.intakeId);
+        setReceiveMessage(`${receiving.recordNumber} finalized on sync — official record and package numbers are now assigned.`);
+      } else {
+        void clearReceivingFormSnapshot(cacheReceivingFormStore, activeUser.id).catch(() => undefined);
+        setRestoredForm(null);
+        newReceiving();
+        loadDrafts().catch(() => undefined);
+        setReceiveMessage("Finalize synced — the official receiving record is on the server. Open Records to view it.");
+      }
+    } else if (mine.status === "Failed" && mine.attempts >= OFFLINE_QUEUE_MAX_AUTO_ATTEMPTS) {
+      queuedFinalizeRef.current = null;
+      setQueuedFinalize(null);
+      setReceiveMessage(
+        `Queued finalize could not sync and is parked: ${mine.lastError ?? "sync failed"}. Retry it from Device Setup — nothing was recorded on the server.`
+      );
+    }
+  }
+
+  useEffect(() => {
+    void checkQueuedFinalize();
+    const handle = window.setInterval(() => void checkQueuedFinalize(), 4000);
+    return () => window.clearInterval(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function printSavedReceivingReceipt(receiving: ReceivingSaveResponse) {
     const slip = await apiGet<RenderedDocumentResponse>(`/receiving/${receiving.id}/receiving-document`);
@@ -6502,6 +6642,11 @@ function Receiving({
                     <p className="muted">Updated {new Date(draft.updatedAt).toLocaleString()}</p>
                   </div>
                   <span className={draft.status === "Cancelled" ? "badge warning" : "badge"}>{draft.status}</span>
+                  {queuedFinalizeDraftIds.has(draft.id) && (
+                    <span className="badge warning" title="Finalize queued on this tablet — waiting for connection. Official record and package numbers arrive on sync.">
+                      Finalize queued
+                    </span>
+                  )}
                   <div className="rowActions">
                     {draft.status === "Draft" && <button className="smallButton" onClick={() => resumeDraft(draft)}>Resume</button>}
                     {draft.status === "Draft" && (
@@ -7873,6 +8018,21 @@ function Trips({
   const [tripListLimit, setTripListLimit] = useState(LIST_PAGE_SIZE);
   const [cargoSearch, setCargoSearch] = useState("");
   const [tripStatus, setTripStatus] = useState("Select cargo and confirm loading. Branch mismatch will ask for confirmation.");
+  // B4: load/unload actions still waiting in the offline queue, so the
+  // trip screen can mark queued cargo distinctly from confirmed cargo.
+  const [queuedCargoRecords, setQueuedCargoRecords] = useState<OfflineQueueRecord[]>([]);
+
+  async function refreshQueuedCargoRecords() {
+    const queue = await listOfflineQueue().catch(() => [] as OfflineQueueRecord[]);
+    setQueuedCargoRecords(queue.filter((record) => record.type === "tripCargo" && record.status !== "Synced"));
+  }
+
+  useEffect(() => {
+    void refreshQueuedCargoRecords();
+    const handle = window.setInterval(() => void refreshQueuedCargoRecords(), 5000);
+    return () => window.clearInterval(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const loadingPhotoInputRef = useRef<HTMLInputElement | null>(null);
   const cargoSearchInputRef = useRef<HTMLInputElement | null>(null);
   const packageById = new Map(packages.map((pkg) => [pkg.id, pkg]));
@@ -7882,6 +8042,27 @@ function Trips({
   const selectedCargo = selectedPackage ? packageById.get(selectedPackage) : undefined;
   const loadedPackageIds = new Set(trips.flatMap((trip) => trip.cargoPackageIds));
   const activeTripLoadedPackages = activeTrip ? activeTrip.cargoPackageIds.map((id) => packageById.get(id)).filter(Boolean) as CargoPackage[] : [];
+  // B4: queued (not-yet-confirmed) cargo actions for the open trip. A
+  // queued load is NOT on the trip until the server applies it on sync,
+  // and a queued unload leaves the package on the trip until sync — the
+  // Loaded Cargo list marks both so staff never mistake them for
+  // confirmed state.
+  const queuedTripCargo = activeTrip
+    ? queuedCargoRecords.filter((record) => record.path === `/trips/${activeTrip.id}/load` || record.path === `/trips/${activeTrip.id}/unload`)
+    : [];
+  const queuedUnloadPackageIds = new Set(
+    queuedTripCargo
+      .filter((record) => record.path.endsWith("/unload"))
+      .map((record) => String((record.body as { cargoPackageId?: string } | undefined)?.cargoPackageId ?? ""))
+      .filter(Boolean)
+  );
+  const queuedLoadEntries: Array<{ record: OfflineQueueRecord; pkg: CargoPackage }> = [];
+  for (const record of queuedTripCargo) {
+    if (!record.path.endsWith("/load")) continue;
+    const cargoPackageId = String((record.body as { cargoPackageId?: string } | undefined)?.cargoPackageId ?? "");
+    const pkg = packageById.get(cargoPackageId);
+    if (pkg && activeTrip && !activeTrip.cargoPackageIds.includes(pkg.id)) queuedLoadEntries.push({ record, pkg });
+  }
   const activeTripActualWeightKg = activeTripLoadedPackages.reduce((total, pkg) => total + packageWeightKg(pkg), 0);
   const activeTripVolumeCbm = activeTripLoadedPackages.reduce((total, pkg) => total + packageVolumeCbm(pkg), 0);
   const activeTripVolumetricWeightKg = activeTripLoadedPackages.reduce((total, pkg) => total + packageVolumetricWeightKg(pkg), 0);
@@ -8072,13 +8253,28 @@ function Trips({
     );
     if (!confirmed) return;
     setTripStatus("Loading cargo...");
-    await onAction("Load cargo", () =>
-      apiPost(`/trips/${activeTrip.id}/load`, {
+    // B4: the load is queueable. queueablePost sends it now when online
+    // and enqueues it (with its idempotency key) when offline; the status
+    // line and the Loaded Cargo markers keep a queued load visibly
+    // distinct from a confirmed one.
+    const loadOutcome = { current: "failed" as "queued" | "applied" | "failed" };
+    await onAction("Load cargo", async () => {
+      const outcome = await queueablePost("tripCargo", `/trips/${activeTrip.id}/load`, {
         cargoPackageId: selectedPackage,
-        overrideReason: isMismatch ? `Confirmed mixed loading: ${cargoBranch} cargo on ${activeTrip.destination} trip` : undefined
-      })
-    );
-    setTripStatus(`${cargo.packageNumber} loaded to ${activeTrip.tripNumber}.`);
+        overrideReason: isMismatch ? `Confirmed mixed loading: ${cargoBranch} cargo on ${activeTrip.destination} trip` : undefined,
+        packageNumber: cargo.packageNumber,
+        tripNumber: activeTrip.tripNumber
+      });
+      loadOutcome.current = outcome.queued ? "queued" : "applied";
+    });
+    if (loadOutcome.current === "queued") {
+      setTripStatus(`${cargo.packageNumber} load queued — waiting for connection. It is NOT on ${activeTrip.tripNumber} yet; the load applies on sync.`);
+      void refreshQueuedCargoRecords();
+    } else if (loadOutcome.current === "applied") {
+      setTripStatus(`${cargo.packageNumber} loaded to ${activeTrip.tripNumber}.`);
+    } else {
+      setTripStatus(`${cargo.packageNumber} was not loaded. See the message above for the reason.`);
+    }
     setSelectedPackage("");
     setCargoSearch("");
   }
@@ -8092,15 +8288,29 @@ function Trips({
     const confirmed = window.confirm(`Remove ${pkg.packageNumber} from ${activeTrip.tripNumber}?`);
     if (!confirmed) return;
     setTripStatus(`Removing ${pkg.packageNumber} from ${activeTrip.tripNumber}...`);
-    await onAction("Remove cargo from trip", () =>
-      apiPost(`/trips/${activeTrip.id}/unload`, {
+    // B4: the unload is queueable the same way as the load — offline it
+    // enqueues and the cargo row shows an "Unload queued" marker until
+    // the server applies it on sync.
+    const unloadOutcome = { current: "failed" as "queued" | "applied" | "failed" };
+    await onAction("Remove cargo from trip", async () => {
+      const outcome = await queueablePost("tripCargo", `/trips/${activeTrip.id}/unload`, {
         cargoPackageId: pkg.id,
-        reason: "Removed before departure by operator confirmation"
-      })
-    );
+        reason: "Removed before departure by operator confirmation",
+        packageNumber: pkg.packageNumber,
+        tripNumber: activeTrip.tripNumber
+      });
+      unloadOutcome.current = outcome.queued ? "queued" : "applied";
+    });
     setSelectedPackage("");
     setCargoSearch("");
-    setTripStatus(`${pkg.packageNumber} removed from ${activeTrip.tripNumber}.`);
+    if (unloadOutcome.current === "queued") {
+      setTripStatus(`${pkg.packageNumber} unload queued — waiting for connection. It stays on ${activeTrip.tripNumber} until the unload syncs.`);
+      void refreshQueuedCargoRecords();
+    } else if (unloadOutcome.current === "applied") {
+      setTripStatus(`${pkg.packageNumber} removed from ${activeTrip.tripNumber}.`);
+    } else {
+      setTripStatus(`${pkg.packageNumber} was not removed. See the message above for the reason.`);
+    }
   }
 
   async function attachLoadingPhoto(file: File) {
@@ -8427,9 +8637,33 @@ function Trips({
                       <p>{pkg.packageNumber} - {pkg.handlingBranchName ?? pkg.destination}</p>
                       <p className="muted">{pkg.customerName} / {pkg.status} / {pkg.price == null ? "No price" : `PHP ${pkg.price}`} / {packageWeightKg(pkg) ? `${formatNumber(packageWeightKg(pkg))} kg` : "No weight"} / {packageVolumeCbm(pkg) ? `${formatNumber(packageVolumeCbm(pkg), 4)} cbm` : "No volume"}</p>
                     </div>
+                    {queuedUnloadPackageIds.has(pkg.id) && (
+                      <span className="badge warning" title="Unload queued on this tablet — the package stays on the trip until the unload syncs.">
+                        Unload queued
+                      </span>
+                    )}
                   </div>
                 ))}
-                {!activeTripLoadedPackages.length && <p className="muted">No cargo loaded yet. This trip is saved and can be loaded later.</p>}
+                {queuedLoadEntries.map(({ record, pkg }) => (
+                  <div className="row denseRow loadedCargoCard" key={`queued-load-${record.id}`}>
+                    <div>
+                      <strong>{pkg.description}</strong>
+                      <p>{pkg.packageNumber} - {pkg.handlingBranchName ?? pkg.destination}</p>
+                      <p className="muted">{pkg.customerName} / {pkg.status}</p>
+                    </div>
+                    <span
+                      className="badge warning"
+                      title={
+                        record.status === "Failed"
+                          ? `Load could not sync: ${record.lastError ?? "sync failed"}. Retry or discard it in Device Setup.`
+                          : "Load queued on this tablet — waiting for connection. The package is NOT on the trip until the load syncs."
+                      }
+                    >
+                      {record.status === "Failed" ? "Load failed — needs attention" : "Load queued — not on trip yet"}
+                    </span>
+                  </div>
+                ))}
+                {!activeTripLoadedPackages.length && !queuedLoadEntries.length && <p className="muted">No cargo loaded yet. This trip is saved and can be loaded later.</p>}
               </div>
             </section>
             <section className="subPanel">

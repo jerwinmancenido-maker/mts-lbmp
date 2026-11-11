@@ -21,7 +21,7 @@ export type CacheMetadata = Pick<CacheEnvelope<unknown>, "savedAt" | "source" | 
 
 export type OfflineQueueRecord = {
   id: string;
-  type: "payment" | "expense" | "photo" | "delivery" | "receivingDraft";
+  type: "payment" | "expense" | "photo" | "delivery" | "receivingDraft" | "receivingFinalize" | "tripCargo";
   method: "POST" | "PATCH";
   path: string;
   body?: unknown;
@@ -29,6 +29,13 @@ export type OfflineQueueRecord = {
   status: "Pending" | "Syncing" | "Synced" | "Failed";
   attempts: number;
   lastError?: string;
+  /**
+   * The server's response from the most recent successful sync of this
+   * record (Phase 4 B4: the replayer used to discard POST responses). The
+   * receiving finalize watcher reads the server-minted record from here so
+   * the local finalize completion can use the real record numbers.
+   */
+  result?: unknown;
   userId?: string;
   branch?: string;
 };

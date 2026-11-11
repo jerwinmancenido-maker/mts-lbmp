@@ -148,6 +148,40 @@ describe("A3/A7 — single-record sync attempt (retry seam)", () => {
   });
 });
 
+describe("B4 — queued finalize and trip cargo labels", () => {
+  test("receiving finalize shows its label and DR detail", () => {
+    const view = queueItemView(
+      record({ type: "receivingFinalize", path: "/receiving/drafts/draft_9/finalize", body: { customerDrNumber: "DR-77" } }),
+      NOW
+    );
+    expect(view.label).toBe("Receiving finalize");
+    expect(view.detail).toContain("DR-77");
+  });
+
+  test("trip load and unload show their labels with package and trip detail", () => {
+    const body = { cargoPackageId: "pkg_1", packageNumber: "PKG-2026-11-000777", tripNumber: "TR-2026-11-000009" };
+    const load = queueItemView(record({ type: "tripCargo", path: "/trips/trip_1/load", body }), NOW);
+    expect(load.label).toBe("Trip cargo load");
+    expect(load.detail).toContain("PKG-2026-11-000777");
+    expect(load.detail).toContain("TR-2026-11-000009");
+
+    const unload = queueItemView(record({ type: "tripCargo", path: "/trips/trip_1/unload", body }), NOW);
+    expect(unload.label).toBe("Trip cargo unload");
+  });
+
+  test("a successful sync retains the server response on the record (finalize reads its minted record from it)", async () => {
+    const finalize = record({ type: "receivingFinalize", path: "/receiving", body: { customerDrNumber: "DR-78" } });
+    const send = vi.fn(async () => ({ id: "rr_1", recordNumber: "RR-2026-11-000001" }));
+
+    const outcome = await attemptQueueRecordSync(finalize, send);
+
+    expect(outcome.status).toBe("Synced");
+    expect(outcome.result).toEqual({ id: "rr_1", recordNumber: "RR-2026-11-000001" });
+    // The queue record id is still the idempotency key on the replay.
+    expect(send.mock.calls[0]?.[3]).toBe(finalize.id);
+  });
+});
+
 describe("A7 — pruning selection", () => {
   test("keeps pending/failed/syncing and bounds synced history to the newest 50", () => {
     const records: OfflineQueueRecord[] = [];

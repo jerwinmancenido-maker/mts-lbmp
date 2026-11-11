@@ -196,8 +196,11 @@ export class LogisticsController {
 
   @Post("receiving")
   @RequirePermissions("receiving.create")
-  createReceiving(@Body() body: Parameters<LogisticsService["createReceiving"]>[0]) {
-    return this.logistics.createReceiving(body);
+  createReceiving(
+    @Body() body: Parameters<LogisticsService["createReceiving"]>[0],
+    @Headers("idempotency-key") idempotencyKey?: string
+  ) {
+    return this.logistics.createReceiving({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
   }
 
   @Post("receiving/:id/dr-photo")
@@ -243,8 +246,12 @@ export class LogisticsController {
 
   @Post("receiving/drafts/:id/finalize")
   @RequirePermissions("receiving.create")
-  finalizeReceivingDraft(@Param("id") id: string, @Body() body: Parameters<LogisticsService["finalizeReceivingDraft"]>[1]) {
-    return this.logistics.finalizeReceivingDraft(id, body);
+  finalizeReceivingDraft(
+    @Param("id") id: string,
+    @Body() body: Parameters<LogisticsService["finalizeReceivingDraft"]>[1],
+    @Headers("idempotency-key") idempotencyKey?: string
+  ) {
+    return this.logistics.finalizeReceivingDraft(id, { ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
   }
 
   @Post("receiving/drafts/:id/cancel")
@@ -459,14 +466,22 @@ export class LogisticsController {
 
   @Post("trips/:id/load")
   @RequirePermissions("loading.scan")
-  loadCargo(@Param("id") id: string, @Body() body: { cargoPackageId: string; overrideReason?: string }) {
-    return this.logistics.loadCargo(id, body);
+  loadCargo(
+    @Param("id") id: string,
+    @Body() body: { cargoPackageId: string; overrideReason?: string; idempotencyKey?: string },
+    @Headers("idempotency-key") idempotencyKey?: string
+  ) {
+    return this.logistics.loadCargo(id, { ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
   }
 
   @Post("trips/:id/unload")
   @RequirePermissions("loading.scan")
-  unloadCargo(@Param("id") id: string, @Body() body: { cargoPackageId: string; reason?: string }) {
-    return this.logistics.unloadCargo(id, body);
+  unloadCargo(
+    @Param("id") id: string,
+    @Body() body: { cargoPackageId: string; reason?: string; idempotencyKey?: string },
+    @Headers("idempotency-key") idempotencyKey?: string
+  ) {
+    return this.logistics.unloadCargo(id, { ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
   }
 
   @Post("trips/:id/loading-photo")
