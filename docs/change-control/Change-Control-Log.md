@@ -46,6 +46,7 @@ Closed
 | RISK-001 | 2026-07-01 | RISK | P0 | Hardware | NB80 PWA hardware access uncertain | Validate with prototype; prepare APK path | New |
 | RISK-002 | 2026-07-01 | RISK | P1 | Security | npm audit reports transitive Next/Nest dependency advisories requiring forced breaking changes | Do not force downgrade; monitor patched releases and retest before production | New |
 | ASM-001 | 2026-07-01 | ASM | P1 | UX | Premium look, simple operation | Accepted design rule | Approved |
+| CR-005 | 2026-11-11 | CR | P1 | Platform | Production database is Supabase Postgres (via Prisma) instead of self-hosted MySQL | Jerwin approved 2026-11-11; hosting + pooling managed by Supabase, API and endpoints unchanged | Approved |
 
 ## Entry Template
 
