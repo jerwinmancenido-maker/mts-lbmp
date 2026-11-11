@@ -3,6 +3,7 @@
 import {
   AlertTriangle,
   Camera,
+  ChartColumn,
   CheckCircle2,
   ChevronDown,
   ClipboardList,
@@ -38,8 +39,8 @@ import { parsePhilippineAddress, readDeliveryReceiptPhoto, type DrOcrConfidence,
 import { setPhotoAuditUser, setPhotoUploadContext, takeNativeCameraPhoto, uploadCompressedImage, uploadPathForPhotoType } from "./media";
 import type { PrinterDiagnosticCheck } from "@mts-lbmp/printing";
 import { printNativeText, runPrinterDiagnostic } from "./native-printer";
-import type { AuditLog, BillingInvoice, BootstrapData, Branch, CargoPackage, CustomerBalance, CustomerReminderHistoryEntry, DashboardData, DueWorklistRow, ExpenseRecord, HardwareTestRecord, OperationChatThread, PaymentRecord, PrintDocumentMeta, ProductMaster, RenderedDocumentResponse, Trip } from "./types";
-import { BILLING_TERM_OPTIONS } from "./types";
+import type { AuditLog, BillingInvoice, BootstrapData, Branch, CargoPackage, CustomerBalance, CustomerReminderHistoryEntry, DashboardData, DueWorklistRow, ExpenseRecord, HardwareTestRecord, OperationChatThread, PaymentRecord, PrintDocumentMeta, ProductMaster, ProfitabilityGroupBy, ProfitabilityReport, RenderedDocumentResponse, Trip } from "./types";
+import { BILLING_TERM_OPTIONS, expenseCategoryRequiresTrip } from "./types";
 
 type Tab =
   | "dashboard"
@@ -49,6 +50,7 @@ type Tab =
   | "delivery"
   | "payments"
   | "expenses"
+  | "reports"
   | "customer"
   | "chat"
   | "admin"
@@ -108,6 +110,7 @@ const tabs: Array<{ id: Tab; label: string; icon: React.ElementType }> = [
   { id: "delivery", label: "Deliver", icon: CheckCircle2 },
   { id: "payments", label: "Payments", icon: CreditCard },
   { id: "expenses", label: "Expenses", icon: WalletCards },
+  { id: "reports", label: "Reports", icon: ChartColumn },
   { id: "customer", label: "Customers", icon: ReceiptText },
   { id: "chat", label: "Chat", icon: MessageCircle },
   { id: "admin", label: "Admin", icon: ShieldCheck },
@@ -116,13 +119,16 @@ const tabs: Array<{ id: Tab; label: string; icon: React.ElementType }> = [
 ];
 
 const tabsByRole: Record<string, Tab[]> = {
-  Administrator: ["dashboard", "receiving", "packages", "trips", "delivery", "payments", "expenses", "customer", "chat", "admin", "settings", "hardware"],
-  "System Admin": ["dashboard", "receiving", "packages", "trips", "delivery", "payments", "expenses", "customer", "chat", "admin", "settings", "hardware"],
-  "Daet Owner": ["dashboard", "receiving", "packages", "trips", "delivery", "payments", "expenses", "customer", "chat", "admin", "settings", "hardware"],
-  "Naga Owner": ["dashboard", "receiving", "packages", "trips", "delivery", "payments", "expenses", "customer", "chat", "admin", "settings", "hardware"],
+  // Phase 6 P6-5: "reports" appears exactly for the roles whose
+  // permission preset holds reports.view (the endpoint's gate) —
+  // Administrator, System Admin, both Owners, and Delivery Admin.
+  Administrator: ["dashboard", "receiving", "packages", "trips", "delivery", "payments", "expenses", "reports", "customer", "chat", "admin", "settings", "hardware"],
+  "System Admin": ["dashboard", "receiving", "packages", "trips", "delivery", "payments", "expenses", "reports", "customer", "chat", "admin", "settings", "hardware"],
+  "Daet Owner": ["dashboard", "receiving", "packages", "trips", "delivery", "payments", "expenses", "reports", "customer", "chat", "admin", "settings", "hardware"],
+  "Naga Owner": ["dashboard", "receiving", "packages", "trips", "delivery", "payments", "expenses", "reports", "customer", "chat", "admin", "settings", "hardware"],
   "Receiving Staff": ["dashboard", "receiving", "packages", "trips", "payments", "expenses", "chat", "hardware"],
   "Delivery Staff": ["dashboard", "packages", "delivery", "payments", "expenses", "chat", "hardware"],
-  "Delivery Admin": ["dashboard", "packages", "delivery", "payments", "expenses", "customer", "chat", "hardware"],
+  "Delivery Admin": ["dashboard", "packages", "delivery", "payments", "expenses", "reports", "customer", "chat", "hardware"],
   "Customer Owner": ["dashboard", "packages", "customer"]
 };
 
@@ -1386,7 +1392,10 @@ export function AppShell() {
       setStatus("Cached / Syncing");
     }
 
-    if (tab === "dashboard") return;
+    // Dashboard renders from shell state; Reports fetches its own
+    // date-ranged data inside the component (P6-5). Neither uses the
+    // per-module cache fetch below.
+    if (tab === "dashboard" || tab === "reports") return;
 
     setSyncState("Refreshing");
 
@@ -1745,6 +1754,7 @@ export function AppShell() {
     if (tab === "delivery") return failedDeliveries ? `${failedDeliveries} failed` : "Proof of delivery";
     if (tab === "payments") return unpaidResponsibilityPackages.length ? `${unpaidResponsibilityPackages.length} unpaid` : "Collected money";
     if (tab === "expenses") return submittedExpenses ? `${submittedExpenses} review` : "Add expenses";
+    if (tab === "reports") return "Profitability";
     if (tab === "customer") return pendingCustomers ? `${pendingCustomers} pending` : "Customers";
     if (tab === "chat") return pendingChatApprovals ? `${pendingChatApprovals} approvals` : "Team chat";
     if (tab === "admin") return "Users and audit";
@@ -2225,6 +2235,7 @@ export function AppShell() {
           {activeTab === "expenses" && (
             <Expenses categories={bootstrap?.defaultExpenseCategories ?? []} expenses={searchedExpenses} trips={searchedTrips} activeUser={activeUser} onAction={runAction} queueablePost={queueablePost} />
           )}
+          {activeTab === "reports" && <Reports />}
           {activeTab === "customer" && (
             <CustomerPortal
               customers={bootstrap?.customers ?? []}
@@ -3314,7 +3325,11 @@ function Dashboard({
           ? [
               { key: "payments" as MetricKey, label: "Payments", value: `PHP ${(dashboard?.paymentsCollected ?? 0).toLocaleString()}` },
               { key: "expenses" as MetricKey, label: "Expenses Review", value: dashboard?.expensesAwaitingApproval ?? 0 },
-              { key: "profit" as MetricKey, label: "Est. Profit", value: `PHP ${(dashboard?.estimatedProfit ?? 0).toLocaleString()}` }
+              // Phase 6 P6-5: the tile reads the period-scoped figure.
+              // Its label says what it is; the old all-time
+              // estimatedProfit stays in the API response, deprecated,
+              // for one release but is no longer displayed.
+              { key: "profit" as MetricKey, label: "Profit This Month", value: `PHP ${(dashboard?.profitThisMonth ?? 0).toLocaleString()}` }
             ]
           : [
               { key: "collected" as MetricKey, label: "Collected Here", value: `PHP ${collectedTotal.toLocaleString()}` },
@@ -3414,9 +3429,11 @@ function Dashboard({
           ))}
           {!visiblePackages.length && !visibleTrips.length && !visibleCustomers.length && !visiblePayments.length && (
             <p className="muted">
-              {["payments", "expenses", "profit"].includes(selectedMetric)
-                ? "This tile is a summary value. Detailed drill-down will be added when the full report view is expanded."
-                : "No records found for this tile."}
+              {selectedMetric === "profit"
+                ? "Profit This Month = revenue of packages delivered this month − approved expenses recorded this month (Asia/Manila). Open Reports for the full breakdown by trip, route, customer, or branch."
+                : ["payments", "expenses"].includes(selectedMetric)
+                  ? "This tile is a summary value. Detailed drill-down will be added when the full report view is expanded."
+                  : "No records found for this tile."}
             </p>
           )}
         </div>
@@ -9743,6 +9760,187 @@ function DueWorklist({
   );
 }
 
+/**
+ * Phase 6 P6-5 — the Reports surface: profitability from
+ * GET /reports/profitability (reports.view), grouped by trip (the
+ * primary view), route, customer, or branch over a chosen period.
+ * The server's `definition` string prints verbatim above the table —
+ * no figure on this screen has an implicit meaning. The unallocated
+ * bucket (approved expenses never linked to a trip) is always shown:
+ * those costs are never spread across rows and never hidden.
+ */
+function Reports() {
+  type Preset = "thisMonth" | "lastMonth" | "custom";
+  const [preset, setPreset] = useState<Preset>("thisMonth");
+  const [groupBy, setGroupBy] = useState<ProfitabilityGroupBy>("trip");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [report, setReport] = useState<ProfitabilityReport | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  // Period presets on the Manila calendar, matching the server's dates.
+  const manilaTodayKey = () =>
+    new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const periodFor = (which: Preset): { from: string; to: string } => {
+    const today = manilaTodayKey();
+    const [year = 2026, month = 1] = today.split("-").map(Number);
+    if (which === "thisMonth") return { from: `${today.slice(0, 7)}-01`, to: today };
+    if (which === "lastMonth") {
+      const firstOfThisMonth = Date.UTC(year, month - 1, 1);
+      const lastOfLastMonth = new Date(firstOfThisMonth - 86_400_000).toISOString().slice(0, 10);
+      return { from: `${lastOfLastMonth.slice(0, 7)}-01`, to: lastOfLastMonth };
+    }
+    return { from: customFrom, to: customTo };
+  };
+  const period = periodFor(preset);
+  const periodReady = period.from.length === 10 && period.to.length === 10 && period.from <= period.to;
+
+  useEffect(() => {
+    if (!periodReady) return;
+    let cancelled = false;
+    setLoading(true);
+    apiGet<ProfitabilityReport>(apiQuery("/reports/profitability", { from: period.from, to: period.to, groupBy }))
+      .then((result) => {
+        if (!cancelled) {
+          setReport(result);
+          setLoadFailed(false);
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLoadFailed(true);
+          setLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [period.from, period.to, groupBy, periodReady, refreshTick]);
+
+  const money = (value: number) => `PHP ${value.toLocaleString()}`;
+  const groupByOptions: Array<{ key: ProfitabilityGroupBy; label: string }> = [
+    { key: "trip", label: "Trip" },
+    { key: "route", label: "Route" },
+    { key: "customer", label: "Customer" },
+    { key: "branch", label: "Branch" }
+  ];
+
+  return (
+    <div className="stack">
+      <section className="panel">
+        <div className="sectionHeader">
+          <div>
+            <h3>Profitability Report</h3>
+            <p className="muted">
+              {report ? `${report.period.from} to ${report.period.to}` : "Choose a period and a grouping."}
+            </p>
+          </div>
+          <button className="smallButton" onClick={() => setRefreshTick((tick) => tick + 1)}>Refresh</button>
+        </div>
+        <div className="segmentedControl" role="tablist" aria-label="Report period">
+          <button className={preset === "thisMonth" ? "active" : ""} onClick={() => setPreset("thisMonth")}>This Month</button>
+          <button className={preset === "lastMonth" ? "active" : ""} onClick={() => setPreset("lastMonth")}>Last Month</button>
+          <button
+            className={preset === "custom" ? "active" : ""}
+            onClick={() => {
+              if (!customFrom) setCustomFrom(periodFor("thisMonth").from);
+              if (!customTo) setCustomTo(periodFor("thisMonth").to);
+              setPreset("custom");
+            }}
+          >
+            Custom Range
+          </button>
+        </div>
+        {preset === "custom" && (
+          <div className="expenseTopGrid">
+            <label>From<input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} /></label>
+            <label>To<input type="date" value={customTo} onChange={(event) => setCustomTo(event.target.value)} /></label>
+          </div>
+        )}
+        <div className="segmentedControl" role="tablist" aria-label="Group report by">
+          {groupByOptions.map((option) => (
+            <button key={option.key} className={groupBy === option.key ? "active" : ""} onClick={() => setGroupBy(option.key)}>
+              {option.label}
+            </button>
+          ))}
+        </div>
+        {report && <p className="notice">{report.definition}</p>}
+        {loading && <p className="muted">Loading report…</p>}
+        {loadFailed && !loading && <p className="muted">The report could not be loaded. Check the connection and refresh.</p>}
+        {report && !loading && (
+          <>
+            <div className="list compactList">
+              {report.groups.map((group) => (
+                // Two-child row: override .row's three-column template
+                // (icon + content + meta) so the label column can shrink
+                // and ellipsize instead of running under the badge.
+                <div className="row compactDataRow" key={group.key} style={{ gridTemplateColumns: "minmax(0, 1fr) auto" }}>
+                  <div>
+                    {/* Trip rows title on the trip number alone so the
+                        margin badge keeps its full width on phones; the
+                        route rides the facts line instead. */}
+                    <strong>{group.tripNumber ?? group.label}</strong>
+                    <p className="muted">
+                      {group.tripNumber ? `${group.origin} → ${group.destination} · ` : ""}
+                      {group.packageCount} delivered · Billed {money(group.billed)} · Collected {money(group.collected)} · Outstanding {money(group.outstanding)}
+                    </p>
+                    {group.linkedExpensesByCategory.length > 0 && (
+                      <p className="muted">
+                        Expenses {money(group.linkedExpenses)}: {group.linkedExpensesByCategory.map((entry) => `${entry.category} ${money(entry.amount)}`).join(" · ")}
+                      </p>
+                    )}
+                  </div>
+                  <div className="compactRowMeta">
+                    {/* flexShrink 0: a money figure must never ellipsize
+                        inside the meta flex row on narrow screens. */}
+                    {group.margin !== null ? (
+                      <span className="badge" style={{ flexShrink: 0, maxWidth: "none" }}>Margin {money(group.margin)}</span>
+                    ) : (
+                      <span className="badge" style={{ flexShrink: 0, maxWidth: "none" }}>Revenue only</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {!report.groups.length && <p className="muted">No deliveries, payments, or approved trip expenses fall in this period.</p>}
+            </div>
+            <section className="subPanel">
+              <div className="sectionHeader">
+                <div>
+                  <h4>Unallocated Expenses</h4>
+                  <p className="muted">Approved expenses in this period with no trip link. They are shown here once — never spread across the rows above.</p>
+                </div>
+                <span className="badge warning">{money(report.unallocatedExpenses.total)}</span>
+              </div>
+              {report.unallocatedExpenses.byCategory.length > 0 ? (
+                <p className="muted">
+                  {report.unallocatedExpenses.byCategory.map((entry) => `${entry.category} ${money(entry.amount)}`).join(" · ")} ({report.unallocatedExpenses.count} record
+                  {report.unallocatedExpenses.count === 1 ? "" : "s"})
+                </p>
+              ) : (
+                <p className="muted">None — every approved expense in this period names its trip.</p>
+              )}
+              {groupBy === "customer" && report.tripLinkedExpenses.total > 0 && (
+                <p className="muted">
+                  Trip-linked expenses in this period: {money(report.tripLinkedExpenses.total)} — attributed per trip in the Trip view, never allocated to customers.
+                </p>
+              )}
+            </section>
+            <p className="muted">
+              Totals — Billed {money(report.totals.billed)} · Collected {money(report.totals.collected)} · Outstanding {money(report.totals.outstanding)} · Approved expenses{" "}
+              {money(report.totals.approvedExpenses)}
+              {report.totals.margin !== null ? ` · Margin ${money(report.totals.margin)}` : ""}
+            </p>
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function Payments({
   packages,
   payments,
@@ -10087,6 +10285,9 @@ function Expenses({
   const isOwner = isOwnerRole(activeUser.role);
   const receiptInputRef = useRef<HTMLInputElement | null>(null);
   const selectedTrip = trips.find((trip) => trip.id === selectedTripId);
+  // Phase 6 P6-5: Fuel / Toll / Truck Rental are trip costs — the trip
+  // is required for them here and enforced again on the server.
+  const categoryNeedsTrip = expenseCategoryRequiresTrip(category);
   const categoryDisplay = (entry: string) =>
     entry
       .replace(/^Driver Allowance$/i, "Driver")
@@ -10185,7 +10386,7 @@ function Expenses({
         <div className="expenseTopGrid">
           <label>Amount<input inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value.replace(/[^\d.]/g, ""))} /></label>
           <AutocompleteField<Trip>
-            label="Trip / Plate / Driver"
+            label={categoryNeedsTrip ? "Trip / Plate / Driver (required)" : "Trip / Plate / Driver"}
             value={tripSearch}
             placeholder="Type trip, plate, or driver"
             items={trips}
@@ -10210,6 +10411,9 @@ function Expenses({
             }}
           />
         </div>
+        {categoryNeedsTrip && !selectedTrip && (
+          <p className="notice">Trip required: Fuel, Toll and Truck Rental expenses must name the trip they belong to, so the cost lands on that trip&apos;s profit report.</p>
+        )}
         {selectedTrip && (
           <div className="compactSelectedBox expenseTripSelected">
             <div>
@@ -10319,7 +10523,11 @@ function Expenses({
           <button
             className="primaryButton"
             disabled={!amount}
-            onClick={() =>
+            onClick={() => {
+              if (categoryNeedsTrip && !selectedTrip) {
+                setExpenseStatus(`${categoryDisplay(category)} expenses must name their trip. Pick the trip above before submitting.`);
+                return;
+              }
               onAction("Submit expense", async () => {
                 const expense = await queueablePost("expense", "/expenses", {
                   tripId: selectedTrip?.id,
@@ -10331,8 +10539,8 @@ function Expenses({
                 setExpenseStatus("Submitted for owner review.");
                 setReceiptUrl("");
                 return expense;
-              })
-            }
+              });
+            }}
           >
             Submit Expense
           </button>

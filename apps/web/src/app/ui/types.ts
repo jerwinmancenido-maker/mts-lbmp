@@ -7,7 +7,12 @@ export interface DashboardData {
   failedDeliveries: number;
   paymentsCollected?: number;
   expensesAwaitingApproval?: number;
+  /** @deprecated Phase 6 P6-5: all-time delivered revenue − all-time approved expenses. Kept in the API response for one release; the tile reads profitThisMonth. */
   estimatedProfit?: number;
+  /** Phase 6 P6-5: this calendar month's (Asia/Manila) delivered revenue − this month's approved expenses. */
+  profitThisMonth?: number;
+  /** The YYYY-MM (Asia/Manila) profitThisMonth covers. */
+  profitThisMonthPeriod?: string;
   branchScope?: string;
   notifications: Array<{ id: string; title: string; message: string; priority: string; createdAt: string }>;
 }
@@ -279,6 +284,69 @@ export interface CustomerReminderHistoryEntry {
   invoiceNumber?: string;
   reason?: string;
   createdAt: string;
+}
+
+/**
+ * Phase 6 P6-5 — expense trip discipline, mirroring the API's
+ * TRIP_REQUIRED_EXPENSE_CATEGORIES: Fuel / Toll / Truck Rental are trip
+ * costs and must name their trip, in the form and on the server.
+ */
+export const TRIP_REQUIRED_EXPENSE_CATEGORIES = ["Fuel", "Toll", "Truck Rental"] as const;
+
+export function expenseCategoryRequiresTrip(category: string | undefined | null): boolean {
+  const clean = category?.trim().toLowerCase();
+  if (!clean) return false;
+  return TRIP_REQUIRED_EXPENSE_CATEGORIES.some((entry) => entry.toLowerCase() === clean);
+}
+
+/** Phase 6 P6-5 — mirrors of the API's profitability report (GET /reports/profitability). */
+export type ProfitabilityGroupBy = "trip" | "route" | "customer" | "branch";
+
+export interface ProfitabilityCategoryTotal {
+  category: string;
+  amount: number;
+}
+
+export interface ProfitabilityGroup {
+  key: string;
+  label: string;
+  tripId?: string;
+  tripNumber?: string;
+  origin?: string;
+  destination?: string;
+  customerId?: string;
+  branch?: string;
+  billed: number;
+  collected: number;
+  outstanding: number;
+  packageCount: number;
+  linkedExpenses: number;
+  linkedExpensesByCategory: ProfitabilityCategoryTotal[];
+  /** Null on the customer view: no expense is recorded against a customer, so no margin is shown. */
+  margin: number | null;
+}
+
+export interface ProfitabilityExpenseBucket {
+  total: number;
+  count: number;
+  byCategory: ProfitabilityCategoryTotal[];
+}
+
+export interface ProfitabilityReport {
+  period: { from: string; to: string };
+  groupBy: ProfitabilityGroupBy;
+  /** The report's own definitions, printed verbatim above the table. */
+  definition: string;
+  groups: ProfitabilityGroup[];
+  unallocatedExpenses: ProfitabilityExpenseBucket;
+  tripLinkedExpenses: ProfitabilityExpenseBucket;
+  totals: {
+    billed: number;
+    collected: number;
+    outstanding: number;
+    approvedExpenses: number;
+    margin: number | null;
+  };
 }
 
 export interface AuditLog {

@@ -152,7 +152,9 @@ describe("B1 — idempotency keys", () => {
     const service = seededService();
     const sharedKey = "shared-key-value";
 
-    service.createExpense({ category: "Fuel", amount: 500, idempotencyKey: sharedKey });
+    // P6-5: Fuel now requires a trip link; the sample expense here uses
+    // a non-trip category — what is being proven is the key, not the category.
+    service.createExpense({ category: "Meals", amount: 500, idempotencyKey: sharedKey });
     service.recordPayment({ ...paymentInput, amountPaid: 100, idempotencyKey: sharedKey });
 
     expect(internals(service).expenses).toHaveLength(1);
@@ -163,8 +165,8 @@ describe("B1 — idempotency keys", () => {
   test("expense with the same key twice records one expense", () => {
     const service = seededService();
 
-    const first = service.createExpense({ category: "Fuel", amount: 500, idempotencyKey: "queue_exp_1" });
-    const second = service.createExpense({ category: "Fuel", amount: 500, idempotencyKey: "queue_exp_1" });
+    const first = service.createExpense({ category: "Meals", amount: 500, idempotencyKey: "queue_exp_1" });
+    const second = service.createExpense({ category: "Meals", amount: 500, idempotencyKey: "queue_exp_1" });
 
     expect(second).toEqual(first);
     expect(internals(service).expenses).toHaveLength(1);
@@ -187,8 +189,8 @@ describe("B1 — idempotency keys", () => {
   test("submissions without a key keep working (one execution per call)", () => {
     const service = seededService();
 
-    service.createExpense({ category: "Fuel", amount: 100 });
-    service.createExpense({ category: "Fuel", amount: 100 });
+    service.createExpense({ category: "Meals", amount: 100 });
+    service.createExpense({ category: "Meals", amount: 100 });
 
     expect(internals(service).expenses).toHaveLength(2);
     expect(internals(service).idempotencyRecords).toHaveLength(0);

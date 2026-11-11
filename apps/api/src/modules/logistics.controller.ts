@@ -783,6 +783,25 @@ export class LogisticsController {
     });
   }
 
+  // Phase 6 P6-5: profitability report — the system's first
+  // date-ranged query (period anchoring and definitions live in
+  // LogisticsService.getProfitabilityReport; the payload carries a
+  // `definition` string the web prints verbatim). Gated on
+  // reports.view ALONE, deliberately not the balances endpoints'
+  // any-of gate: balances are a customer-desk working view (collections
+  // staff need them), while profitability exposes company margin —
+  // reports.view is the permission that exists for exactly this, and
+  // its holders (owners + Delivery Admin) are the report's audience.
+  // Figures are branch-scoped in the service (P5-3 patterns).
+  @Get("reports/profitability")
+  @RequirePermissions("reports.view")
+  profitability(
+    @Req() request: { user?: { branchAccess?: string } },
+    @Query() query: { from?: string; to?: string; groupBy?: string }
+  ) {
+    return this.logistics.getProfitabilityReport(query, request.user);
+  }
+
   @Get("expenses")
   @RequirePermissions("expenses.create")
   expenses(
