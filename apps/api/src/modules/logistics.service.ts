@@ -29,6 +29,7 @@ import type {
   PaymentRecord,
   PrintLog,
   ReceivingDraft,
+  ReceivingIntakeDuplicateSubmission,
   ReceivingIntakeTask,
   ReceivingRecord,
   ReturnRecord,
@@ -1045,6 +1046,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
 
   createProductMaster(input: { name: string; sku?: string; barcode?: string; brand?: string; category?: string; defaultUnit?: string; defaultPrice?: number | null; notes?: string; photoUrl?: string }) {
     if (!input.name?.trim()) throw new BadRequestException("Product name is required");
+    this.assertNoLocalPhotoReference(input.photoUrl, "Product photo");
     const sku = input.sku?.trim() || undefined;
     const barcode = input.barcode?.trim() || undefined;
     const defaultPrice = input.defaultPrice == null || input.defaultPrice === undefined ? null : Number(input.defaultPrice);
@@ -1564,19 +1566,24 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     quantity?: number;
     unit?: string;
     drPhotoUrl?: string;
+    drPhotoLocalId?: string;
     notes?: string;
   }) {
     const customerName = input.customerName?.trim();
     if (!customerName) throw new BadRequestException("Company/customer name is required");
+    this.assertNoLocalPhotoReference(input.drPhotoUrl, "DR photo");
     const warehouseCode = input.warehouseCode?.trim() || "origin";
     const destinationBranch = input.destinationBranch?.trim() || undefined;
     const customerDrNumber = input.customerDrNumber?.trim() || undefined;
+    const drPhotoLocalId = this.normalizeLocalPhotoId(input.drPhotoLocalId);
+    // The dedupe window is the Manila business day (Phase 4 audit B5): the
+    // UTC date flips at 08:00 PHT and split one business day into two keys.
     const duplicateKey = [
       warehouseCode.toLowerCase(),
       customerName.toLowerCase(),
       customerDrNumber?.toLowerCase() || "no-dr",
       destinationBranch?.toLowerCase() || "no-branch",
-      new Date().toISOString().slice(0, 10)
+      this.businessDateKey(new Date())
     ].join("|");
     const now = new Date().toISOString();
     const duplicate = this.receivingIntakeTasks.find((task) => task.duplicateKey === duplicateKey && task.status === "Pending Review");
@@ -1584,14 +1591,46 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       duplicate.duplicateCount += 1;
       duplicate.updatedAt = now;
       if (input.drPhotoUrl) duplicate.extraPhotoUrls.push(input.drPhotoUrl);
-      if (input.notes || input.drPhotoUrl) {
-        duplicate.duplicateNotes.push({
-          id: id("intake_note"),
-          note: input.notes?.trim() || undefined,
-          photoUrl: input.drPhotoUrl?.trim() || undefined,
-          createdAt: now
-        });
+      // Phase 4 audit B5: a merged duplicate must not silently discard the
+      // incoming submission. The full normalized payload is kept on a
+      // duplicate note, and any field the original submission lacked is
+      // filled from the incoming values. Non-empty original fields are never
+      // overwritten by a conflicting duplicate.
+      const submission: ReceivingIntakeDuplicateSubmission = {
+        customerName,
+        customerDrNumber,
+        dropOffPerson: input.dropOffPerson?.trim() || undefined,
+        dropOffPhone: input.dropOffPhone?.trim() || undefined,
+        consigneeName: input.consigneeName?.trim() || undefined,
+        destinationBranch,
+        deliveryArea: input.deliveryArea?.trim() || undefined,
+        itemDescription: input.itemDescription?.trim() || undefined,
+        quantity: input.quantity === undefined ? undefined : Number(input.quantity),
+        unit: input.unit?.trim() || undefined
+      };
+      if (!duplicate.dropOffPerson && submission.dropOffPerson) duplicate.dropOffPerson = submission.dropOffPerson;
+      if (!duplicate.dropOffPhone && submission.dropOffPhone) duplicate.dropOffPhone = submission.dropOffPhone;
+      if (!duplicate.consigneeName && submission.consigneeName) {
+        duplicate.consigneeName = submission.consigneeName;
+        const receiverQuery = submission.consigneeName.toLowerCase();
+        duplicate.receiverMatched = this.customers.some((entry) => (entry.contacts ?? []).some((contact) => contact.name.toLowerCase() === receiverQuery));
       }
+      if (!duplicate.deliveryArea && submission.deliveryArea) duplicate.deliveryArea = submission.deliveryArea;
+      if (!duplicate.itemDescription && submission.itemDescription) {
+        duplicate.itemDescription = submission.itemDescription;
+        const productQuery = submission.itemDescription.toLowerCase();
+        const product = this.productMasters.find((entry) => entry.name.toLowerCase() === productQuery || entry.barcode?.toLowerCase() === productQuery);
+        duplicate.productId = product?.id;
+        duplicate.productMatched = Boolean(product);
+      }
+      duplicate.duplicateNotes.push({
+        id: id("intake_note"),
+        note: input.notes?.trim() || undefined,
+        photoUrl: input.drPhotoUrl?.trim() || undefined,
+        photoLocalId: drPhotoLocalId,
+        submission,
+        createdAt: now
+      });
       this.audit("receiving.intake_duplicate", "ReceivingIntakeTask", duplicate.id, `Duplicate attempt ${duplicate.duplicateCount}`);
       this.saveData();
       return { task: duplicate, duplicate: true, message: "This DR was already submitted. Receiving staff will review it shortly." };
@@ -1627,6 +1666,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       quantity: Number(input.quantity || 1),
       unit: input.unit?.trim() || "pcs",
       drPhotoUrl: input.drPhotoUrl?.trim() || undefined,
+      drPhotoLocalId,
       extraPhotoUrls: [],
       notes: input.notes?.trim() || undefined,
       duplicateNotes: [],
@@ -1638,6 +1678,53 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     this.audit("receiving.intake_created", "ReceivingIntakeTask", task.id);
     this.saveData();
     return { task, duplicate: false, message: "Submitted. Please wait for receiving staff to review." };
+  }
+
+  /**
+   * Phase 4 audit A6: when a queued device photo finishes uploading, attach
+   * its server URL to the intake record that referenced it by local photo id.
+   * Matches the task's pending DR photo reference (drPhotoLocalId) and any
+   * duplicate note still carrying a pending photo reference; a resolved
+   * duplicate photo also joins extraPhotoUrls, mirroring how an immediately
+   * uploaded duplicate photo is stored. If the task was already converted and
+   * the receiving record still has no DR photo, the URL flows through to it.
+   * Only an exact pending-reference match is acted on.
+   */
+  resolveReceivingIntakeQueuedPhoto(input: { localPhotoId: string; fileUrl: string }) {
+    const localPhotoId = this.normalizeLocalPhotoId(input.localPhotoId);
+    if (!localPhotoId) throw new BadRequestException("Local photo id is required");
+    const fileUrl = input.fileUrl?.trim();
+    if (!fileUrl) throw new BadRequestException("Uploaded photo URL is required");
+    this.assertNoLocalPhotoReference(fileUrl, "Uploaded photo URL");
+    let resolvedCount = 0;
+    for (const task of this.receivingIntakeTasks) {
+      let touched = false;
+      if (task.drPhotoLocalId === localPhotoId) {
+        if (task.drPhotoUrl) task.extraPhotoUrls.push(fileUrl);
+        else task.drPhotoUrl = fileUrl;
+        task.drPhotoLocalId = undefined;
+        touched = true;
+        if (task.convertedReceivingId) {
+          const receiving = this.receivingRecords.find((entry) => entry.id === task.convertedReceivingId);
+          if (receiving && !receiving.drPhotoUrl) receiving.drPhotoUrl = fileUrl;
+        }
+      }
+      for (const note of task.duplicateNotes) {
+        if (note.photoLocalId === localPhotoId) {
+          note.photoUrl = fileUrl;
+          note.photoLocalId = undefined;
+          task.extraPhotoUrls.push(fileUrl);
+          touched = true;
+        }
+      }
+      if (touched) {
+        resolvedCount += 1;
+        task.updatedAt = new Date().toISOString();
+        this.audit("receiving.intake_photo_resolved", "ReceivingIntakeTask", task.id, task.intakeNumber);
+      }
+    }
+    if (resolvedCount) this.saveData();
+    return { resolvedCount };
   }
 
   markReceivingIntakeConverted(taskId: string, input: { receivingId: string }) {
@@ -1669,6 +1756,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     formState: Record<string, unknown>;
     productLines: Array<Record<string, unknown>>;
   }) {
+    this.assertNoLocalPhotoReference(input.drPhotoUrl, "DR photo");
     const now = new Date().toISOString();
     const customer = input.customerId ? this.customers.find((entry) => entry.id === input.customerId) : undefined;
     const draft: ReceivingDraft = {
@@ -1695,6 +1783,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   }
 
   updateReceivingDraft(draftId: string, input: Partial<Pick<ReceivingDraft, "customerId" | "customerDrNumber" | "destination" | "drPhotoUrl" | "formState" | "productLines">>) {
+    this.assertNoLocalPhotoReference(input.drPhotoUrl, "DR photo");
     const draft = this.findReceivingDraft(draftId);
     if (draft.status !== "Draft") throw new BadRequestException("Only draft records can be updated");
     const customer = input.customerId ? this.customers.find((entry) => entry.id === input.customerId) : undefined;
@@ -1780,6 +1869,8 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     const customer = this.customers.find((entry) => entry.id === input.customerId);
     if (!customer) throw new NotFoundException("Customer not found");
     if (!input.packages.length) throw new BadRequestException("At least one package is required");
+    this.assertNoLocalPhotoReference(input.drPhotoUrl, "DR photo");
+    for (const pkg of input.packages) this.assertNoLocalPhotoReference(pkg.photoUrls, "Package photo");
 
     const now = new Date();
     const recordNumber = this.nextDocumentNumber(documentPrefixes.receivingRecord, now);
@@ -1897,6 +1988,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
 
   attachReceivingDrPhoto(receivingRecordId: string, input: { drPhotoUrl: string; reason?: string }) {
     if (!input.drPhotoUrl?.trim()) throw new BadRequestException("DR photo URL is required");
+    this.assertNoLocalPhotoReference(input.drPhotoUrl, "DR photo");
     const receiving = this.findReceivingRecord(receivingRecordId);
     receiving.drPhotoUrl = input.drPhotoUrl.trim();
     receiving.drPhotoAttachedAt = new Date().toISOString();
@@ -2223,6 +2315,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   attachTripLoadingPhoto(tripId: string, input: { photoUrl: string }) {
     const trip = this.findTrip(tripId);
     if (!input.photoUrl) throw new BadRequestException("Loading photo is required.");
+    this.assertNoLocalPhotoReference(input.photoUrl, "Loading photo");
     if (!["Planned", "Loading"].includes(trip.status)) {
       throw new BadRequestException("Loading photo can only be attached before departure.");
     }
@@ -2311,6 +2404,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   }) {
     const cargo = this.findPackage(input.cargoPackageId);
     if (!input.reason?.trim()) throw new BadRequestException("Return reason is required.");
+    this.assertNoLocalPhotoReference(input.photoUrl, "Return photo");
     const record: ReturnRecord = {
       id: id("ret"),
       cargoPackageId: cargo.id,
@@ -2340,6 +2434,8 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   }) {
     const cargo = this.findPackage(input.cargoPackageId);
     if (!input.deliveredTo) throw new BadRequestException("Recipient name is required");
+    this.assertNoLocalPhotoReference(input.signatureUrl, "Signature");
+    this.assertNoLocalPhotoReference(input.deliveryPhotoUrl, "Delivery photo");
     if (cargo.condition !== "Good" && !input.customerAcceptedDamage) {
       throw new BadRequestException("Customer acceptance is required for damaged or exception cargo");
     }
@@ -2394,6 +2490,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     notes?: string;
   }) {
     const cargo = this.findPackage(input.cargoPackageId);
+    this.assertNoLocalPhotoReference(input.proofUrl, "Payment proof");
     const amountDue = input.amountDue ?? cargo.price ?? 0;
     const balance = Math.max(amountDue - input.amountPaid, 0);
     const status: PaymentStatus = balance === 0 ? "Paid" : input.amountPaid > 0 ? "Partially Paid" : "Unpaid";
@@ -2422,6 +2519,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   }
 
   createExpense(input: { tripId?: string; category: string; amount: number; description?: string; receiptUrl?: string }) {
+    this.assertNoLocalPhotoReference(input.receiptUrl, "Receipt");
     const expense: ExpenseRecord = {
       id: id("exp"),
       tripId: input.tripId,
@@ -2830,6 +2928,30 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
 
   private notify(title: string, message: string, priority: string) {
     this.notifications.push({ id: id("ntf"), title, message, priority, createdAt: new Date().toISOString() });
+  }
+
+  /**
+   * Guardrail for Phase 4 audit A6: a `local-photo://…` value is a photo that
+   * is still queued in a device's IndexedDB — it is not a server URL and must
+   * never be persisted into a record. Clients submit the bare local photo id
+   * as a pending reference instead (see createReceivingIntakeTask's
+   * drPhotoLocalId), and the real URL is attached when the queued photo
+   * uploads. Rejecting here turns silent data corruption into a clear error.
+   */
+  private assertNoLocalPhotoReference(value: string | string[] | undefined, field: string) {
+    const values = Array.isArray(value) ? value : value === undefined ? [] : [value];
+    if (values.some((entry) => entry?.trim().startsWith("local-photo://"))) {
+      throw new BadRequestException(
+        `${field} points to a photo that is still queued on the device (local-photo://). Queued photos attach automatically once they upload — retry after the device syncs.`
+      );
+    }
+  }
+
+  /** Accepts a bare queued-photo id or a full `local-photo://…` URL and returns the bare id. */
+  private normalizeLocalPhotoId(value: string | undefined) {
+    const trimmed = value?.trim();
+    if (!trimmed) return undefined;
+    return trimmed.startsWith("local-photo://") ? trimmed.slice("local-photo://".length) : trimmed;
   }
 
   private audit(action: string, entityType: string, entityId: string, reason?: string) {

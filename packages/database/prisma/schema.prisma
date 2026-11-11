@@ -257,6 +257,7 @@ model ReceivingIntakeTask {
   quantity             Int?
   unit                 String?
   drPhotoUrl           String?
+  drPhotoLocalId       String?
   extraPhotoUrls       String[]
   notes                String?
   duplicateNotes       Json

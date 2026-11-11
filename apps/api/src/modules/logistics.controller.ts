@@ -149,6 +149,15 @@ export class LogisticsController {
     return this.logistics.createReceivingIntakeTask(body);
   }
 
+  // Public like /uploads: the unauthenticated intake page and the staff shell
+  // both call this when a queued device photo finishes uploading. It only
+  // acts on an exact pending local-photo reference match (Phase 4 audit A6).
+  @Post("public/receiving-intake/resolve-photo")
+  @PublicRoute()
+  resolveReceivingIntakeQueuedPhoto(@Body() body: Parameters<LogisticsService["resolveReceivingIntakeQueuedPhoto"]>[0]) {
+    return this.logistics.resolveReceivingIntakeQueuedPhoto(body);
+  }
+
   @Post("customers")
   @RequirePermissions("customers.manage")
   createCustomer(@Body() body: Parameters<LogisticsService["createCustomer"]>[0]) {
