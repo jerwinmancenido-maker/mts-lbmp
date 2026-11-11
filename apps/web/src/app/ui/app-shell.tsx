@@ -37,7 +37,7 @@ import { parsePhilippineAddress, readDeliveryReceiptPhoto, type DrOcrConfidence,
 import { setPhotoAuditUser, setPhotoUploadContext, takeNativeCameraPhoto, uploadCompressedImage, uploadPathForPhotoType } from "./media";
 import type { PrinterDiagnosticCheck } from "@mts-lbmp/printing";
 import { printNativeText, runPrinterDiagnostic } from "./native-printer";
-import type { AuditLog, BillingInvoice, BootstrapData, Branch, CargoPackage, DashboardData, ExpenseRecord, HardwareTestRecord, OperationChatThread, PaymentRecord, PrintDocumentMeta, ProductMaster, RenderedDocumentResponse, Trip } from "./types";
+import type { AuditLog, BillingInvoice, BootstrapData, Branch, CargoPackage, CustomerBalance, DashboardData, ExpenseRecord, HardwareTestRecord, OperationChatThread, PaymentRecord, PrintDocumentMeta, ProductMaster, RenderedDocumentResponse, Trip } from "./types";
 import { BILLING_TERM_OPTIONS } from "./types";
 
 type Tab =
@@ -71,6 +71,7 @@ type ModuleCacheData = {
   hardwareTests?: HardwareTestRecord[];
   operationChats?: OperationChatThread[];
   billingInvoices?: BillingInvoice[];
+  customerBalances?: CustomerBalance[];
 };
 
 type SyncState = "Online" | "Refreshing" | "Cached" | "Offline" | "Pending sync" | "Sync failed" | "Syncing";
@@ -786,6 +787,7 @@ export function AppShell() {
   const [trips, setTrips] = useState<Trip[]>([]);
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [billingInvoices, setBillingInvoices] = useState<BillingInvoice[]>([]);
+  const [customerBalances, setCustomerBalances] = useState<CustomerBalance[]>([]);
   const [expenses, setExpenses] = useState<ExpenseRecord[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [hardwareTests, setHardwareTests] = useState<HardwareTestRecord[]>([]);
@@ -1366,6 +1368,7 @@ export function AppShell() {
     if (data.hardwareTests) setHardwareTests(data.hardwareTests);
     if (data.operationChats) setOperationChats(data.operationChats);
     if (data.billingInvoices) setBillingInvoices(data.billingInvoices);
+    if (data.customerBalances) setCustomerBalances(data.customerBalances);
   }
 
   async function refreshCurrentTabData(tab = activeTab) {
@@ -1460,12 +1463,17 @@ export function AppShell() {
     }
 
     if (tab === "customer") {
-      const [cargo, paymentList, invoiceList] = await Promise.all([
+      const [cargo, paymentList, invoiceList, balanceList] = await Promise.all([
         apiGet<CargoPackage[]>(apiQuery("/packages", { ...params, limit: 500 })),
         apiGet<PaymentRecord[]>(apiQuery("/payments", { ...params, limit: 500 })),
-        apiGet<BillingInvoice[]>("/billing/invoices").catch(() => [] as BillingInvoice[])
+        apiGet<BillingInvoice[]>("/billing/invoices").catch(() => [] as BillingInvoice[]),
+        // Balances sit behind reports.view OR customers.manage (P6-2);
+        // roles with neither simply get no server balances instead of
+        // failing the tab — the list then shows no money badges rather
+        // than reviving the retired client-side computation.
+        apiGet<CustomerBalance[]>("/balances").catch(() => [] as CustomerBalance[])
       ]);
-      const data = { packages: cargo, payments: paymentList, billingInvoices: invoiceList };
+      const data = { packages: cargo, payments: paymentList, billingInvoices: invoiceList, customerBalances: balanceList };
       applyModuleData(data);
       await writeCachedValue(cacheKey, data, { source: "server", userId: activeUser.id, branch, module: tab });
       setSyncState("Online");
@@ -2217,6 +2225,7 @@ export function AppShell() {
               packages={searchedPackages}
               payments={roleScopedPayments}
               invoices={billingInvoices}
+              balances={customerBalances}
               setReceiptPreview={setReceiptPreview}
               setReceiptPrintMeta={setReceiptPrintMeta}
               onAction={runAction}
@@ -10543,6 +10552,7 @@ function CustomerPortal({
   packages,
   payments,
   invoices,
+  balances,
   setReceiptPreview,
   setReceiptPrintMeta,
   onAction
@@ -10551,6 +10561,8 @@ function CustomerPortal({
   packages: CargoPackage[];
   payments: PaymentRecord[];
   invoices: BillingInvoice[];
+  /** Phase 6 P6-2: server balances from GET /balances (empty when the signed-in role holds neither reports.view nor customers.manage). */
+  balances: CustomerBalance[];
   setReceiptPreview: (value: string) => void;
   setReceiptPrintMeta: (value: PrintDocumentMeta | null) => void;
   onAction: <T>(label: string, action: () => Promise<T>) => Promise<void>;
@@ -10595,10 +10607,38 @@ function CustomerPortal({
   const recentCustomerPackages = [...selectedCustomerPackages]
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .slice(0, 8);
-  const customerAmountDue = selectedCustomerPackages.reduce((sum, pkg) => sum + Number(pkg.price ?? 0), 0);
-  const customerAmountPaid = selectedCustomerPackages.reduce((sum, pkg) => sum + (paymentTotalsByPackage[pkg.id] ?? 0), 0);
-  const customerBalance = Math.max(customerAmountDue - customerAmountPaid, 0);
-  const customerDeliveredUnpaid = selectedCustomerPackages.filter((pkg) => pkg.status === "Delivered" && Math.max(Number(pkg.price ?? 0) - (paymentTotalsByPackage[pkg.id] ?? 0), 0) > 0).length;
+  // Phase 6 P6-2: the Billing Summary reads the SERVER balance
+  // (GET /customers/:id/balance) — the client-side computation that used
+  // to live here is retired for this surface, so the figures shown are
+  // the ones the API derives for every consumer. A role without balance
+  // access gets an explicit unavailable state, never a silently
+  // recomputed local number.
+  const [serverBalance, setServerBalance] = useState<CustomerBalance | null>(null);
+  const [serverBalanceUnavailable, setServerBalanceUnavailable] = useState(false);
+  const [balanceRefreshTick, setBalanceRefreshTick] = useState(0);
+  useEffect(() => {
+    if (!selectedCustomerId) {
+      setServerBalance(null);
+      setServerBalanceUnavailable(false);
+      return;
+    }
+    let cancelled = false;
+    setServerBalance(null);
+    setServerBalanceUnavailable(false);
+    apiGet<CustomerBalance>(`/customers/${selectedCustomerId}/balance`)
+      .then((balance) => {
+        if (!cancelled) setServerBalance(balance);
+      })
+      .catch(() => {
+        if (!cancelled) setServerBalanceUnavailable(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCustomerId, balanceRefreshTick]);
+  const serverOverdueTotal = serverBalance
+    ? serverBalance.aging.overdue1To30.amount + serverBalance.aging.overdue31To60.amount + serverBalance.aging.overdue61To90.amount + serverBalance.aging.overdue90Plus.amount
+    : 0;
   // Phase 6 P6-1: the due-date label comes from the STRUCTURED term
   // (billingTermDays from the fixed list), never from substring-guessing
   // the free-text note. No structured term → the note is shown as-is.
@@ -10610,7 +10650,34 @@ function CustomerPortal({
         ? "Due on delivery"
         : `${customerTermOption.label} after latest delivery`
       : selectedCustomer.billingTerm ?? "Not set";
-  const customerPaymentStatus = customerBalance <= 0 ? "Paid" : customerDeliveredUnpaid > 0 ? "Due / Follow up" : "Open";
+  const customerPaymentStatus = !serverBalance
+    ? "—"
+    : serverBalance.outstanding <= 0
+      ? "Paid"
+      : serverOverdueTotal > 0
+        ? "Due / Follow up"
+        : "Open";
+  const agingBucketLabel = (bucket: CustomerBalance["packages"][number]["agingBucket"]): string =>
+    ({
+      current: "Current",
+      overdue1To30: "1–30 days overdue",
+      overdue31To60: "31–60 days overdue",
+      overdue61To90: "61–90 days overdue",
+      overdue90Plus: "90+ days overdue",
+      termsNotSet: "Terms not set",
+      notDelivered: "Not yet delivered"
+    })[bucket];
+  const balanceByCustomerId = new Map(balances.map((balance) => [balance.customerId, balance]));
+  const agingTotals = balances.reduce(
+    (totals, balance) => {
+      (Object.keys(totals) as Array<keyof typeof totals>).forEach((bucket) => {
+        totals[bucket] += balance.aging[bucket].amount;
+      });
+      return totals;
+    },
+    { current: 0, overdue1To30: 0, overdue31To60: 0, overdue61To90: 0, overdue90Plus: 0, termsNotSet: 0, notDelivered: 0 } as Record<CustomerBalance["packages"][number]["agingBucket"], number>
+  );
+  const totalOutstandingAll = balances.reduce((sum, balance) => sum + balance.outstanding, 0);
   const customerBillingBranch = selectedCustomerPackages.find((pkg) => pkg.handlingBranchName)?.handlingBranchName ?? selectedCustomerPackages.find((pkg) => pkg.destination)?.destination ?? "Assigned branch";
   const visibleCustomers = customers
     .filter((customer) => !/(demo|test)/i.test(customer.businessName))
@@ -10707,6 +10774,7 @@ function CustomerPortal({
     setReceiptPreview(statement.text);
     setReceiptPrintMeta(statement.print);
     setStatus(`Billing invoice ${invoice.invoiceNumber} saved for ${selectedCustomer.businessName}.`);
+    setBalanceRefreshTick((tick) => tick + 1);
   }
 
   async function saveBillingTermDays(value: string) {
@@ -10718,12 +10786,16 @@ function CustomerPortal({
       ...(option ? { billingTerm: option.label } : {})
     });
     setStatus(option ? `Billing term set to ${option.label}. New invoices will use it for their due date.` : "Billing term cleared. New invoices will have no due date.");
+    // The term drives the server balance's due dates and aging — refetch.
+    setBalanceRefreshTick((tick) => tick + 1);
   }
 
   async function createBillingReminder() {
-    if (!selectedCustomer) return;
+    if (!selectedCustomer || !serverBalance) return;
     await apiPost(`/customers/${selectedCustomer.id}/billing-reminder`, {
-      balance: customerBalance,
+      // Phase 6 P6-2: the reminder carries the SERVER balance, not a
+      // client recomputation.
+      balance: serverBalance.outstanding,
       dueRule: customerDueDateLabel,
       branchName: customerBillingBranch,
       smsReady: true
@@ -10769,14 +10841,26 @@ function CustomerPortal({
           <button className="smallButton" onClick={() => setMode("home")}>Back</button>
         </div>
         <label>Search Customer<input value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} placeholder="Company, contact, phone, address" /></label>
+        {balances.length > 0 && totalOutstandingAll > 0 && (
+          <div className="detailGrid compactDetailGrid paymentSummaryGrid">
+            <div><span>Outstanding (server)</span><strong>PHP {totalOutstandingAll.toLocaleString()}</strong></div>
+            {agingTotals.current > 0 && <div><span>Current</span><strong>PHP {agingTotals.current.toLocaleString()}</strong></div>}
+            {agingTotals.overdue1To30 > 0 && <div><span>1–30 days overdue</span><strong>PHP {agingTotals.overdue1To30.toLocaleString()}</strong></div>}
+            {agingTotals.overdue31To60 > 0 && <div><span>31–60 days overdue</span><strong>PHP {agingTotals.overdue31To60.toLocaleString()}</strong></div>}
+            {agingTotals.overdue61To90 > 0 && <div><span>61–90 days overdue</span><strong>PHP {agingTotals.overdue61To90.toLocaleString()}</strong></div>}
+            {agingTotals.overdue90Plus > 0 && <div><span>90+ days overdue</span><strong>PHP {agingTotals.overdue90Plus.toLocaleString()}</strong></div>}
+            {agingTotals.termsNotSet > 0 && <div><span>Terms not set</span><strong>PHP {agingTotals.termsNotSet.toLocaleString()}</strong></div>}
+            {agingTotals.notDelivered > 0 && <div><span>Not yet delivered</span><strong>PHP {agingTotals.notDelivered.toLocaleString()}</strong></div>}
+          </div>
+        )}
         <div className="list compactList">
           {displayedCustomers.map((customer) => (
             (() => {
               const customerPackages = packages.filter((pkg) => pkg.customerName === customer.businessName);
-              const customerPaid = customerPackages.reduce((sum, pkg) => sum + (paymentTotalsByPackage[pkg.id] ?? 0), 0);
-              const customerDue = customerPackages.reduce((sum, pkg) => sum + Number(pkg.price ?? 0), 0);
-              const customerBalanceList = Math.max(customerDue - customerPaid, 0);
               const customerOngoing = customerPackages.filter((pkg) => !["Delivered", "Cancelled", "Failed Delivery"].includes(pkg.status)).length;
+              // Phase 6 P6-2: money badges come from the SERVER balance
+              // payload (GET /balances) — no client-side recomputation.
+              const serverCustomerBalance = balanceByCustomerId.get(customer.id);
               return (
                   <button className="row denseRow tappableRow compactDataRow customerListRow" key={customer.id} onClick={() => {
                   setSelectedCustomerId(customer.id);
@@ -10791,7 +10875,8 @@ function CustomerPortal({
                   <div className="compactRowMeta">
                     <span className={customer.status === "Active" ? "badge" : "badge warning"}>{customer.status}</span>
                     {customerOngoing > 0 && <span className="badge">{customerOngoing} ongoing</span>}
-                    {customerBalanceList > 0 && <span className="badge warning">PHP {customerBalanceList.toLocaleString()}</span>}
+                    {serverCustomerBalance && serverCustomerBalance.outstanding > 0 && <span className="badge warning">PHP {serverCustomerBalance.outstanding.toLocaleString()}</span>}
+                    {serverCustomerBalance?.oldestDueDate && <span className="badge">Oldest due {serverCustomerBalance.oldestDueDate}</span>}
                   </div>
                 </button>
               );
@@ -10857,11 +10942,33 @@ function CustomerPortal({
               <div className="detailGrid compactDetailGrid paymentSummaryGrid">
                 <div><span>Terms</span><strong>{customerTermOption ? customerTermOption.label : selectedCustomer.billingTerm ?? "Not set"}</strong></div>
                 <div><span>Due Date Rule</span><strong>{customerDueDateLabel}</strong></div>
-                <div><span>Open Balance</span><strong>PHP {customerBalance.toLocaleString()}</strong></div>
+                <div><span>Open Balance</span><strong>{serverBalance ? `PHP ${serverBalance.outstanding.toLocaleString()}` : "—"}</strong></div>
                 <div><span>Status</span><strong>{customerPaymentStatus}</strong></div>
-                <div><span>Amount Due</span><strong>PHP {customerAmountDue.toLocaleString()}</strong></div>
-                <div><span>Amount Paid</span><strong>PHP {customerAmountPaid.toLocaleString()}</strong></div>
+                <div><span>Amount Due</span><strong>{serverBalance ? `PHP ${serverBalance.totalDue.toLocaleString()}` : "—"}</strong></div>
+                <div><span>Amount Paid</span><strong>{serverBalance ? `PHP ${serverBalance.totalCollected.toLocaleString()}` : "—"}</strong></div>
               </div>
+              {serverBalanceUnavailable && (
+                <p className="muted">Server balance is not available for your role (it needs reports.view or customers.manage). No local estimate is shown instead.</p>
+              )}
+              {serverBalance && serverBalance.packages.length > 0 && (
+                <div className="list compactList">
+                  {serverBalance.packages.map((row) => (
+                    <div className="row compactDataRow" key={row.packageId}>
+                      <div>
+                        <strong>{row.packageNumber}</strong>
+                        <p className="muted">
+                          Due PHP {row.price.toLocaleString()} / Paid PHP {row.amountPaid.toLocaleString()}
+                          {row.dueDate ? ` / Due ${row.dueDate}` : row.deliveredDate ? ` / Delivered ${row.deliveredDate}` : " / Not yet delivered"}
+                        </p>
+                      </div>
+                      <div className="compactRowMeta">
+                        <span className="badge warning">PHP {row.outstanding.toLocaleString()}</span>
+                        <span className="badge">{agingBucketLabel(row.agingBucket)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
               <label>Billing Term
                 <select
                   value={selectedCustomer.billingTermDays == null ? "" : String(selectedCustomer.billingTermDays)}
@@ -10878,7 +10985,7 @@ function CustomerPortal({
               </label>
               <div className="buttonGrid two">
                 <button className="actionButton" onClick={() => onAction("Create billing invoice", generateBillingInvoice)}>Billing Invoice</button>
-                <button className="primaryButton" disabled={customerBalance <= 0} onClick={() => onAction("Notify billing reminder", createBillingReminder)}>Notify Owner / SMS Soon</button>
+                <button className="primaryButton" disabled={!serverBalance || serverBalance.outstanding <= 0} onClick={() => onAction("Notify billing reminder", createBillingReminder)}>Notify Owner / SMS Soon</button>
               </div>
               <p className="muted">SMS is not sent yet. This prepares the reminder flow for future SMS API integration.</p>
             </section>

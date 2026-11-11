@@ -7,8 +7,20 @@ import { verifyAuthToken, type AuthTokenPayload } from "./security.js";
 
 export const IS_PUBLIC_ROUTE = "isPublicRoute";
 export const REQUIRED_PERMISSIONS = "requiredPermissions";
+export const REQUIRED_ANY_PERMISSIONS = "requiredAnyPermissions";
 export const PublicRoute = () => SetMetadata(IS_PUBLIC_ROUTE, true);
 export const RequirePermissions = (...permissions: Permission[]) => SetMetadata(REQUIRED_PERMISSIONS, permissions);
+/**
+ * Phase 6 P6-2: the any-of companion to RequirePermissions (which is
+ * all-of). Used only where two genuinely different jobs legitimately
+ * reach the same read — the balance endpoints are the first case:
+ * reports.view (owners, Delivery Admin — its first real enforcement)
+ * OR customers.manage (the customer-desk roles that work balances from
+ * the Customers module, the gate every other customer-money endpoint
+ * already uses). Prefer RequirePermissions for new endpoints; reach for
+ * this only with a documented reason like that one.
+ */
+export const RequireAnyPermissions = (...permissions: Permission[]) => SetMetadata(REQUIRED_ANY_PERMISSIONS, permissions);
 
 /**
  * Phase 5 P5-2: the only endpoint a mustChangePassword-flagged account
@@ -99,10 +111,20 @@ export class AuthGuard implements CanActivate {
       context.getHandler(),
       context.getClass()
     ]);
-    if (!requiredPermissions?.length) return true;
-
+    const requiredAnyPermissions = this.reflector.getAllAndOverride<Permission[]>(REQUIRED_ANY_PERMISSIONS, [
+      context.getHandler(),
+      context.getClass()
+    ]);
     const userPermissions = rolePresets[user.role] ?? [];
-    return requiredPermissions.every((permission) => userPermissions.includes(permission)) ? true : deny("permission");
+    // All-of gate (the established pattern): every listed permission.
+    if (requiredPermissions?.length && !requiredPermissions.every((permission) => userPermissions.includes(permission))) {
+      return deny("permission");
+    }
+    // Any-of gate (P6-2, see RequireAnyPermissions): at least one.
+    if (requiredAnyPermissions?.length && !requiredAnyPermissions.some((permission) => userPermissions.includes(permission))) {
+      return deny("permission");
+    }
+    return true;
   }
 
   private verifyToken(token: string) {
