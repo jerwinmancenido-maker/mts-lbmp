@@ -36,6 +36,7 @@ import type {
   Branch,
   CompanyProfile,
   HardwareTestRecord,
+  IdempotencyRecord,
   ProductMaster,
   ServiceAuditLog,
   ServiceNotification,
@@ -425,6 +426,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   private hardwareTests: HardwareTestRecord[] = [];
   private printLogs: PrintLog[] = [];
   private customUsers: StaffUserRecord[] = [];
+  private idempotencyRecords: IdempotencyRecord[] = [];
   private userBranchAccessOverrides: Record<string, string> = {};
   private notifications: ServiceNotification[] = [];
   private auditLogs: ServiceAuditLog[] = [];
@@ -1755,7 +1757,12 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     drPhotoUrl?: string;
     formState: Record<string, unknown>;
     productLines: Array<Record<string, unknown>>;
+    idempotencyKey?: string;
   }) {
+    return this.runIdempotent("POST /receiving/drafts", input.idempotencyKey, () => this.createReceivingDraftOnce(input));
+  }
+
+  private createReceivingDraftOnce(input: Parameters<LogisticsService["createReceivingDraft"]>[0]) {
     this.assertNoLocalPhotoReference(input.drPhotoUrl, "DR photo");
     const now = new Date().toISOString();
     const customer = input.customerId ? this.customers.find((entry) => entry.id === input.customerId) : undefined;
@@ -1986,7 +1993,13 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return receiving;
   }
 
-  attachReceivingDrPhoto(receivingRecordId: string, input: { drPhotoUrl: string; reason?: string }) {
+  attachReceivingDrPhoto(receivingRecordId: string, input: { drPhotoUrl: string; reason?: string; idempotencyKey?: string }) {
+    return this.runIdempotent("POST /receiving/:id/dr-photo", input.idempotencyKey, () =>
+      this.attachReceivingDrPhotoOnce(receivingRecordId, input)
+    );
+  }
+
+  private attachReceivingDrPhotoOnce(receivingRecordId: string, input: Parameters<LogisticsService["attachReceivingDrPhoto"]>[1]) {
     if (!input.drPhotoUrl?.trim()) throw new BadRequestException("DR photo URL is required");
     this.assertNoLocalPhotoReference(input.drPhotoUrl, "DR photo");
     const receiving = this.findReceivingRecord(receivingRecordId);
@@ -2312,7 +2325,13 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return { trip, cargo };
   }
 
-  attachTripLoadingPhoto(tripId: string, input: { photoUrl: string }) {
+  attachTripLoadingPhoto(tripId: string, input: { photoUrl: string; idempotencyKey?: string }) {
+    return this.runIdempotent("POST /trips/:id/loading-photo", input.idempotencyKey, () =>
+      this.attachTripLoadingPhotoOnce(tripId, input)
+    );
+  }
+
+  private attachTripLoadingPhotoOnce(tripId: string, input: Parameters<LogisticsService["attachTripLoadingPhoto"]>[1]) {
     const trip = this.findTrip(tripId);
     if (!input.photoUrl) throw new BadRequestException("Loading photo is required.");
     this.assertNoLocalPhotoReference(input.photoUrl, "Loading photo");
@@ -2401,8 +2420,20 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     nextAction: ReturnRecord["nextAction"];
     notes?: string;
     photoUrl?: string;
+    idempotencyKey?: string;
   }) {
+    return this.runIdempotent("POST /returns", input.idempotencyKey, () => this.createReturnRecordOnce(input));
+  }
+
+  private createReturnRecordOnce(input: Parameters<LogisticsService["createReturnRecord"]>[0]) {
     const cargo = this.findPackage(input.cargoPackageId);
+    // B3 transition guard: a package can have only one open return request.
+    // A repeat submission (queued replay under a different key, double-tap)
+    // returns the open request instead of stacking a second one and
+    // re-stamping the package. Return records never leave "Requested" in the
+    // current workflow, so an open one is by definition the same intent.
+    const openReturn = this.returnRecords.find((record) => record.cargoPackageId === cargo.id && record.status === "Requested");
+    if (openReturn) return openReturn;
     if (!input.reason?.trim()) throw new BadRequestException("Return reason is required.");
     this.assertNoLocalPhotoReference(input.photoUrl, "Return photo");
     const record: ReturnRecord = {
@@ -2431,8 +2462,26 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     deliveryPhotoUrl?: string;
     notes?: string;
     customerAcceptedDamage?: boolean;
+    idempotencyKey?: string;
   }) {
+    return this.runIdempotent("POST /deliveries/complete", input.idempotencyKey, () => this.completeDeliveryOnce(input));
+  }
+
+  private completeDeliveryOnce(input: Parameters<LogisticsService["completeDelivery"]>[0]) {
     const cargo = this.findPackage(input.cargoPackageId);
+    // B3 transition guard (audit direction): completing an already-Delivered
+    // package returns the existing delivery instead of appending a second
+    // DeliveryRecord and re-stamping the package. This covers replays whose
+    // key differs from the original (e.g. a fresh form after a lost
+    // response); same-key replays never reach here (B1). If the package is
+    // Delivered but no delivery record exists (legacy data), fall through
+    // and create the record so the data heals.
+    if (cargo.status === "Delivered") {
+      const existing = [...this.deliveries]
+        .reverse()
+        .find((delivery) => delivery.cargoPackageId === cargo.id && delivery.status === "Delivered");
+      if (existing) return existing;
+    }
     if (!input.deliveredTo) throw new BadRequestException("Recipient name is required");
     this.assertNoLocalPhotoReference(input.signatureUrl, "Signature");
     this.assertNoLocalPhotoReference(input.deliveryPhotoUrl, "Delivery photo");
@@ -2456,8 +2505,25 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return delivery;
   }
 
-  failDelivery(input: { cargoPackageId: string; failedReason: string; notes?: string; nextAction: string }) {
+  failDelivery(input: { cargoPackageId: string; failedReason: string; notes?: string; nextAction: string; idempotencyKey?: string }) {
+    return this.runIdempotent("POST /deliveries/fail", input.idempotencyKey, () => this.failDeliveryOnce(input));
+  }
+
+  private failDeliveryOnce(input: Parameters<LogisticsService["failDelivery"]>[0]) {
     const cargo = this.findPackage(input.cargoPackageId);
+    // B3 transition guards, mirroring completeDelivery: a delivered package
+    // is terminal — a late failure report against it is a conflict, not a
+    // state change. An already-Failed package returns its existing failure
+    // record instead of stacking a duplicate.
+    if (cargo.status === "Delivered") {
+      throw new BadRequestException("Package is already delivered; a failed-delivery attempt can no longer be recorded for it.");
+    }
+    if (cargo.status === "Failed Delivery") {
+      const existing = [...this.deliveries]
+        .reverse()
+        .find((delivery) => delivery.cargoPackageId === cargo.id && delivery.status === "Failed Delivery");
+      if (existing) return existing;
+    }
     const delivery: DeliveryRecord = {
       id: id("del"),
       cargoPackageId: cargo.id,
@@ -2488,10 +2554,31 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     branchName?: string;
     proofUrl?: string;
     notes?: string;
+    idempotencyKey?: string;
   }) {
+    return this.runIdempotent("POST /payments", input.idempotencyKey, () => this.recordPaymentOnce(input));
+  }
+
+  private recordPaymentOnce(input: Parameters<LogisticsService["recordPayment"]>[0]) {
     const cargo = this.findPackage(input.cargoPackageId);
     this.assertNoLocalPhotoReference(input.proofUrl, "Payment proof");
     const amountDue = input.amountDue ?? cargo.price ?? 0;
+    // B3 transition guard: once the full amount due has been collected, any
+    // further collection against the package is a duplicate (double-tapped
+    // Collect, or a queued replay that arrives after the package was paid
+    // through another path) and is rejected. A keyed replay of the original
+    // collection never reaches here — B1 returns its stored result first.
+    // Partial collections below the amount due remain allowed.
+    if (amountDue > 0) {
+      const alreadyCollected = this.payments
+        .filter((payment) => payment.cargoPackageId === cargo.id)
+        .reduce((sum, payment) => sum + payment.amountPaid, 0);
+      if (alreadyCollected >= amountDue) {
+        throw new BadRequestException(
+          `Payment for ${cargo.packageNumber} is already fully collected (PHP ${alreadyCollected.toLocaleString()} of PHP ${amountDue.toLocaleString()}). Refusing to record a duplicate collection.`
+        );
+      }
+    }
     const balance = Math.max(amountDue - input.amountPaid, 0);
     const status: PaymentStatus = balance === 0 ? "Paid" : input.amountPaid > 0 ? "Partially Paid" : "Unpaid";
     const payment: PaymentRecord = {
@@ -2518,7 +2605,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return payment;
   }
 
-  createExpense(input: { tripId?: string; category: string; amount: number; description?: string; receiptUrl?: string }) {
+  createExpense(input: { tripId?: string; category: string; amount: number; description?: string; receiptUrl?: string; idempotencyKey?: string }) {
+    return this.runIdempotent("POST /expenses", input.idempotencyKey, () => this.createExpenseOnce(input));
+  }
+
+  private createExpenseOnce(input: Parameters<LogisticsService["createExpense"]>[0]) {
     this.assertNoLocalPhotoReference(input.receiptUrl, "Receipt");
     const expense: ExpenseRecord = {
       id: id("exp"),
@@ -3038,6 +3129,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     // Rows persisted before the hand-off rework predate the outcome column.
     this.printLogs = (data.printLogs ?? []).map((log) => ({ ...log, outcome: log.outcome ?? "HandedOff" }));
     this.customUsers = data.customUsers ?? [];
+    this.idempotencyRecords = data.idempotencyRecords ?? [];
     this.companyProfile = data.companyProfile ?? this.companyProfile;
     this.branches = data.branches?.length ? data.branches : this.branches;
     this.paymentMethods = data.paymentMethods?.length ? data.paymentMethods : this.paymentMethods;
@@ -3071,12 +3163,53 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       hardwareTests: this.hardwareTests,
       printLogs: this.printLogs,
       customUsers: this.customUsers,
+      idempotencyRecords: this.idempotencyRecords,
       companyProfile: this.companyProfile,
       branches: this.branches,
       paymentMethods: this.paymentMethods,
       expenseCategories: this.expenseCategories,
       userBranchAccessOverrides: this.userBranchAccessOverrides
     };
+  }
+
+  /** Retention window for processed idempotency keys: 7 days. */
+  private static readonly IDEMPOTENCY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+  /**
+   * Phase 4 B1 — the generic idempotency seam for the queueable write
+   * handlers. When the client supplies a key (the `Idempotency-Key` header,
+   * merged into the handler input by the controller), the first successful
+   * execution stores its result under (key, endpoint); a repeat submission
+   * with the same key returns a copy of that stored result and re-executes
+   * nothing. This is what makes the offline queue's replay safe: a request
+   * that committed but whose response was lost is retried with the same key
+   * (the queue record's id) and cannot apply twice. Only successful
+   * executions are recorded, so a request that fails validation can be
+   * corrected and retried under the same key. Submissions without a key keep
+   * the historical behaviour (the B3 transition guards still protect the
+   * delivery/payment state machines for those).
+   */
+  private runIdempotent<T>(endpoint: string, key: string | undefined, execute: () => T): T {
+    const normalizedKey = key?.trim();
+    if (!normalizedKey) return execute();
+    const existing = this.idempotencyRecords.find((record) => record.key === normalizedKey && record.endpoint === endpoint);
+    if (existing) {
+      return JSON.parse(JSON.stringify(existing.result)) as T;
+    }
+    const result = execute();
+    const now = Date.now();
+    this.idempotencyRecords = this.idempotencyRecords.filter(
+      (record) => now - new Date(record.createdAt).getTime() < LogisticsService.IDEMPOTENCY_RETENTION_MS
+    );
+    this.idempotencyRecords.push({
+      id: id("idem"),
+      key: normalizedKey,
+      endpoint,
+      result: JSON.parse(JSON.stringify(result ?? null)) as unknown,
+      createdAt: new Date(now).toISOString()
+    });
+    this.saveData();
+    return result;
   }
 
   private saveData() {

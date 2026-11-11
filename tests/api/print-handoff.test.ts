@@ -249,6 +249,7 @@ describe("print hand-off logging (G4)", () => {
       hardwareTests: [],
       printLogs: [log],
       customUsers: [],
+      idempotencyRecords: [],
       companyProfile: {
         companyName: "Mancenido Trucking Services",
         address: "Configured by owner",

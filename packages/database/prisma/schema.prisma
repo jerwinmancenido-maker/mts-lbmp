@@ -611,3 +611,18 @@ model AuditLog {
   createdAt  DateTime @default(now())
   actor      User?    @relation(fields: [actorId], references: [id])
 }
+
+// Phase 4 B1: processed client idempotency keys for the queueable write
+// endpoints. A repeat of the same (key, endpoint) returns the stored result
+// instead of re-executing the mutation. Rows are pruned by the service after
+// a 7-day retention window.
+model IdempotencyKey {
+  id        String   @id @default(cuid())
+  key       String
+  endpoint  String
+  result    Json
+  createdAt DateTime @default(now())
+
+  @@unique([key, endpoint])
+  @@index([createdAt])
+}

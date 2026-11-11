@@ -417,6 +417,7 @@ describe("Prisma state mapping round-trip", () => {
       hardwareTests: [],
       printLogs: [],
       customUsers: [],
+      idempotencyRecords: [],
       companyProfile: {
         companyName: "Mancenido Trucking Services",
         address: "Configured by owner",

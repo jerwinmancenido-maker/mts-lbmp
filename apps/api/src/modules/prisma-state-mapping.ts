@@ -9,6 +9,7 @@ import type {
   DescriptionBarcode,
   ExpenseRecord,
   HardwareTestRecord,
+  IdempotencyRecord,
   OperationChatMessage,
   OperationChatThread,
   PackageMessage,
@@ -429,6 +430,10 @@ export interface MessageRow {
   createdAt: DateValue;
 }
 
+export interface IdempotencyKeyRow extends Omit<IdempotencyRecord, "createdAt"> {
+  createdAt: DateValue;
+}
+
 export interface AuditLogRow {
   id: string;
   actorId: string | null;
@@ -475,6 +480,7 @@ export interface PrismaStateRows {
   messageThreads: MessageThreadRow[];
   messages: MessageRow[];
   auditLogs: AuditLogRow[];
+  idempotencyKeys: IdempotencyKeyRow[];
 }
 
 export const COMPANY_SETTINGS_ROW_ID = "company_settings";
@@ -946,6 +952,13 @@ export function stateToRows(state: ServiceState): PrismaStateRows {
       ipAddress: null,
       userAgent: null,
       createdAt: new Date(log.createdAt)
+    })),
+    idempotencyKeys: state.idempotencyRecords.map((record) => ({
+      id: record.id,
+      key: record.key,
+      endpoint: record.endpoint,
+      result: record.result,
+      createdAt: new Date(record.createdAt)
     }))
   };
 }
@@ -1251,6 +1264,13 @@ export function rowsToState(rows: PrismaStateRows): LoadedServiceState {
       entityId: log.entityId,
       reason: log.reason ?? undefined,
       createdAt: toIso(log.createdAt)
+    })),
+    idempotencyRecords: (rows.idempotencyKeys ?? []).map((record) => ({
+      id: record.id,
+      key: record.key,
+      endpoint: record.endpoint,
+      result: record.result,
+      createdAt: toIso(record.createdAt)
     })),
     descriptionBarcodes: rows.itemDescriptions
       .filter((entry) => entry.barcode !== null)

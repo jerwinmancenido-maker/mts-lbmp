@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Param, Patch, Post, Query, Req } from "@nestjs/common";
+import { Body, Controller, Get, Headers, Inject, Param, Patch, Post, Query, Req } from "@nestjs/common";
 import { PublicRoute, RequirePermissions } from "./auth.guard.js";
 import { LogisticsService } from "./logistics.service.js";
 
@@ -202,8 +202,12 @@ export class LogisticsController {
 
   @Post("receiving/:id/dr-photo")
   @RequirePermissions("receiving.create")
-  attachReceivingDrPhoto(@Param("id") id: string, @Body() body: Parameters<LogisticsService["attachReceivingDrPhoto"]>[1]) {
-    return this.logistics.attachReceivingDrPhoto(id, body);
+  attachReceivingDrPhoto(
+    @Param("id") id: string,
+    @Body() body: Parameters<LogisticsService["attachReceivingDrPhoto"]>[1],
+    @Headers("idempotency-key") idempotencyKey?: string
+  ) {
+    return this.logistics.attachReceivingDrPhoto(id, { ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
   }
 
   @Patch("receiving/:id")
@@ -220,8 +224,11 @@ export class LogisticsController {
 
   @Post("receiving/drafts")
   @RequirePermissions("receiving.create")
-  createReceivingDraft(@Body() body: Parameters<LogisticsService["createReceivingDraft"]>[0]) {
-    return this.logistics.createReceivingDraft(body);
+  createReceivingDraft(
+    @Body() body: Parameters<LogisticsService["createReceivingDraft"]>[0],
+    @Headers("idempotency-key") idempotencyKey?: string
+  ) {
+    return this.logistics.createReceivingDraft({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
   }
 
   @Patch("receiving/drafts/:id")
@@ -460,8 +467,12 @@ export class LogisticsController {
 
   @Post("trips/:id/loading-photo")
   @RequirePermissions("loading.scan")
-  attachTripLoadingPhoto(@Param("id") id: string, @Body() body: { photoUrl: string }) {
-    return this.logistics.attachTripLoadingPhoto(id, body);
+  attachTripLoadingPhoto(
+    @Param("id") id: string,
+    @Body() body: { photoUrl: string; idempotencyKey?: string },
+    @Headers("idempotency-key") idempotencyKey?: string
+  ) {
+    return this.logistics.attachTripLoadingPhoto(id, { ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
   }
 
   @Post("trips/:id/mixed-approval")
@@ -502,14 +513,14 @@ export class LogisticsController {
 
   @Post("deliveries/complete")
   @RequirePermissions("delivery.complete")
-  completeDelivery(@Body() body: Parameters<LogisticsService["completeDelivery"]>[0]) {
-    return this.logistics.completeDelivery(body);
+  completeDelivery(@Body() body: Parameters<LogisticsService["completeDelivery"]>[0], @Headers("idempotency-key") idempotencyKey?: string) {
+    return this.logistics.completeDelivery({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
   }
 
   @Post("deliveries/fail")
   @RequirePermissions("delivery.fail")
-  failDelivery(@Body() body: Parameters<LogisticsService["failDelivery"]>[0]) {
-    return this.logistics.failDelivery(body);
+  failDelivery(@Body() body: Parameters<LogisticsService["failDelivery"]>[0], @Headers("idempotency-key") idempotencyKey?: string) {
+    return this.logistics.failDelivery({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
   }
 
   @Get("returns")
@@ -520,8 +531,11 @@ export class LogisticsController {
 
   @Post("returns")
   @RequirePermissions("delivery.complete")
-  createReturnRecord(@Body() body: Parameters<LogisticsService["createReturnRecord"]>[0]) {
-    return this.logistics.createReturnRecord(body);
+  createReturnRecord(
+    @Body() body: Parameters<LogisticsService["createReturnRecord"]>[0],
+    @Headers("idempotency-key") idempotencyKey?: string
+  ) {
+    return this.logistics.createReturnRecord({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
   }
 
   @Get("payments")
@@ -532,8 +546,8 @@ export class LogisticsController {
 
   @Post("payments")
   @RequirePermissions("payments.record")
-  recordPayment(@Body() body: Parameters<LogisticsService["recordPayment"]>[0]) {
-    return this.logistics.recordPayment(body);
+  recordPayment(@Body() body: Parameters<LogisticsService["recordPayment"]>[0], @Headers("idempotency-key") idempotencyKey?: string) {
+    return this.logistics.recordPayment({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
   }
 
   @Get("billing/invoices")
@@ -556,8 +570,8 @@ export class LogisticsController {
 
   @Post("expenses")
   @RequirePermissions("expenses.create")
-  createExpense(@Body() body: Parameters<LogisticsService["createExpense"]>[0]) {
-    return this.logistics.createExpense(body);
+  createExpense(@Body() body: Parameters<LogisticsService["createExpense"]>[0], @Headers("idempotency-key") idempotencyKey?: string) {
+    return this.logistics.createExpense({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
   }
 
   @Post("expenses/:id/approve")
