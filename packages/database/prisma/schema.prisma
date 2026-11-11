@@ -3,28 +3,30 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model User {
-  id             String    @id @default(cuid())
-  name           String
-  email          String    @unique
-  phone          String?
-  passwordHash   String
-  status         String    @default("Active")
-  roleId         String?
-  role           Role?     @relation(fields: [roleId], references: [id])
-  customerId     String?
-  customer       Customer? @relation(fields: [customerId], references: [id])
-  lastLoginAt    DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  deletedAt      DateTime?
-  auditLogs      AuditLog[]
-  notifications  Notification[]
-  messages       Message[]
+  id            String         @id @default(cuid())
+  name          String
+  email         String         @unique
+  phone         String?
+  passwordHash  String
+  status        String         @default("Active")
+  roleId        String?
+  role          Role?          @relation(fields: [roleId], references: [id])
+  customerId    String?
+  customer      Customer?      @relation(fields: [customerId], references: [id])
+  branchAccess  String?
+  lastLoginAt   DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  deletedAt     DateTime?
+  auditLogs     AuditLog[]
+  notifications Notification[]
+  messages      Message[]
 }
 
 model Role {
@@ -59,69 +61,114 @@ model RolePermission {
 }
 
 model Branch {
-  id           String     @id @default(cuid())
-  name         String
-  code         String     @unique
-  address      String?
-  canReceive   Boolean    @default(false)
-  canDispatch  Boolean    @default(false)
-  canDeliver   Boolean    @default(false)
-  canReturn    Boolean    @default(false)
-  canStage     Boolean    @default(false)
-  status       String     @default("Active")
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  id          String   @id @default(cuid())
+  name        String
+  code        String   @unique
+  address     String?
+  canReceive  Boolean  @default(false)
+  canDispatch Boolean  @default(false)
+  canDeliver  Boolean  @default(false)
+  canReturn   Boolean  @default(false)
+  canStage    Boolean  @default(false)
+  status      String   @default("Active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// Single-row settings table: one row holds the company profile plus the
+// payment-method and expense-category lists the service keeps in memory.
+model CompanySettings {
+  id                String   @id @default(cuid())
+  companyName       String
+  address           String
+  phone             String
+  email             String
+  logoUrl           String?
+  paymentMethods    String[]
+  expenseCategories String[]
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 }
 
 model Customer {
-  id              String            @id @default(cuid())
-  businessName    String
-  contactPerson   String?
+  id                     String                @id @default(cuid())
+  businessName           String
+  contactPerson          String?
+  phone                  String?
+  email                  String?
+  address                String?
+  billingAddress         String?
+  shippingAddress        String?
+  tin                    String?
+  companyPhone           String?
+  billingTerm            String                @default("Custom")
+  status                 String                @default("Active")
+  notes                  String?
+  createdFromReceivingId String?
+  finalizedAt            DateTime?
+  finalizedBy            String?
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+  deletedAt              DateTime?
+  users                  User[]
+  contacts               CustomerContact[]
+  itemDescriptions       ItemDescription[]
+  receivingRecords       ReceivingRecord[]
+  cargoPackages          CargoPackage[]
+  receivingDrafts        ReceivingDraft[]
+  receivingIntakeTasks   ReceivingIntakeTask[]
+  billingInvoices        BillingInvoice[]
+}
+
+model CustomerContact {
+  id              String   @id @default(cuid())
+  customerId      String
+  name            String
+  role            String?
   phone           String?
   email           String?
   address         String?
-  billingTerm     String            @default("Custom")
-  status          String            @default("Active")
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
-  deletedAt       DateTime?
-  users           User[]
-  senders         Sender[]
-  consignees      Consignee[]
-  itemDescriptions ItemDescription[]
-  receivingRecords ReceivingRecord[]
+  billingAddress  String?
+  shippingAddress String?
+  isPrimary       Boolean  @default(false)
+  status          String   @default("Active")
+  notes           String?
+  createdAt       DateTime @default(now())
+  customer        Customer @relation(fields: [customerId], references: [id])
 }
 
-model Sender {
-  id         String   @id @default(cuid())
-  customerId String
-  name       String
-  phone      String?
-  address    String?
-  customer   Customer @relation(fields: [customerId], references: [id])
-}
+model ProductMaster {
+  id                   String                @id @default(cuid())
+  name                 String
+  sku                  String?
+  barcode              String?
+  brand                String?
+  category             String?
+  defaultUnit          String
+  defaultPrice         Decimal?              @db.Decimal(12, 2)
+  notes                String?
+  photoUrl             String?
+  status               String                @default("Active")
+  createdAt            DateTime              @default(now())
+  cargoPackages        CargoPackage[]
+  receivingIntakeTasks ReceivingIntakeTask[]
 
-model Consignee {
-  id         String   @id @default(cuid())
-  customerId String
-  name       String
-  phone      String?
-  address    String?
-  customer   Customer @relation(fields: [customerId], references: [id])
+  @@index([barcode])
+  @@index([name])
 }
 
 model ItemDescription {
-  id              String       @id @default(cuid())
-  customerId      String
-  description     String
-  category        String?
-  barcode         String?
-  lastPrice       Decimal?     @db.Decimal(12, 2)
-  isFavorite      Boolean      @default(false)
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
-  customer        Customer     @relation(fields: [customerId], references: [id])
-  pricingHistory  PricingHistory[]
+  id             String           @id @default(cuid())
+  customerId     String
+  description    String
+  category       String?
+  barcode        String?
+  lastPrice      Decimal?         @db.Decimal(12, 2)
+  isFavorite     Boolean          @default(false)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  customer       Customer         @relation(fields: [customerId], references: [id])
+  pricingHistory PricingHistory[]
 
   @@index([barcode])
   @@index([description])
@@ -139,74 +186,190 @@ model PricingHistory {
 }
 
 model ReceivingRecord {
-  id                  String         @id @default(cuid())
-  recordNumber        String         @unique
-  customerId          String
-  senderId            String?
-  consigneeId         String?
-  customerDrNumber    String?
-  customerDrPhotoUrl  String?
-  originBranchId      String?
-  destination         String?
-  status              String         @default("Received")
-  receivedById        String?
-  receivedAt          DateTime       @default(now())
-  createdAt           DateTime       @default(now())
-  updatedAt           DateTime       @updatedAt
-  deletedAt           DateTime?
-  customer            Customer       @relation(fields: [customerId], references: [id])
-  packages            CargoPackage[]
+  id                   String                @id @default(cuid())
+  recordNumber         String                @unique
+  customerId           String
+  customerName         String
+  senderId             String?
+  consigneeId          String?
+  sender               String?
+  consignee            String?
+  customerDrNumber     String?
+  customerDrPhotoUrl   String?
+  drPhotoAttachedAt    DateTime?
+  drPhotoAttachReason  String?
+  originBranchId       String?
+  destination          String?
+  status               String                @default("Received")
+  receivedById         String?
+  receivedAt           DateTime              @default(now())
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  deletedAt            DateTime?
+  customer             Customer              @relation(fields: [customerId], references: [id])
+  packages             CargoPackage[]
+  finalizedDrafts      ReceivingDraft[]      @relation("DraftFinalizedReceiving")
+  convertedIntakeTasks ReceivingIntakeTask[] @relation("IntakeConvertedReceiving")
+}
+
+model ReceivingDraft {
+  id                     String           @id @default(cuid())
+  draftNumber            String           @unique
+  status                 String           @default("Draft")
+  customerId             String?
+  customerNameSnapshot   String?
+  customerStatusSnapshot String?
+  customerDrNumber       String?
+  destination            String?
+  drPhotoUrl             String?
+  formState              Json
+  productLines           Json
+  createdBy              String
+  updatedBy              String
+  finalizedReceivingId   String?
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+  customer               Customer?        @relation(fields: [customerId], references: [id])
+  finalizedReceiving     ReceivingRecord? @relation("DraftFinalizedReceiving", fields: [finalizedReceivingId], references: [id])
+}
+
+model ReceivingIntakeTask {
+  id                   String           @id @default(cuid())
+  intakeNumber         String           @unique
+  status               String           @default("Pending Review")
+  source               String           @default("Wall QR")
+  warehouseCode        String
+  duplicateKey         String
+  duplicateCount       Int              @default(0)
+  customerId           String?
+  customerNameTyped    String
+  customerMatched      Boolean          @default(false)
+  customerDrNumber     String?
+  dropOffPerson        String?
+  dropOffPhone         String?
+  consigneeName        String?
+  receiverMatched      Boolean          @default(false)
+  destinationBranch    String?
+  deliveryArea         String?
+  productId            String?
+  productMatched       Boolean          @default(false)
+  itemDescription      String?
+  quantity             Int?
+  unit                 String?
+  drPhotoUrl           String?
+  extraPhotoUrls       String[]
+  notes                String?
+  duplicateNotes       Json
+  convertedReceivingId String?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+  customer             Customer?        @relation(fields: [customerId], references: [id])
+  product              ProductMaster?   @relation(fields: [productId], references: [id])
+  convertedReceiving   ReceivingRecord? @relation("IntakeConvertedReceiving", fields: [convertedReceivingId], references: [id])
+
+  @@index([duplicateKey])
+  @@index([status])
 }
 
 model CargoPackage {
-  id                  String           @id @default(cuid())
-  packageNumber       String           @unique
-  receivingRecordId   String
-  itemDescriptionId   String?
-  description         String
-  destination         String
-  condition           String           @default("Good")
-  conditionNotes      String?
-  weight              Decimal?         @db.Decimal(12, 3)
-  length              Decimal?         @db.Decimal(12, 3)
-  width               Decimal?         @db.Decimal(12, 3)
-  height              Decimal?         @db.Decimal(12, 3)
-  price               Decimal?         @db.Decimal(12, 2)
-  priceChangeReason   String?
-  qrValue             String           @unique
-  status              String           @default("Received")
-  createdAt           DateTime         @default(now())
-  updatedAt           DateTime         @updatedAt
-  deletedAt           DateTime?
-  receivingRecord     ReceivingRecord  @relation(fields: [receivingRecordId], references: [id])
-  tripCargo           TripCargo[]
-  photos              Photo[]
-  deliveryRecords     DeliveryRecord[]
-  payments            Payment[]
+  id                     String                  @id @default(cuid())
+  packageNumber          String                  @unique
+  receivingRecordId      String
+  customerId             String
+  customerName           String
+  productId              String?
+  productBarcode         String?
+  itemDescriptionId      String?
+  description            String
+  quantity               Int                     @default(1)
+  unit                   String
+  destination            String
+  handlingBranchId       String
+  handlingBranchName     String
+  deliveryType           String
+  consigneeName          String?
+  deliveryBusinessName   String?
+  addressLine            String?
+  barangay               String?
+  city                   String?
+  province               String?
+  landmark               String?
+  deliveryPhone          String?
+  deliveryNotes          String?
+  condition              String                  @default("Good")
+  conditionNotes         String?
+  weight                 Decimal?                @db.Decimal(12, 3)
+  weightUnit             String?
+  length                 Decimal?                @db.Decimal(12, 3)
+  width                  Decimal?                @db.Decimal(12, 3)
+  height                 Decimal?                @db.Decimal(12, 3)
+  dimensionUnit          String?
+  unitPrice              Decimal?                @db.Decimal(12, 2)
+  price                  Decimal?                @db.Decimal(12, 2)
+  priceChangeReason      String?
+  qrValue                String                  @unique
+  status                 String                  @default("Received")
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  deletedAt              DateTime?
+  receivingRecord        ReceivingRecord         @relation(fields: [receivingRecordId], references: [id])
+  customer               Customer                @relation(fields: [customerId], references: [id])
+  product                ProductMaster?          @relation(fields: [productId], references: [id])
+  tripCargo              TripCargo[]
+  photos                 Photo[]
+  deliveryRecords        DeliveryRecord[]
+  payments               Payment[]
+  returnRecords          ReturnRecord[]
+  billingInvoicePackages BillingInvoicePackage[]
+  operationChatThreads   OperationChatThread[]
 
   @@index([status])
   @@index([destination])
+  @@index([customerId])
+}
+
+model TruckRecord {
+  id            String   @id @default(cuid())
+  plateNumber   String
+  driverName    String?
+  contactNumber String?
+  ownerName     String?
+  status        String   @default("Active")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  trips         Trip[]
+
+  @@index([plateNumber])
 }
 
 model Trip {
-  id                 String       @id @default(cuid())
-  tripNumber         String       @unique
-  origin             String
-  destination        String
-  isMixedTrip        Boolean      @default(false)
-  vehicleType        String?
-  vehicleDescription String?
-  driverName         String?
-  providerName       String?
-  status             String       @default("Draft")
-  plannedDepartureAt DateTime?
-  departedAt         DateTime?
-  arrivedAt          DateTime?
-  completedAt        DateTime?
-  createdAt          DateTime     @default(now())
-  updatedAt          DateTime     @updatedAt
-  cargo              TripCargo[]
-  expenses           Expense[]
+  id                      String       @id @default(cuid())
+  tripNumber              String       @unique
+  origin                  String
+  destination             String
+  isMixedTrip             Boolean      @default(false)
+  truckId                 String?
+  plateNumber             String?
+  vehicleType             String?
+  vehicleDescription      String?
+  driverName              String?
+  driverContactNumber     String?
+  truckOwnerName          String?
+  providerName            String?
+  loadingPhotoUrl         String?
+  loadingPhotoAttachedAt  DateTime?
+  mixedTripApprovalStatus String?
+  mixedTripApprovalNotes  String?
+  status                  String       @default("Draft")
+  plannedDepartureAt      DateTime?
+  departedAt              DateTime?
+  arrivedAt               DateTime?
+  completedAt             DateTime?
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+  truck                   TruckRecord? @relation(fields: [truckId], references: [id])
+  cargo                   TripCargo[]
+  expenses                Expense[]
 }
 
 model TripCargo {
@@ -224,72 +387,177 @@ model TripCargo {
 }
 
 model DeliveryRecord {
-  id              String       @id @default(cuid())
-  cargoPackageId  String
-  deliveryType    String       @default("Branch Delivery")
-  status          String       @default("Delivered")
-  deliveredTo     String?
-  deliveredAt     DateTime?
-  deliveredById   String?
-  signatureUrl    String?
-  deliveryPhotoUrl String?
-  failedReason    String?
-  notes           String?
-  nextAction      String?
-  customerAcceptedDamage Boolean @default(false)
-  createdAt       DateTime      @default(now())
-  cargoPackage    CargoPackage  @relation(fields: [cargoPackageId], references: [id])
+  id                     String       @id @default(cuid())
+  cargoPackageId         String
+  deliveryType           String       @default("Branch Delivery")
+  status                 String       @default("Delivered")
+  deliveredTo            String?
+  deliveredAt            DateTime?
+  deliveredById          String?
+  signatureUrl           String?
+  deliveryPhotoUrl       String?
+  failedReason           String?
+  notes                  String?
+  nextAction             String?
+  customerAcceptedDamage Boolean      @default(false)
+  createdAt              DateTime     @default(now())
+  cargoPackage           CargoPackage @relation(fields: [cargoPackageId], references: [id])
+}
+
+model ReturnRecord {
+  id             String       @id @default(cuid())
+  cargoPackageId String
+  reason         String
+  nextAction     String
+  notes          String?
+  photoUrl       String?
+  status         String       @default("Requested")
+  createdAt      DateTime     @default(now())
+  cargoPackage   CargoPackage @relation(fields: [cargoPackageId], references: [id])
 }
 
 model Payment {
-  id             String       @id @default(cuid())
-  cargoPackageId String?
-  amountDue      Decimal      @db.Decimal(12, 2)
-  amountPaid     Decimal      @default(0) @db.Decimal(12, 2)
-  balance        Decimal      @db.Decimal(12, 2)
-  method         String
-  status         String       @default("Unpaid")
-  proofUrl       String?
-  recordedById   String?
-  verifiedById   String?
-  notes          String?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-  cargoPackage   CargoPackage? @relation(fields: [cargoPackageId], references: [id])
+  id                String        @id @default(cuid())
+  cargoPackageId    String?
+  amountDue         Decimal       @db.Decimal(12, 2)
+  amountPaid        Decimal       @default(0) @db.Decimal(12, 2)
+  balance           Decimal       @db.Decimal(12, 2)
+  method            String
+  collectionPoint   String
+  collectedByUserId String?
+  collectedByName   String?
+  collectedByRole   String?
+  branchId          String?
+  branchName        String?
+  status            String        @default("Unpaid")
+  proofUrl          String?
+  recordedById      String?
+  verifiedById      String?
+  notes             String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  cargoPackage      CargoPackage? @relation(fields: [cargoPackageId], references: [id])
 }
 
 model Expense {
-  id          String   @id @default(cuid())
-  tripId      String?
-  branchId    String?
-  category    String
-  amount      Decimal  @db.Decimal(12, 2)
-  description String?
-  receiptUrl  String?
-  status      String   @default("Submitted")
-  createdById String?
+  id           String   @id @default(cuid())
+  tripId       String?
+  branchId     String?
+  category     String
+  amount       Decimal  @db.Decimal(12, 2)
+  description  String?
+  receiptUrl   String?
+  status       String   @default("Submitted")
+  createdById  String?
   approvedById String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  trip        Trip?    @relation(fields: [tripId], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  trip         Trip?    @relation(fields: [tripId], references: [id])
+}
+
+model BillingInvoice {
+  id            String                  @id @default(cuid())
+  invoiceNumber String                  @unique
+  customerId    String
+  customerName  String
+  amountDue     Decimal                 @db.Decimal(12, 2)
+  amountPaid    Decimal                 @default(0) @db.Decimal(12, 2)
+  balance       Decimal                 @db.Decimal(12, 2)
+  dueRule       String
+  status        String                  @default("Draft")
+  createdAt     DateTime                @default(now())
+  customer      Customer                @relation(fields: [customerId], references: [id])
+  packages      BillingInvoicePackage[]
+}
+
+model BillingInvoicePackage {
+  id               String         @id @default(cuid())
+  billingInvoiceId String
+  cargoPackageId   String
+  billingInvoice   BillingInvoice @relation(fields: [billingInvoiceId], references: [id])
+  cargoPackage     CargoPackage   @relation(fields: [cargoPackageId], references: [id])
+
+  @@unique([billingInvoiceId, cargoPackageId])
 }
 
 model Photo {
-  id             String       @id @default(cuid())
+  id             String        @id @default(cuid())
   cargoPackageId String?
   type           String
   fileUrl        String
   thumbnailUrl   String?
   uploadedById   String?
-  createdAt      DateTime     @default(now())
+  createdAt      DateTime      @default(now())
   cargoPackage   CargoPackage? @relation(fields: [cargoPackageId], references: [id])
 }
 
+model HardwareTestRecord {
+  id              String   @id @default(cuid())
+  deviceName      String
+  scannerResult   String   @default("Not Tested")
+  printerResult   String   @default("Not Tested")
+  cameraResult    String   @default("Not Tested")
+  signatureResult String   @default("Not Tested")
+  pwaResult       String   @default("Not Tested")
+  notes           String?
+  createdAt       DateTime @default(now())
+}
+
+model PrintLog {
+  id                String   @id @default(cuid())
+  documentType      String
+  documentNumber    String
+  relatedEntityType String
+  relatedEntityId   String
+  action            String   @default("Printed")
+  reason            String?
+  printedByName     String
+  deviceName        String?
+  layout            String
+  copyNumber        Int
+  createdAt         DateTime @default(now())
+
+  @@index([relatedEntityType, relatedEntityId])
+}
+
+model OperationChatThread {
+  id              String                 @id @default(cuid())
+  scope           String
+  title           String
+  branchName      String?
+  cargoPackageId  String?
+  packageNumber   String?
+  customerName    String?
+  description     String?
+  status          String                 @default("Open")
+  actionType      String?
+  proposedPrice   Decimal?               @db.Decimal(12, 2)
+  approvedPrice   Decimal?               @db.Decimal(12, 2)
+  requestedByName String?
+  requestedByRole String?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  cargoPackage    CargoPackage?          @relation(fields: [cargoPackageId], references: [id])
+  messages        OperationChatMessage[]
+}
+
+model OperationChatMessage {
+  id           String              @id @default(cuid())
+  threadId     String
+  senderUserId String?
+  senderName   String
+  senderRole   String
+  body         String
+  system       Boolean             @default(false)
+  createdAt    DateTime            @default(now())
+  thread       OperationChatThread @relation(fields: [threadId], references: [id])
+}
+
 model DocumentSequence {
-  id             String   @id @default(cuid())
-  documentType   String   @unique
-  lastSequence   Int      @default(0)
-  updatedAt      DateTime @updatedAt
+  id           String   @id @default(cuid())
+  documentType String   @unique
+  lastSequence Int      @default(0)
+  updatedAt    DateTime @updatedAt
 }
 
 model Notification {
@@ -303,7 +571,7 @@ model Notification {
   entityId   String?
   readAt     DateTime?
   createdAt  DateTime  @default(now())
-  user       User?      @relation(fields: [userId], references: [id])
+  user       User?     @relation(fields: [userId], references: [id])
 }
 
 model MessageThread {
@@ -340,4 +608,3 @@ model AuditLog {
   createdAt  DateTime @default(now())
   actor      User?    @relation(fields: [actorId], references: [id])
 }
-
