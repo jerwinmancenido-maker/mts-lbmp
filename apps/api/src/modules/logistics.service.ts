@@ -1,7 +1,7 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { BadRequestException, Injectable, NotFoundException, type OnModuleDestroy, type OnModuleInit } from "@nestjs/common";
+import { mkdirSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
   buildPackageQrValue,
   defaultExpenseCategories,
@@ -16,13 +16,17 @@ import {
 import { render80mmReceipt } from "@mts-lbmp/printing";
 import { renderDeliveryReceipt, renderLoadingManifest, renderQrLabel, toEscPosTextBytes } from "@mts-lbmp/printing";
 import { hashSecret, signAuthToken, verifySecret } from "./security.js";
+import { createStateStore, type LoadedServiceState, type ServiceState, type StateStore } from "./state-store.js";
 import type {
   CargoPackage,
   Customer,
   CustomerContact,
   BillingInvoice,
   DeliveryRecord,
+  DescriptionBarcode,
   ExpenseRecord,
+  OperationChatThread,
+  PackageMessage,
   PaymentRecord,
   PrintLog,
   ReceivingDraft,
@@ -33,6 +37,9 @@ import type {
   CompanyProfile,
   HardwareTestRecord,
   ProductMaster,
+  ServiceAuditLog,
+  ServiceNotification,
+  StaffUserRecord,
   Trip,
   TruckRecord
 } from "./logistics.types.js";
@@ -53,36 +60,6 @@ type AuthContext = {
   id?: string;
   role?: string;
   branchAccess?: string;
-};
-
-type OperationChatMessage = {
-  id: string;
-  senderUserId?: string;
-  senderName: string;
-  senderRole: string;
-  body: string;
-  system?: boolean;
-  createdAt: string;
-};
-
-type OperationChatThread = {
-  id: string;
-  scope: "Global" | "Package" | "Pricing";
-  title: string;
-  branchName?: string;
-  cargoPackageId?: string;
-  packageNumber?: string;
-  customerName?: string;
-  description?: string;
-  status: "Open" | "Needs Approval" | "Approved" | "Rejected";
-  actionType?: "PriceApproval" | "General";
-  proposedPrice?: number | null;
-  approvedPrice?: number | null;
-  requestedByName?: string;
-  requestedByRole?: string;
-  createdAt: string;
-  updatedAt: string;
-  messages: OperationChatMessage[];
 };
 
 function parseLimit(value: ListQuery["limit"]) {
@@ -132,21 +109,6 @@ function buildPrimaryContact(input: { contactPerson?: string; phone?: string; ad
     }
   ];
 }
-
-type StaffUserRecord = {
-  id: string;
-  name: string;
-  email?: string;
-  phone?: string;
-  role: string;
-  staffCode?: string;
-  branchId?: string;
-  branchAccess?: string;
-  permissionPreset?: string;
-  canApprove?: string[];
-  status?: "Active" | "Inactive";
-  createdAt?: string;
-};
 
 const demoPasswordHash = hashSecret("password", "mts-lbmp-demo-password-salt");
 
@@ -356,9 +318,10 @@ function mergeTruckRecords(savedTrucks?: TruckRecord[]) {
 }
 
 @Injectable()
-export class LogisticsService {
+export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   private readonly dataFile = resolve(process.env.INIT_CWD ?? process.cwd(), "storage/dev-data/mts-lbmp.json");
   private readonly uploadDir = resolve(process.env.INIT_CWD ?? process.cwd(), "storage/test-uploads");
+  private readonly store: StateStore = createStateStore(this.dataFile);
   private companyProfile: CompanyProfile = {
     companyName: "Mancenido Trucking Services",
     address: "Configured by owner",
@@ -417,19 +380,23 @@ export class LogisticsService {
   private expenses: ExpenseRecord[] = [];
   private returnRecords: ReturnRecord[] = [];
   private billingInvoices: BillingInvoice[] = [];
-  private descriptionBarcodes: Array<{ id: string; customerId: string; barcode: string; description: string }> = [];
-  private messages: Array<{ id: string; cargoPackageId: string; senderName: string; body: string; createdAt: string }> = [];
+  private descriptionBarcodes: DescriptionBarcode[] = [];
+  private messages: PackageMessage[] = [];
   private operationChatThreads: OperationChatThread[] = [];
   private hardwareTests: HardwareTestRecord[] = [];
   private printLogs: PrintLog[] = [];
   private customUsers: StaffUserRecord[] = [];
   private userBranchAccessOverrides: Record<string, string> = {};
-  private notifications: Array<{ id: string; title: string; message: string; priority: string; createdAt: string }> = [];
-  private auditLogs: Array<{ id: string; action: string; entityType: string; entityId: string; reason?: string; createdAt: string }> = [];
+  private notifications: ServiceNotification[] = [];
+  private auditLogs: ServiceAuditLog[] = [];
 
-  constructor() {
-    this.loadData();
+  async onModuleInit() {
+    await this.loadData();
     this.reconcileProductsFromCargo();
+  }
+
+  async onModuleDestroy() {
+    await this.store.close?.();
   }
 
   getBootstrap() {
@@ -2797,42 +2764,16 @@ export class LogisticsService {
     }
   }
 
-  private loadData() {
-    if (!existsSync(this.dataFile)) {
+  private async loadData() {
+    const loaded = await this.store.load();
+    if (!loaded) {
+      // No persisted state yet (for example, the JSON file does not exist):
+      // keep the built-in defaults and persist them, as the service did
+      // before the store seam was introduced.
       this.saveData();
       return;
     }
-    const raw = readFileSync(this.dataFile, "utf8");
-    if (!raw.trim()) return;
-    const data = JSON.parse(raw) as {
-      sequences?: Array<[string, number]>;
-      customers?: Customer[];
-      receivingRecords?: ReceivingRecord[];
-      receivingDrafts?: ReceivingDraft[];
-      receivingIntakeTasks?: ReceivingIntakeTask[];
-      packages?: CargoPackage[];
-      productMasters?: ProductMaster[];
-      trucks?: TruckRecord[];
-      trips?: Trip[];
-      deliveries?: DeliveryRecord[];
-      payments?: PaymentRecord[];
-      expenses?: ExpenseRecord[];
-      returnRecords?: ReturnRecord[];
-      billingInvoices?: BillingInvoice[];
-      notifications?: Array<{ id: string; title: string; message: string; priority: string; createdAt: string }>;
-      auditLogs?: Array<{ id: string; action: string; entityType: string; entityId: string; reason?: string; createdAt: string }>;
-      descriptionBarcodes?: Array<{ id: string; customerId: string; barcode: string; description: string }>;
-      messages?: Array<{ id: string; cargoPackageId: string; senderName: string; body: string; createdAt: string }>;
-      operationChatThreads?: OperationChatThread[];
-      hardwareTests?: HardwareTestRecord[];
-      printLogs?: PrintLog[];
-      customUsers?: StaffUserRecord[];
-      companyProfile?: CompanyProfile;
-      branches?: Branch[];
-      paymentMethods?: string[];
-      expenseCategories?: string[];
-      userBranchAccessOverrides?: Record<string, string>;
-    };
+    const data: LoadedServiceState = loaded;
     this.sequences = new Map(data.sequences ?? []);
     this.customers = data.customers?.length
       ? data.customers.map((customer) => ({
@@ -2885,44 +2826,45 @@ export class LogisticsService {
     this.userBranchAccessOverrides = data.userBranchAccessOverrides ?? {};
   }
 
+  private snapshotState(): ServiceState {
+    // Key order mirrors the historical JSON file layout so the JSON store's
+    // output stays byte-compatible with existing data files.
+    return {
+      sequences: Array.from(this.sequences.entries()),
+      customers: this.customers,
+      receivingRecords: this.receivingRecords,
+      receivingDrafts: this.receivingDrafts,
+      receivingIntakeTasks: this.receivingIntakeTasks,
+      packages: this.packages,
+      productMasters: this.productMasters,
+      trucks: this.trucks,
+      trips: this.trips,
+      deliveries: this.deliveries,
+      payments: this.payments,
+      expenses: this.expenses,
+      returnRecords: this.returnRecords,
+      billingInvoices: this.billingInvoices,
+      notifications: this.notifications,
+      auditLogs: this.auditLogs,
+      descriptionBarcodes: this.descriptionBarcodes,
+      messages: this.messages,
+      operationChatThreads: this.operationChatThreads,
+      hardwareTests: this.hardwareTests,
+      printLogs: this.printLogs,
+      customUsers: this.customUsers,
+      companyProfile: this.companyProfile,
+      branches: this.branches,
+      paymentMethods: this.paymentMethods,
+      expenseCategories: this.expenseCategories,
+      userBranchAccessOverrides: this.userBranchAccessOverrides
+    };
+  }
+
   private saveData() {
-    mkdirSync(dirname(this.dataFile), { recursive: true });
-    writeFileSync(
-      this.dataFile,
-      JSON.stringify(
-        {
-          sequences: Array.from(this.sequences.entries()),
-          customers: this.customers,
-          receivingRecords: this.receivingRecords,
-          receivingDrafts: this.receivingDrafts,
-          receivingIntakeTasks: this.receivingIntakeTasks,
-          packages: this.packages,
-          productMasters: this.productMasters,
-          trucks: this.trucks,
-          trips: this.trips,
-          deliveries: this.deliveries,
-          payments: this.payments,
-          expenses: this.expenses,
-          returnRecords: this.returnRecords,
-          billingInvoices: this.billingInvoices,
-          notifications: this.notifications,
-          auditLogs: this.auditLogs,
-          descriptionBarcodes: this.descriptionBarcodes,
-          messages: this.messages,
-          operationChatThreads: this.operationChatThreads,
-          hardwareTests: this.hardwareTests,
-          printLogs: this.printLogs,
-          customUsers: this.customUsers,
-          companyProfile: this.companyProfile,
-          branches: this.branches,
-          paymentMethods: this.paymentMethods,
-          expenseCategories: this.expenseCategories,
-          userBranchAccessOverrides: this.userBranchAccessOverrides
-        },
-        null,
-        2
-      )
-    );
+    const state = this.snapshotState();
+    void this.store.save(state).catch((error: unknown) => {
+      console.error("Failed to persist logistics state", error);
+    });
   }
 
   private cleanList(values: string[], label: string) {
