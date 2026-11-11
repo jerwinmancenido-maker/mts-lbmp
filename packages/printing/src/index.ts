@@ -352,3 +352,241 @@ export function summarizePrinterDiagnostic(checks: PrinterDiagnosticCheck[]): Pr
     checks.length > 0 && checks.every((check) => check.status === "Pass") ? "Pass" : "Fail";
   return { printerResult, notes: `Printer diagnostic: ${breakdown}` };
 }
+
+/**
+ * Pure ESC/POS byte builder (Phase 3, audit gap G2).
+ *
+ * Until now the only byte stream in the product was `toEscPosTextBytes`
+ * (ESC @ + UTF-8 text + 3× LF) behind the diagnostic preview endpoint, and
+ * the printed Package QR Label carried its QR payload as a plain text line
+ * (`QR: MTS:PKG:…`) — no scannable QR code on any route. This module builds
+ * a real ESC/POS stream for the QR Label, including the standard `GS ( k`
+ * QR commands, so the payload is encoded as an actual QR symbol.
+ *
+ * SCOPE: this is a library only. No transport sends these bytes anywhere
+ * yet — the production route is still the NYX PDF gateway documented in
+ * docs/printing/nyx-pdf-contract.md. Wiring a raw ESC/POS channel (NYX
+ * service bind or Bluetooth) is device-side work that must be proven on
+ * the physical NB80; RISK-001 stays open until paper comes out.
+ *
+ * Text is encoded as UTF-8, but the label content the renderers produce is
+ * pure ASCII (prices print as `PHP 123.00`, no ₱ glyph), and the builder
+ * explicitly selects code page PC437 — whose ASCII range is byte-identical
+ * to UTF-8's — so the emitted text bytes render the same regardless of the
+ * printer's previous code-page state.
+ *
+ * Placement: this builder lives in this file (the package's single source
+ * module, like every @mts-lbmp package) rather than a sibling escpos.ts.
+ * The API executes this package from source — packages/printing's
+ * package.json `main` is src/index.ts, loaded by Node's type stripping —
+ * and plain Node ESM cannot resolve a NodeNext-style `./escpos.js` → `.ts`
+ * relative hop (verified: ERR_MODULE_NOT_FOUND at API boot). A separate
+ * module file would need build tooling this repo deliberately does not
+ * have for packages; the builder stays a pure, separately tested section
+ * here instead.
+ */
+
+/** Column profiles, consistent with the text renderers' widths. */
+export interface EscPosProfile {
+  paperWidth: ThermalPaperWidth;
+  /** Max printable columns at the profile's font density. */
+  columns: number;
+}
+
+/**
+ * 80mm: 42 cols — the canonical WIDTH_80MM the API renders at (asserted
+ * equal by the tests).
+ */
+export const ESC_POS_PROFILE_80MM: EscPosProfile = { paperWidth: "80mm", columns: WIDTH_80MM };
+
+/** 58mm: 24 cols — the 58mm safe text width used by formatThermalTextForPaper. */
+export const ESC_POS_PROFILE_58MM: EscPosProfile = { paperWidth: "58mm", columns: 24 };
+
+export type EscPosAlignment = "left" | "center" | "right";
+
+const ALIGNMENT_CODE: Record<EscPosAlignment, number> = { left: 0, center: 1, right: 2 };
+
+/** ESC/POS QR error-correction levels (GS ( k, function 169, parameter n). */
+export const ESC_POS_QR_ERROR_CORRECTION = {
+  /** ~7% recovery. */
+  L: 48,
+  /** ~15% recovery. Chosen default: survives warehouse scuffing/dirt on a
+   * label without inflating the symbol the way Q/H would. */
+  M: 49,
+  /** ~25% recovery. */
+  Q: 50,
+  /** ~30% recovery. */
+  H: 51
+} as const;
+
+export interface EscPosQrOptions {
+  /** Module (cell) size, 1–16 dots. Default 6: the label payload
+   * (`MTS:PKG:<packageNumber>`, ~26 bytes) encodes at EC level M as a
+   * version ~3 symbol (29×29 modules), so 6-dot modules give a ~174-dot
+   * (~22mm at 203dpi) symbol — comfortably scannable and well inside the
+   * printable width of both profiles. */
+  moduleSize?: number;
+  errorCorrection?: (typeof ESC_POS_QR_ERROR_CORRECTION)[keyof typeof ESC_POS_QR_ERROR_CORRECTION];
+}
+
+const encoder = new TextEncoder();
+
+function gsParenK(...bytes: number[]) {
+  return [0x1d, 0x28, 0x6b, ...bytes];
+}
+
+/**
+ * Fluent ESC/POS byte builder. Every method appends to an internal buffer
+ * and returns `this`; `build()` returns the composed stream. The builder is
+ * pure — no I/O, no printer state — so identical call sequences always
+ * produce identical bytes.
+ */
+export class EscPosBuilder {
+  private readonly chunks: Uint8Array[] = [];
+
+  private push(bytes: number[] | Uint8Array): this {
+    this.chunks.push(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+    return this;
+  }
+
+  /** ESC @ — initialize printer (clears mode settings to power-on defaults). */
+  initialize(): this {
+    return this.push([0x1b, 0x40]);
+  }
+
+  /**
+   * ESC t n — select character code table. Default 0 (PC437). Selected
+   * explicitly so text bytes do not depend on whatever a previous job left
+   * configured on the printer.
+   */
+  codePage(page = 0): this {
+    return this.push([0x1b, 0x74, page]);
+  }
+
+  /** ESC a n — set justification for the following text and QR symbol. */
+  align(alignment: EscPosAlignment): this {
+    return this.push([0x1b, 0x61, ALIGNMENT_CODE[alignment]]);
+  }
+
+  /** ESC E n — emphasized (bold) mode on/off. */
+  bold(on: boolean): this {
+    return this.push([0x1b, 0x45, on ? 1 : 0]);
+  }
+
+  /** Raw text with no line terminator. */
+  text(value: string): this {
+    return this.push(encoder.encode(value));
+  }
+
+  /** One text line: the value (split on \n if it contains any) plus LF. */
+  line(value = ""): this {
+    return this.push(encoder.encode(`${value.replace(/\r/g, "")}\n`));
+  }
+
+  /** ESC d n — print the buffer and feed n lines. */
+  feed(lines: number): this {
+    return this.push([0x1b, 0x64, lines]);
+  }
+
+  /**
+   * GS ( k — QR Code (Model 2) as four commands:
+   *   fn 65  select model:      Model 2 (n = 0)
+   *   fn 67  set module size:   `moduleSize` dots
+   *   fn 69  set error level:   `errorCorrection` (default M)
+   *   fn 80  store the payload: length field = payload byte length + 3,
+   *          little-endian (pL, pH), m = 48
+   *   fn 81  print the stored symbol (m = 48)
+   * The printer centres the symbol when justification is set to center
+   * before this call. The payload is stored byte-for-byte as given.
+   */
+  qrCode(payload: string, options: EscPosQrOptions = {}): this {
+    const moduleSize = options.moduleSize ?? 6;
+    const errorCorrection = options.errorCorrection ?? ESC_POS_QR_ERROR_CORRECTION.M;
+    const data = encoder.encode(payload);
+    const storeLength = data.length + 3;
+    this.push(gsParenK(0x04, 0x00, 0x31, 0x41, 0x32, 0x00));
+    this.push(gsParenK(0x03, 0x00, 0x31, 0x43, moduleSize));
+    this.push(gsParenK(0x03, 0x00, 0x31, 0x45, errorCorrection));
+    this.push(gsParenK(storeLength & 0xff, (storeLength >> 8) & 0xff, 0x31, 0x50, 0x30));
+    this.push(data);
+    this.push(gsParenK(0x03, 0x00, 0x31, 0x51, 0x30));
+    return this;
+  }
+
+  /** GS V 0 — full cut. Printers without a cutter ignore it. */
+  cut(): this {
+    return this.push([0x1d, 0x56, 0x00]);
+  }
+
+  build(): Uint8Array {
+    const total = this.chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const merged = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of this.chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return merged;
+  }
+}
+
+export interface QrLabelEscPosInput {
+  packageNumber: string;
+  description: string;
+  destination: string;
+  qrValue: string;
+}
+
+/**
+ * Composes the ESC/POS byte stream for the Package QR Label.
+ *
+ * The layout deliberately derives from `renderQrLabel`'s own output (same
+ * input, same rendered lines), so the byte stream and the text label can
+ * never diverge in content: company + title become centred bold lines, the
+ * body lines print left-aligned as rendered, and the renderer's
+ * `QR: <qrValue>` line is replaced by a real QR symbol (centred) with the
+ * human-readable qrValue printed under it. For the 58mm profile the body
+ * lines go through the same explicit down-wrap the text route uses
+ * (`formatThermalTextForPaper`); the QR payload itself is never wrapped —
+ * it travels inside the GS ( k store command, not as text.
+ */
+export function buildQrLabelEscPos(
+  input: QrLabelEscPosInput,
+  profile: EscPosProfile = ESC_POS_PROFILE_80MM,
+  qrOptions: EscPosQrOptions = {}
+): Uint8Array {
+  const rendered = renderQrLabel(input);
+  const renderedLines = rendered.replace(/\n$/, "").split("\n");
+  const qrLineIndex = renderedLines.findIndex((line) => line.startsWith("QR: "));
+  const bodyLines = renderedLines.filter((_, index) => index !== qrLineIndex);
+  const displayLines =
+    profile.paperWidth === "58mm"
+      ? formatThermalTextForPaper(bodyLines.join("\n"), "58mm").replace(/\n$/, "").split("\n")
+      : bodyLines;
+
+  const builder = new EscPosBuilder();
+  builder.initialize().codePage(0);
+
+  displayLines.forEach((line, index) => {
+    if (index === 0) {
+      // Company name + document title: the renderer centres them with
+      // padding; the byte stream centres them with ESC a + bold instead.
+      builder.align("center").bold(true).line(line.trim());
+    } else if (index === 1) {
+      builder.line(line.trim()).bold(false).align("left");
+    } else {
+      builder.line(line);
+    }
+
+    // The QR symbol sits exactly where the renderer's `QR: …` line was:
+    // immediately after the divider line that precedes it. In displayLines
+    // (which excludes the QR line itself) that divider is at
+    // qrLineIndex - 1, the same index it had in the rendered line list.
+    if (qrLineIndex >= 0 && index === qrLineIndex - 1) {
+      builder.align("center").qrCode(input.qrValue, qrOptions).line(input.qrValue).align("left");
+    }
+  });
+
+  builder.feed(3).cut();
+  return builder.build();
+}
