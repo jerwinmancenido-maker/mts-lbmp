@@ -304,3 +304,80 @@ export interface BillingInvoice {
   status: "Draft" | "Issued" | "Paid" | "Overdue";
   createdAt: string;
 }
+
+export interface StaffUserRecord {
+  id: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  role: string;
+  staffCode?: string;
+  branchId?: string;
+  branchAccess?: string;
+  permissionPreset?: string;
+  canApprove?: string[];
+  status?: "Active" | "Inactive";
+  createdAt?: string;
+}
+
+export interface OperationChatMessage {
+  id: string;
+  senderUserId?: string;
+  senderName: string;
+  senderRole: string;
+  body: string;
+  system?: boolean;
+  createdAt: string;
+}
+
+export interface OperationChatThread {
+  id: string;
+  scope: "Global" | "Package" | "Pricing";
+  title: string;
+  branchName?: string;
+  cargoPackageId?: string;
+  packageNumber?: string;
+  customerName?: string;
+  description?: string;
+  status: "Open" | "Needs Approval" | "Approved" | "Rejected";
+  actionType?: "PriceApproval" | "General";
+  proposedPrice?: number | null;
+  approvedPrice?: number | null;
+  requestedByName?: string;
+  requestedByRole?: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: OperationChatMessage[];
+}
+
+export interface DescriptionBarcode {
+  id: string;
+  customerId: string;
+  barcode: string;
+  description: string;
+}
+
+export interface PackageMessage {
+  id: string;
+  cargoPackageId: string;
+  senderName: string;
+  body: string;
+  createdAt: string;
+}
+
+export interface ServiceNotification {
+  id: string;
+  title: string;
+  message: string;
+  priority: string;
+  createdAt: string;
+}
+
+export interface ServiceAuditLog {
+  id: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  reason?: string;
+  createdAt: string;
+}
