@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Inject, Param, Patch, Post, Query, Req } from "@nestjs/common";
+import { Body, Controller, Get, Headers, Inject, Param, Patch, Post, Query, Req, StreamableFile } from "@nestjs/common";
 import { PublicRoute, RequireAnyPermissions, RequirePermissions } from "./auth.guard.js";
 import { LogisticsService } from "./logistics.service.js";
 
@@ -679,6 +679,9 @@ export class LogisticsController {
   // existing list/create endpoints already use; documents.print gates the
   // statement render like every other printed document. (reports.view
   // enforcement is P6-2's job and is deliberately not half-wired here.)
+  // Phase 6 P6-3: the statement's CSV sibling shares the documents.print
+  // gate — the CSV is the same statement in file form, generated and
+  // streamed (nothing persisted, Phase 6 audit §5.2a).
   @Get("billing/invoices/:id")
   @RequirePermissions("customers.manage")
   billingInvoice(@Req() request: { user?: { branchAccess?: string } }, @Param("id") id: string) {
@@ -701,6 +704,16 @@ export class LogisticsController {
     return this.logistics.renderBillingStatement(id, request.user);
   }
 
+  @Get("billing/invoices/:id/statement.csv")
+  @RequirePermissions("documents.print")
+  billingStatementCsv(@Req() request: { user?: { branchAccess?: string } }, @Param("id") id: string) {
+    const { filename, csv } = this.logistics.getBillingInvoiceStatementCsv(id, request.user);
+    return new StreamableFile(Buffer.from(csv, "utf8"), {
+      type: "text/csv; charset=utf-8",
+      disposition: `attachment; filename="${filename}"`
+    });
+  }
+
   // Phase 6 P6-2: server-side customer balances + aging. This is the
   // FIRST real enforcement of reports.view (owners and Delivery Admin
   // reach balances through it alone); customers.manage also passes via
@@ -718,6 +731,21 @@ export class LogisticsController {
   @RequireAnyPermissions("reports.view", "customers.manage")
   customerBalance(@Req() request: { user?: { branchAccess?: string } }, @Param("id") id: string) {
     return this.logistics.getCustomerBalance(id, request.user);
+  }
+
+  // Phase 6 P6-3: the customer's outstanding statement as a CSV file —
+  // the balance payload's rows in file form, so it carries the balance
+  // endpoints' any-of gate (reports.view OR customers.manage) and the
+  // service's branch-scoped, existence-hiding derivation unchanged.
+  // Generated and streamed; nothing is persisted.
+  @Get("customers/:id/statement.csv")
+  @RequireAnyPermissions("reports.view", "customers.manage")
+  customerStatementCsv(@Req() request: { user?: { branchAccess?: string } }, @Param("id") id: string) {
+    const { filename, csv } = this.logistics.getCustomerStatementCsv(id, request.user);
+    return new StreamableFile(Buffer.from(csv, "utf8"), {
+      type: "text/csv; charset=utf-8",
+      disposition: `attachment; filename="${filename}"`
+    });
   }
 
   @Get("expenses")

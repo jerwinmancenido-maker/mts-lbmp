@@ -28,7 +28,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Ref } from "react";
 import type { PackageCondition } from "@mts-lbmp/shared";
-import { apiGet, apiPatch, apiPost, clearApiToken, hasApiToken, setApiToken, setSessionExpiredListener } from "./api";
+import { apiDownloadFile, apiGet, apiPatch, apiPost, clearApiToken, hasApiToken, setApiToken, setSessionExpiredListener } from "./api";
 import { isSessionExpiredError, SESSION_EXPIRED_MESSAGE } from "./session-expiry";
 import { appendDiagnosticLog, clearCachedRecords, clearDiagnosticLogs, deleteOfflineQueueRecord, deleteQueuedPhoto, enqueueOfflineAction, getOfflineStorageSummary, listDiagnosticLogs, listOfflineQueue, listQueuedPhotos, newOfflineQueueRecordId, pruneOfflineQueue, readCachedRecord, readCachedValue, replaceQueuedPhotoReferences, requestPersistentStorage, updateOfflineQueueRecord, updateQueuedPhoto, writeCachedValue, type DiagnosticLogRecord, type OfflineQueueRecord, type OfflineStorageSummary, type QueuedPhotoRecord } from "./cache";
 import { OFFLINE_QUEUE_MAX_AUTO_ATTEMPTS, attemptQueueRecordSync, queueItemView, shouldAutoRetryQueueRecord, sortQueueItemViews, type QueueItemView } from "./queue-view";
@@ -9574,6 +9574,14 @@ function InvoiceListAndDetail({
     setReceiptPrintMeta(result.print);
   }
 
+  // Phase 6 P6-3: the same statement as a CSV file (server-generated,
+  // streamed; the server gates it on documents.print like the print
+  // render — every role that can reach this detail holds it, so the
+  // button needs no separate visibility rule).
+  async function downloadStatementCsv(invoice: BillingInvoice) {
+    await apiDownloadFile(`/billing/invoices/${invoice.id}/statement.csv`, `invoice-${invoice.invoiceNumber}.csv`);
+  }
+
   async function voidInvoice(invoice: BillingInvoice) {
     if (!window.confirm(`Void invoice ${invoice.invoiceNumber}? Its packages become billable again. This cannot be undone from the app.`)) return;
     await apiPost(`/billing/invoices/${invoice.id}/void`, { reason: "Voided from invoice view" });
@@ -9632,8 +9640,9 @@ function InvoiceListAndDetail({
               );
             })}
           </div>
-          <div className="buttonGrid two">
+          <div className={`buttonGrid ${selectedInvoice.status !== "Void" ? "three" : "two"}`}>
             <button className="actionButton" onClick={() => onAction("Print billing statement", () => printStatement(selectedInvoice))}>Print Statement</button>
+            <button className="actionButton" onClick={() => onAction("Download statement CSV", () => downloadStatementCsv(selectedInvoice))}>Download CSV</button>
             {selectedInvoice.status !== "Void" && (
               <button className="actionButton" onClick={() => onAction("Void billing invoice", () => voidInvoice(selectedInvoice))}>Void Invoice</button>
             )}
@@ -10803,6 +10812,32 @@ function CustomerPortal({
     setBalanceRefreshTick((tick) => tick + 1);
   }
 
+  // Phase 6 P6-3: statement export actions for the Billing Summary.
+  // They render only when serverBalance loaded — the panel's existing
+  // signal that the signed-in role passed the balance gate
+  // (reports.view OR customers.manage), which is exactly the customer
+  // CSV's server permission. The print action reuses the P6-1 flow:
+  // fetch the server-rendered statement into the PrintPanel — for a
+  // customer that means their newest open (non-Void) invoice, the
+  // document the create flow would have just produced.
+  const printableCustomerInvoice = selectedCustomer
+    ? invoices.find((invoice) => invoice.customerId === selectedCustomer.id && invoice.status !== "Void")
+    : undefined;
+
+  async function downloadCustomerStatementCsv() {
+    if (!selectedCustomer) return;
+    await apiDownloadFile(`/customers/${selectedCustomer.id}/statement.csv`, `statement-${selectedCustomer.businessName}.csv`);
+    setStatus(`Statement CSV downloaded for ${selectedCustomer.businessName}.`);
+  }
+
+  async function printCustomerStatement() {
+    if (!printableCustomerInvoice) return;
+    const statement = await apiGet<RenderedDocumentResponse>(`/billing/invoices/${printableCustomerInvoice.id}/statement`);
+    setReceiptPreview(statement.text);
+    setReceiptPrintMeta(statement.print);
+    setStatus(`Billing statement ${printableCustomerInvoice.invoiceNumber} ready to print.`);
+  }
+
   async function createBillingReminder() {
     if (!selectedCustomer || !serverBalance) return;
     await apiPost(`/customers/${selectedCustomer.id}/billing-reminder`, {
@@ -11001,6 +11036,15 @@ function CustomerPortal({
                 <button className="primaryButton" disabled={!serverBalance || serverBalance.outstanding <= 0} onClick={() => onAction("Notify billing reminder", createBillingReminder)}>Notify Owner / SMS Soon</button>
               </div>
               <p className="muted">SMS is not sent yet. This prepares the reminder flow for future SMS API integration.</p>
+              {serverBalance && (
+                <>
+                  <div className="buttonGrid two">
+                    <button className="actionButton" onClick={() => onAction("Download statement CSV", downloadCustomerStatementCsv)}>Download CSV</button>
+                    <button className="actionButton" disabled={!printableCustomerInvoice} onClick={() => onAction("Print billing statement", printCustomerStatement)}>Print Statement</button>
+                  </div>
+                  <p className="muted">Download CSV is this customer&apos;s outstanding statement (same figures as the balance above). Print Statement prints the newest open invoice{printableCustomerInvoice ? ` (${printableCustomerInvoice.invoiceNumber})` : " — create one first"}.</p>
+                </>
+              )}
             </section>
             <section className="subPanel">
               <div className="sectionHeader">

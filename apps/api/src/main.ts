@@ -48,7 +48,9 @@ app.enableCors({
   // Phase 5 P5-5: the web shell reads the guard's refusal-kind header
   // (x-auth-failure: session | permission) to route expired sessions
   // back to the login screen; browsers only expose listed headers.
-  exposedHeaders: ["x-auth-failure"]
+  // Phase 6 P6-3: content-disposition joins the list so the shell's
+  // download helper can use the server-set CSV filename.
+  exposedHeaders: ["x-auth-failure", "content-disposition"]
 });
 app.useBodyParser("json", { limit: "8mb" });
 app.useBodyParser("urlencoded", { limit: "8mb", extended: true });

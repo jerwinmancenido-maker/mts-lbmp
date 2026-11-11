@@ -18,6 +18,7 @@ import { hashSecret, signAuthToken, verifySecret } from "./security.js";
 import { deviceLabelFromUserAgent } from "./device-label.js";
 import { createStateStore, type LoadedServiceState, type ServiceState, type StateStore } from "./state-store.js";
 import { resolveSmokeSeedConfig, upsertSmokeAccounts } from "./smoke-seed.js";
+import { buildCustomerStatementCsv, buildInvoiceStatementCsv, sanitizeCsvFilenamePart } from "./statement-csv.js";
 import { BOOTSTRAP_MISSING_ENV_WARNING, buildBootstrapAdminRecord, resolveBootstrapAdmin } from "./bootstrap-admin.js";
 import type {
   AgingBucket,
@@ -3792,6 +3793,95 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         relatedEntityId: invoice.id,
         layout: "80mm"
       }
+    };
+  }
+
+  /** "Consignee / destination" as one statement cell: who it goes to, then where. */
+  private statementConsigneeDestination(cargo: CargoPackage | undefined, fallbackPackageId: string): string {
+    if (!cargo) return fallbackPackageId;
+    return [cargo.consigneeName, cargo.destination].filter(Boolean).join(" / ") || cargo.packageNumber;
+  }
+
+  /**
+   * Phase 6 P6-3 — the invoice statement as a CSV file
+   * (GET /billing/invoices/:id/statement.csv, generate-and-stream,
+   * nothing persisted). Same lookup and existence-hiding branch rule
+   * as the invoice detail and the printed statement; amounts come from
+   * deriveBillingInvoice's inputs (per-package price/payments), never
+   * from the stored creation snapshots, so the file matches every
+   * screen. The builder owns the byte shape (statement-csv.ts).
+   */
+  getBillingInvoiceStatementCsv(invoiceId: string, user?: AuthContext): { filename: string; csv: string } {
+    const invoice = this.findBillingInvoice(invoiceId);
+    if (!this.billingInvoiceVisibleTo(user, invoice)) {
+      throw new NotFoundException("Billing invoice not found");
+    }
+    const derived = this.deriveBillingInvoice(invoice);
+    const csv = buildInvoiceStatementCsv({
+      invoiceNumber: invoice.invoiceNumber,
+      customerName: invoice.customerName,
+      issuedDate: this.businessDateKey(invoice.createdAt),
+      dueDate: invoice.dueDate ? this.businessDateKey(invoice.dueDate) : undefined,
+      status: derived.status,
+      dueRule: invoice.dueRule,
+      lines: invoice.packageIds.map((packageId) => {
+        const cargo = this.packages.find((pkg) => pkg.id === packageId);
+        const amountPaid = this.payments
+          .filter((payment) => payment.cargoPackageId === packageId)
+          .reduce((sum, payment) => sum + payment.amountPaid, 0);
+        const deliveredAt = this.deliveredAtForPackage(packageId);
+        return {
+          packageNumber: cargo?.packageNumber ?? packageId,
+          description: cargo?.description ?? "Package",
+          consigneeDestination: this.statementConsigneeDestination(cargo, packageId),
+          deliveryDate: deliveredAt ? this.businessDateKey(deliveredAt) : undefined,
+          amountDue: Number(cargo?.price ?? 0),
+          amountPaid
+        };
+      })
+    });
+    return { filename: `invoice-${invoice.invoiceNumber}.csv`, csv };
+  }
+
+  /**
+   * Phase 6 P6-3 — a customer's outstanding statement as a CSV file
+   * (GET /customers/:id/statement.csv, generate-and-stream). The rows
+   * ARE the balance payload's rows: the figures come from
+   * getCustomerBalance (which also supplies the existence-hiding 404
+   * for other-branch customers), enriched only with the package's
+   * description/consignee from the package record — no money is
+   * recomputed here, so the file and GET /customers/:id/balance can
+   * never disagree.
+   */
+  getCustomerStatementCsv(customerId: string, user?: AuthContext, now: Date = new Date()): { filename: string; csv: string } {
+    const balance = this.getCustomerBalance(customerId, user, now);
+    const csv = buildCustomerStatementCsv({
+      customerName: balance.customerName,
+      statementDate: this.businessDateKey(now),
+      billingTermsLabel: billingTermLabel(balance.billingTermDays),
+      totalDue: balance.totalDue,
+      totalCollected: balance.totalCollected,
+      totalOutstanding: balance.outstanding,
+      aging: balance.aging,
+      lines: balance.packages.map((row) => {
+        const cargo = this.packages.find((pkg) => pkg.id === row.packageId);
+        return {
+          packageNumber: row.packageNumber,
+          description: cargo?.description ?? "Package",
+          consigneeDestination: this.statementConsigneeDestination(cargo, row.packageId),
+          deliveredDate: row.deliveredDate,
+          dueDate: row.dueDate,
+          daysOverdue: row.daysOverdue,
+          agingBucket: row.agingBucket,
+          amountDue: row.price,
+          amountPaid: row.amountPaid,
+          outstanding: row.outstanding
+        };
+      })
+    });
+    return {
+      filename: `statement-${sanitizeCsvFilenamePart(balance.customerName)}-${this.businessDateKey(now)}.csv`,
+      csv
     };
   }
 
