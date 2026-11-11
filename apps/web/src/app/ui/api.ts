@@ -87,6 +87,42 @@ export async function apiGet<T>(path: string): Promise<T> {
   }
 }
 
+/**
+ * Phase 6 P6-3: download a server-generated file (the statement CSVs)
+ * with the session token and save it under the server's filename.
+ * A plain <a href> cannot carry the Authorization header, so the file
+ * is fetched as a blob and saved through an object URL — the same
+ * save pattern as Device Setup's diagnostic-log export. The filename
+ * comes from Content-Disposition (exposed via CORS in main.ts); the
+ * caller's fallback covers a missing/unreadable header. Failures go
+ * through the same classification as every other call, so an expired
+ * session routes to the login screen instead of saving an error page.
+ */
+export async function apiDownloadFile(path: string, fallbackFilename: string): Promise<void> {
+  try {
+    const response = await fetch(`${apiUrl()}${path}`, { cache: "no-store", headers: headers() });
+    if (!response.ok) {
+      const errorText = await response.text();
+      void appendDiagnosticLog({ level: "error", source: "api", message: `GET ${path} (download) failed`, details: { status: response.status, errorText } });
+      throw errorForFailedResponse(response, errorText);
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? fallbackFilename;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    void appendDiagnosticLog({ level: "error", source: "api", message: `GET ${path} (download) error`, details: error });
+    throw error;
+  }
+}
+
 export async function apiPost<T>(path: string, body?: unknown, options?: ApiWriteOptions): Promise<T> {
   try {
     const response = await fetch(`${apiUrl()}${path}`, {
