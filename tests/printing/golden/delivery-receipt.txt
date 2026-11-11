@@ -1,0 +1,15 @@
+       MANCENIDO TRUCKING SERVICES
+             DELIVERY RECEIPT
+DR-PREVIEW-PKG-2026-11-000001
+------------------------------------------
+Package: PKG-2026-11-000001
+Customer: Fixture Customer
+Description: Angle bar
+Destination: Daet
+Delivered To: Fixture Receiver
+Price: PHP 3600.00
+Payment: Paid
+------------------------------------------
+QR: MTS:PKG:PKG-2026-11-000001
+------------------------------------------
+Recipient Signature: __________

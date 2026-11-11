@@ -12,7 +12,7 @@ export interface ReceiptTemplateInput {
   footer?: string;
 }
 
-const WIDTH_80MM = 42;
+export const WIDTH_80MM = 42;
 const SAFE_TEXT_WIDTH_BY_PAPER = {
   "58mm": 24,
   "80mm": 34
@@ -100,6 +100,133 @@ export function formatThermalTextForPaper(text: string, paperWidth: ThermalPaper
     .split("\n")
     .flatMap((line) => wrapThermalLine(line, width))
     .join("\n")}\n`;
+}
+
+/**
+ * Prepares API-rendered text for the native (Android/NYX) print route.
+ *
+ * The API renders every document at WIDTH_80MM (42 cols) and that layout is
+ * canonical: for 80mm paper the text is handed to the printer exactly as
+ * rendered. The NYX plugin's PDF page is 227pt wide with 18pt padding on
+ * each side (191pt usable) and its 7.2pt monospace font advances
+ * ~4.32pt/char, so a 42-col line measures ~181pt and fits un-wrapped. The
+ * old silent re-wrap to a 34-col "safe" width shrank dividers and
+ * re-centred headers for no benefit, so it no longer happens.
+ *
+ * 58mm paper is narrower than the 80mm layout, so there the text is
+ * deliberately down-wrapped to the 58mm safe width via
+ * formatThermalTextForPaper — an explicit adaptation, not a silent shrink.
+ */
+export function prepareTextForPrint(text: string, paperWidth: ThermalPaperWidth) {
+  if (paperWidth === "80mm") {
+    const normalized = text.replace(/\r/g, "");
+    return normalized.endsWith("\n") ? normalized : `${normalized}\n`;
+  }
+  return formatThermalTextForPaper(text, paperWidth);
+}
+
+export interface ReceivingSlipInput {
+  documentNumber: string;
+  packageNumber: string;
+  customerName: string;
+  description: string;
+  quantity?: number | null;
+  unit?: string | null;
+  handlingBranchName?: string | null;
+  destination: string;
+  deliveryType?: string | null;
+  city?: string | null;
+  province?: string | null;
+  condition: string;
+  weight?: number | null;
+  weightUnit?: string | null;
+  length?: number | null;
+  width?: number | null;
+  height?: number | null;
+  dimensionUnit?: string | null;
+  unitPrice?: number | null;
+  price?: number | null;
+  qrValue: string;
+  printLine: string;
+  copyNumber: number;
+}
+
+export function renderReceivingSlip(input: ReceivingSlipInput) {
+  const measurement = [
+    input.weight != null ? `${input.weight} ${input.weightUnit ?? "kg"}` : "",
+    [input.length, input.width, input.height].some((value) => value != null) ? `${input.length ?? "?"} x ${input.width ?? "?"} x ${input.height ?? "?"} ${input.dimensionUnit ?? "cm"}` : ""
+  ].filter(Boolean).join(" / ");
+  return render80mmReceipt({
+    title: "RECEIVING SLIP",
+    documentNumber: input.documentNumber,
+    lines: [
+      { label: "Package", value: input.packageNumber },
+      { label: "Customer", value: input.customerName },
+      { label: "Description", value: input.description },
+      { label: "Qty", value: `${input.quantity ?? 1} ${input.unit ?? "pcs"}` },
+      { label: "Handling Branch", value: input.handlingBranchName ?? input.destination },
+      { label: "Delivery Type", value: input.deliveryType ?? "Deliver to consignee" },
+      { label: "Delivery Area", value: [input.city, input.province].filter(Boolean).join(", ") || "Not provided" },
+      { label: "Condition", value: input.condition },
+      ...(measurement ? [{ label: "Weight/Size", value: measurement }] : []),
+      ...(input.unitPrice != null ? [{ label: "Unit Price", value: `PHP ${input.unitPrice.toFixed(2)}` }] : []),
+      { label: "Price", value: input.price == null ? "Waiting for Price" : `PHP ${input.price.toFixed(2)}` },
+      { label: "Print", value: input.printLine },
+      { label: "Copy", value: String(input.copyNumber) }
+    ],
+    qrValue: input.qrValue,
+    footer: "Signature: __________________"
+  });
+}
+
+export interface ReceivingDocumentItemInput {
+  quantity?: number | null;
+  unit?: string | null;
+  description: string;
+  handlingBranchName?: string | null;
+  destination: string;
+  price?: number | null;
+}
+
+export interface ReceivingDocumentInput {
+  recordNumber: string;
+  customerName: string;
+  customerDrNumber?: string | null;
+  destination: string;
+  packages: ReceivingDocumentItemInput[];
+  copyLine: string;
+}
+
+export function renderReceivingDocument(input: ReceivingDocumentInput) {
+  const totalQuantity = input.packages.reduce((sum, cargo) => sum + (cargo.quantity ?? 1), 0);
+  const totalPrice = input.packages.reduce((sum, cargo) => sum + (cargo.price ?? 0), 0);
+  const withoutPrice = input.packages.filter((cargo) => cargo.price == null).length;
+  const branchSummary = Array.from(new Set(input.packages.map((cargo) => cargo.handlingBranchName ?? cargo.destination))).join(" / ");
+  const itemLines = input.packages.map((cargo, index) => {
+    const quantity = `${cargo.quantity ?? 1} ${cargo.unit ?? "pcs"}`;
+    const branch = cargo.handlingBranchName ?? cargo.destination;
+    const price = cargo.price == null ? "NP" : `P${Math.round(cargo.price)}`;
+    const compactDescription = cargo.description.length > 22 ? `${cargo.description.slice(0, 21)}...` : cargo.description;
+    return {
+      label: `${index + 1}`,
+      value: `${quantity} ${compactDescription} / ${branch} / ${price}`
+    };
+  });
+
+  return render80mmReceipt({
+    title: "RECEIVING RECEIPT",
+    documentNumber: input.recordNumber,
+    lines: [
+      { label: "Customer", value: input.customerName },
+      { label: "DR", value: input.customerDrNumber ?? "Not provided" },
+      { label: "Branch", value: branchSummary || input.destination },
+      { label: "Items", value: `${input.packages.length} lines / Qty ${totalQuantity}` },
+      { label: "Total", value: withoutPrice ? `PHP ${totalPrice.toFixed(2)} / ${withoutPrice} no price` : `PHP ${totalPrice.toFixed(2)}` },
+      ...itemLines,
+      { label: "Copy", value: input.copyLine }
+    ],
+    footer: "Received By: _______________"
+  });
 }
 
 export interface CargoPrintRow {

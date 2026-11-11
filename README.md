@@ -16,7 +16,7 @@ This workspace is the planning and future implementation home for the app-first 
 - PWA core
 - APK/Capacitor-ready
 - NB80 Android POS targeted
-- 80mm ESC/POS printing primary
+- Print documents rendered server-side as fixed-width text, printed on the NB80 via the Android NYX gateway route (raw ESC/POS transport planned)
 - Package-level QR traceability
 - Premium look, simple operation
 - Large-button tablet workflows

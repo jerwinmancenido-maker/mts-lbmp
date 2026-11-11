@@ -1,0 +1,18 @@
+       MANCENIDO TRUCKING SERVICES
+             LOADING MANIFEST
+TRIP-2026-11-000001
+------------------------------------------
+Origin: Origin Warehouse
+Destination: Daet
+Vehicle: Isuzu Elf Dropside
+Driver: Fixture Driver
+Cargo Count: 2
+1. Package: PKG-2026-11-000001
+Desc: Angle bar
+Dest: Daet
+2. Package: PKG-2026-11-000002
+Desc: Cement bag
+Dest: Naga
+Print: Printed 2026-11-12T01:02:03.456Z / Copy 1
+------------------------------------------
+Loaded By: ________________

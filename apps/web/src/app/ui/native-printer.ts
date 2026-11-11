@@ -1,7 +1,7 @@
 "use client";
 
 import { Capacitor, registerPlugin } from "@capacitor/core";
-import { formatThermalTextForPaper } from "@mts-lbmp/printing";
+import { prepareTextForPrint } from "@mts-lbmp/printing";
 
 type NativePrintResult = {
   ok: boolean;
@@ -21,5 +21,8 @@ export async function printNativeText(text: string, documentName = "LBMP Print",
     return { ok: false, message: "Native printer is available only inside the Android APK." };
   }
 
-  return NyxPrinter.printText({ text: formatThermalTextForPaper(text, paperWidth), documentName, paperWidth });
+  // The API renders documents at the canonical 42-col width; prepareTextForPrint
+  // passes 80mm text through exactly as rendered (no silent re-wrap) and only
+  // down-wraps deliberately for 58mm paper. See @mts-lbmp/printing.
+  return NyxPrinter.printText({ text: prepareTextForPrint(text, paperWidth), documentName, paperWidth });
 }
