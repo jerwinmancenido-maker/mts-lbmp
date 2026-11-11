@@ -250,6 +250,37 @@ export interface CustomerBalance {
   aging: Record<AgingBucket, { amount: number; count: number }>;
 }
 
+/**
+ * Phase 6 P6-4 — mirrors of the API's due-reminder read models
+ * (GET /billing/due-worklist, GET /customers/:id/reminder-history).
+ * Amounts are server-derived; reminders are in-app only.
+ */
+export interface DueWorklistRow {
+  invoiceId: string;
+  invoiceNumber: string;
+  customerId: string;
+  customerName: string;
+  branchName?: string;
+  amountDue: number;
+  amountPaid: number;
+  balance: number;
+  status: BillingInvoice["status"];
+  /** Manila business date (YYYY-MM-DD). */
+  dueDate: string;
+  state: "DueSoon" | "Overdue";
+  daysUntilDue: number;
+  daysOverdue: number;
+}
+
+export interface CustomerReminderHistoryEntry {
+  id: string;
+  kind: "manual" | "dueSoon" | "overdue";
+  invoiceId?: string;
+  invoiceNumber?: string;
+  reason?: string;
+  createdAt: string;
+}
+
 export interface AuditLog {
   id: string;
   action: string;

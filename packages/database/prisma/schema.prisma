@@ -493,6 +493,10 @@ model BillingInvoice {
   dueRule       String
   status        String                  @default("Draft")
   dueDate       DateTime?
+  // Phase 6 P6-4: due-reminder markers — the Manila due-date key
+  // (YYYY-MM-DD) each reminder state last fired for; NULL = never fired.
+  dueSoonReminderForDate String?
+  overdueReminderForDate String?
   createdAt     DateTime                @default(now())
   updatedAt     DateTime                @updatedAt
   customer      Customer                @relation(fields: [customerId], references: [id])

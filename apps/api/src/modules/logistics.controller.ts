@@ -244,10 +244,29 @@ export class LogisticsController {
     return this.logistics.addCustomerContact(id, body);
   }
 
+  // Phase 6 P6-4: the reminder's amount is computed server-side from
+  // the caller's branch scope — the body now carries only the branch
+  // label, never a balance, and the response names the real channel
+  // (in-app; no SMS/email integration exists).
   @Post("customers/:id/billing-reminder")
   @RequirePermissions("customers.manage")
-  createCustomerBillingReminder(@Param("id") id: string, @Body() body: Parameters<LogisticsService["createCustomerBillingReminder"]>[1]) {
-    return this.logistics.createCustomerBillingReminder(id, body);
+  createCustomerBillingReminder(
+    @Req() request: { user?: { branchAccess?: string } },
+    @Param("id") id: string,
+    @Body() body: Parameters<LogisticsService["createCustomerBillingReminder"]>[1]
+  ) {
+    return this.logistics.createCustomerBillingReminder(id, body ?? {}, request.user);
+  }
+
+  // Phase 6 P6-4: the customer's reminder history from the audit
+  // trail (manual reminders + the due scan's automatic notices). It
+  // rides the balance endpoints' any-of gate and their
+  // existence-hiding visibility rule — the service gates on the
+  // balance read itself.
+  @Get("customers/:id/reminder-history")
+  @RequireAnyPermissions("reports.view", "customers.manage")
+  customerReminderHistory(@Req() request: { user?: { branchAccess?: string } }, @Param("id") id: string) {
+    return this.logistics.getCustomerReminderHistory(id, request.user);
   }
 
   @Post("receiving")
@@ -712,6 +731,22 @@ export class LogisticsController {
       type: "text/csv; charset=utf-8",
       disposition: `attachment; filename="${filename}"`
     });
+  }
+
+  // Phase 6 P6-4: the Due/Overdue worklist (Payments → Billing) and the
+  // manual due-scan trigger. Both sit with the billing family behind
+  // customers.manage; the scan also runs at boot, on a timer, and
+  // lazily inside the worklist read itself.
+  @Get("billing/due-worklist")
+  @RequirePermissions("customers.manage")
+  dueWorklist(@Req() request: { user?: { branchAccess?: string } }) {
+    return this.logistics.listDueWorklist(request.user);
+  }
+
+  @Post("billing/due-reminders/scan")
+  @RequirePermissions("customers.manage")
+  runDueReminderScan() {
+    return this.logistics.runDueReminderScan();
   }
 
   // Phase 6 P6-2: server-side customer balances + aging. This is the

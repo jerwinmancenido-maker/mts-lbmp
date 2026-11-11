@@ -324,6 +324,8 @@ export interface BillingInvoiceRow {
   dueRule: string;
   status: string;
   dueDate: DateValue | null;
+  dueSoonReminderForDate: string | null;
+  overdueReminderForDate: string | null;
   createdAt: DateValue;
   updatedAt: DateValue;
 }
@@ -871,6 +873,8 @@ export function stateToRows(state: ServiceState): PrismaStateRows {
       dueRule: invoice.dueRule,
       status: invoice.status,
       dueDate: invoice.dueDate ? new Date(invoice.dueDate) : null,
+      dueSoonReminderForDate: invoice.dueSoonReminderForDate ?? null,
+      overdueReminderForDate: invoice.overdueReminderForDate ?? null,
       createdAt: new Date(invoice.createdAt),
       updatedAt: new Date(invoice.updatedAt ?? invoice.createdAt)
     })),
@@ -1277,6 +1281,11 @@ export function rowsToState(rows: PrismaStateRows): LoadedServiceState {
       dueRule: invoice.dueRule,
       status: invoice.status as BillingInvoice["status"],
       dueDate: invoice.dueDate ? toIso(invoice.dueDate) : undefined,
+      // Rows persisted before P6-4 have no marker columns in older
+      // fixtures; NULL/absent reads as "never fired", which is the truth
+      // for every pre-P6-4 invoice.
+      dueSoonReminderForDate: invoice.dueSoonReminderForDate ?? undefined,
+      overdueReminderForDate: invoice.overdueReminderForDate ?? undefined,
       createdAt: toIso(invoice.createdAt),
       // Rows persisted before P6-1 have no updatedAt column value in older
       // fixtures; the creation time is the honest fallback.

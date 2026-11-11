@@ -27,7 +27,10 @@ import type {
   CustomerBalance,
   CustomerBalancePackage,
   CustomerContact,
+  CustomerReminderHistoryEntry,
   BillingInvoice,
+  DueReminderScanResult,
+  DueWorklistRow,
   DeliveryRecord,
   DescriptionBarcode,
   ExpenseRecord,
@@ -400,12 +403,17 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   private idempotencyRecords: IdempotencyRecord[] = [];
   private notifications: ServiceNotification[] = [];
   private auditLogs: ServiceAuditLog[] = [];
+  private dueReminderTimer: NodeJS.Timeout | undefined;
+
+  /** Phase 6 P6-4 — an invoice enters the "due soon" reminder state this many Manila days before its due date. */
+  private static readonly DUE_SOON_WINDOW_DAYS = 3;
 
   async onModuleInit() {
     await this.loadData();
     this.seedSmokeAccountsIfRequested();
     this.provisionBootstrapAdminIfNeeded();
     this.reconcileProductsFromCargo();
+    this.startDueReminderScheduler();
   }
 
   /**
@@ -461,7 +469,47 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy() {
+    if (this.dueReminderTimer) {
+      clearInterval(this.dueReminderTimer);
+      this.dueReminderTimer = undefined;
+    }
     await this.store.close?.();
+  }
+
+  /**
+   * Phase 6 P6-4 — due-reminder scheduling. The API is a small
+   * always-on server with no cron, so the due scan runs (a) once at
+   * boot, catching up any state crossing that happened while the
+   * server was down, (b) on a timer while the server runs
+   * (MTS_DUE_REMINDER_SCAN_MINUTES, default 60; 0 or negative disables
+   * the timer — the boot scan still runs), and (c) lazily whenever the
+   * Due/Overdue worklist is read or an admin runs it manually, so what
+   * staff see is never stale even between ticks. Freshness honesty: a
+   * notification can lag a due-date crossing by up to one timer
+   * interval while the server runs; the worklist itself is
+   * live-derived on every read and never lags. The timer is unref'd so
+   * it never keeps a test or CLI process alive.
+   */
+  private startDueReminderScheduler() {
+    try {
+      this.runDueReminderScan();
+    } catch (error) {
+      // A reminder problem must never fail the boot — the scan retries
+      // on the next timer tick and on every worklist read.
+      console.error("[due-reminders] boot scan failed", error);
+    }
+    if (this.dueReminderTimer) return;
+    const rawMinutes = Number(process.env.MTS_DUE_REMINDER_SCAN_MINUTES ?? 60);
+    const minutes = Number.isFinite(rawMinutes) ? rawMinutes : 60;
+    if (minutes <= 0) return;
+    this.dueReminderTimer = setInterval(() => {
+      try {
+        this.runDueReminderScan();
+      } catch (error) {
+        console.error("[due-reminders] scheduled scan failed", error);
+      }
+    }, minutes * 60_000);
+    this.dueReminderTimer.unref();
   }
 
   getBootstrap() {
@@ -1055,7 +1103,12 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     } else {
       status = invoice.status === "Draft" ? "Draft" : "Issued";
     }
-    return { ...invoice, amountDue, amountPaid, balance, status };
+    // Phase 6 P6-4: the due-reminder markers are server bookkeeping
+    // (see the BillingInvoice type) — they never ride the read model.
+    const { dueSoonReminderForDate, overdueReminderForDate, ...readModel } = invoice;
+    void dueSoonReminderForDate;
+    void overdueReminderForDate;
+    return { ...readModel, amountDue, amountPaid, balance, status };
   }
 
   private findBillingInvoice(invoiceId: string) {
@@ -1091,6 +1144,182 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException("Billing invoice not found");
     }
     return this.deriveBillingInvoice(invoice);
+  }
+
+  /**
+   * Phase 6 P6-4 — THE due scan. Walks every open invoice once and
+   * fires the in-app reminder for each reminder state the invoice has
+   * newly entered, exactly once per invoice per state per due date:
+   *
+   *   due soon — balance owed, and the Manila due date is today or
+   *              within DUE_SOON_WINDOW_DAYS (the same calendar
+   *              boundary deriveBillingInvoice uses: the due date
+   *              itself is not yet overdue);
+   *   overdue  — balance owed and the Manila due date has passed.
+   *
+   * Once-per-state is enforced by the marker ON the invoice record
+   * (dueSoonReminderForDate / overdueReminderForDate — see the
+   * BillingInvoice type): the marker stores the due-date key the state
+   * fired for and is written in the same saveData as the notification
+   * and audit entry, so the three can never diverge. Markers on the
+   * record were chosen over querying the audit log for past reminder
+   * entries: the log is the history surface (and may gain retention
+   * one day), while the scan's control state belongs on the record it
+   * describes — keyed by due date, which log text cannot express
+   * structurally — and the state machine stays a pure function of the
+   * invoice. Within this single-process service the in-memory state is
+   * the source of truth and saves are serialized full-state writes, so
+   * the check-and-set cannot race.
+   *
+   * Reminders are IN-APP ONLY (notify() — the staff Notification
+   * Center). No SMS or email channel exists in this codebase, and
+   * nothing here claims otherwise; customer contact stays a human
+   * step (staff hand or photograph the statement, P6-3).
+   *
+   * Excluded by construction: Void invoices and not-yet-issued Drafts
+   * (not obligations yet), invoices with no balance (paid before the
+   * due date → never notified, in either state), and invoices with no
+   * due date (no structured term → nothing to be due against).
+   * Partially paid invoices past due DO notify, carrying the live
+   * remaining balance.
+   */
+  runDueReminderScan(now: Date = new Date()): DueReminderScanResult {
+    const result: DueReminderScanResult = { scannedInvoices: 0, dueSoonNotified: [], overdueNotified: [] };
+    const todayKey = this.businessDateKey(now);
+    const dayWord = (days: number) => (days === 1 ? "day" : "days");
+    let changed = false;
+    for (const invoice of this.billingInvoices) {
+      if (invoice.status === "Void" || invoice.status === "Draft") continue;
+      result.scannedInvoices += 1;
+      const derived = this.deriveBillingInvoice(invoice, now);
+      if (derived.balance <= 0 || !derived.dueDate) continue;
+      const dueKey = this.businessDateKey(derived.dueDate);
+      if (todayKey > dueKey) {
+        if (invoice.overdueReminderForDate === dueKey) continue;
+        const daysOverdue = this.businessDateDayDiff(dueKey, todayKey);
+        invoice.overdueReminderForDate = dueKey;
+        invoice.updatedAt = now.toISOString();
+        changed = true;
+        this.notify(
+          "Invoice overdue",
+          `${invoice.invoiceNumber}: ${invoice.customerName} has PHP ${derived.balance.toLocaleString()} unpaid — due ${dueKey}, ${daysOverdue} ${dayWord(daysOverdue)} overdue.`,
+          "High"
+        );
+        this.audit(
+          "billing.reminder.overdue",
+          "BillingInvoice",
+          invoice.id,
+          `${invoice.invoiceNumber}; ${invoice.customerName}; balance PHP ${derived.balance.toLocaleString()}; due ${dueKey}; ${daysOverdue} ${dayWord(daysOverdue)} overdue`
+        );
+        result.overdueNotified.push(invoice.id);
+      } else {
+        const daysUntilDue = this.businessDateDayDiff(todayKey, dueKey);
+        if (daysUntilDue > LogisticsService.DUE_SOON_WINDOW_DAYS) continue;
+        if (invoice.dueSoonReminderForDate === dueKey) continue;
+        invoice.dueSoonReminderForDate = dueKey;
+        invoice.updatedAt = now.toISOString();
+        changed = true;
+        this.notify(
+          "Invoice due soon",
+          `${invoice.invoiceNumber}: ${invoice.customerName} has PHP ${derived.balance.toLocaleString()} unpaid — due ${dueKey}${daysUntilDue === 0 ? " (today)" : ` (in ${daysUntilDue} ${dayWord(daysUntilDue)})`}.`,
+          "Normal"
+        );
+        this.audit(
+          "billing.reminder.dueSoon",
+          "BillingInvoice",
+          invoice.id,
+          `${invoice.invoiceNumber}; ${invoice.customerName}; balance PHP ${derived.balance.toLocaleString()}; due ${dueKey}; ${daysUntilDue} ${dayWord(daysUntilDue)} to due date`
+        );
+        result.dueSoonNotified.push(invoice.id);
+      }
+    }
+    if (changed) this.saveData();
+    return result;
+  }
+
+  /**
+   * Phase 6 P6-4 — the Due/Overdue worklist behind Payments →
+   * Billing. Reading it first runs the due scan, so opening the
+   * worklist is also a catch-up trigger for reminder notifications.
+   * Rows are the LIVE derivation over the caller's branch-visible
+   * invoices (the P5-3 rule), restricted to invoices that owe money
+   * and have a due date that is overdue or within the due-soon
+   * window, ordered by due date — oldest first, which puts the most
+   * overdue at the top and due-soon rows after them in due order.
+   */
+  listDueWorklist(user?: AuthContext, now: Date = new Date()): DueWorklistRow[] {
+    this.runDueReminderScan(now);
+    const todayKey = this.businessDateKey(now);
+    const rows: DueWorklistRow[] = [];
+    for (const invoice of this.billingInvoices) {
+      if (invoice.status === "Void" || invoice.status === "Draft") continue;
+      if (!this.billingInvoiceVisibleTo(user, invoice)) continue;
+      const derived = this.deriveBillingInvoice(invoice, now);
+      if (derived.balance <= 0 || !derived.dueDate) continue;
+      const dueKey = this.businessDateKey(derived.dueDate);
+      const firstPackage = invoice.packageIds
+        .map((packageId) => this.packages.find((pkg) => pkg.id === packageId))
+        .find((pkg) => pkg !== undefined);
+      const base = {
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoiceNumber,
+        customerId: invoice.customerId,
+        customerName: invoice.customerName,
+        branchName: firstPackage?.handlingBranchName ?? firstPackage?.destination,
+        amountDue: derived.amountDue,
+        amountPaid: derived.amountPaid,
+        balance: derived.balance,
+        status: derived.status,
+        dueDate: dueKey
+      };
+      if (todayKey > dueKey) {
+        rows.push({ ...base, state: "Overdue", daysUntilDue: 0, daysOverdue: this.businessDateDayDiff(dueKey, todayKey) });
+      } else {
+        const daysUntilDue = this.businessDateDayDiff(todayKey, dueKey);
+        if (daysUntilDue > LogisticsService.DUE_SOON_WINDOW_DAYS) continue;
+        rows.push({ ...base, state: "DueSoon", daysUntilDue, daysOverdue: 0 });
+      }
+    }
+    rows.sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.invoiceNumber.localeCompare(b.invoiceNumber));
+    return rows;
+  }
+
+  /**
+   * Phase 6 P6-4 — a customer's reminder history, read from the audit
+   * trail: the manual reminders staff sent (billing.reminder on the
+   * Customer) plus the due scan's automatic notices for the customer's
+   * invoices (billing.reminder.dueSoon / .overdue on the
+   * BillingInvoice). Newest first. The visibility gate is the balance
+   * read — a customer hidden from this caller answers exactly like a
+   * missing one (the P5-3 existence-hiding rule).
+   */
+  getCustomerReminderHistory(customerId: string, user?: AuthContext): CustomerReminderHistoryEntry[] {
+    this.getCustomerBalance(customerId, user);
+    const invoiceById = new Map(
+      this.billingInvoices.filter((invoice) => invoice.customerId === customerId).map((invoice) => [invoice.id, invoice])
+    );
+    const entries: CustomerReminderHistoryEntry[] = [];
+    for (const log of this.auditLogs) {
+      if (log.entityType === "Customer" && log.entityId === customerId && log.action === "billing.reminder") {
+        entries.push({ id: log.id, kind: "manual", reason: log.reason, createdAt: log.createdAt });
+      } else if (
+        log.entityType === "BillingInvoice" &&
+        invoiceById.has(log.entityId) &&
+        (log.action === "billing.reminder.dueSoon" || log.action === "billing.reminder.overdue")
+      ) {
+        const invoice = invoiceById.get(log.entityId);
+        if (!invoice) continue;
+        entries.push({
+          id: log.id,
+          kind: log.action === "billing.reminder.dueSoon" ? "dueSoon" : "overdue",
+          invoiceId: invoice.id,
+          invoiceNumber: invoice.invoiceNumber,
+          reason: log.reason,
+          createdAt: log.createdAt
+        });
+      }
+    }
+    return entries.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
   /**
@@ -2103,24 +2332,37 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return customer;
   }
 
-  createCustomerBillingReminder(customerId: string, input: { balance?: number; dueRule?: string; branchName?: string; smsReady?: boolean }) {
+  /**
+   * Phase 6 P6-4 — the manual billing reminder (the customer view's
+   * "Notify Owner" action and the worklist's per-row Notify). The
+   * amount is the SERVER's live outstanding balance
+   * (getCustomerBalance — the same derivation as every other money
+   * surface, branch-scoped to the caller); earlier versions trusted a
+   * caller-supplied figure. Reminders are IN-APP ONLY: this writes a
+   * staff notification + an audit entry and contacts nobody outside
+   * the app. There is no SMS or email integration in this codebase —
+   * the old smsReady input and smsStatus response field pretended
+   * otherwise and are gone; the response names the real channel.
+   */
+  createCustomerBillingReminder(customerId: string, input: { branchName?: string } = {}, user?: AuthContext) {
     const customer = this.findCustomer(customerId);
-    const balance = Number(input.balance ?? 0);
+    const balance = this.getCustomerBalance(customerId, user);
+    const outstanding = balance.outstanding;
     const branchName = input.branchName?.trim() || "assigned branch";
-    const smsNote = input.smsReady ? " SMS reminder is queued for future SMS API integration." : "";
+    const oldestDueNote = balance.oldestDueDate ? ` Oldest due ${balance.oldestDueDate}.` : "";
     this.notify(
       "Customer billing reminder",
-      `${branchName}: ${customer.businessName} has PHP ${balance.toLocaleString()} balance. Due rule: ${input.dueRule || customer.billingTerm || "Not set"}.${smsNote}`,
-      balance > 0 ? "High" : "Normal"
+      `${branchName}: ${customer.businessName} has PHP ${outstanding.toLocaleString()} outstanding balance.${oldestDueNote}`,
+      outstanding > 0 ? "High" : "Normal"
     );
-    this.audit("billing.reminder", "Customer", customer.id, `Balance PHP ${balance.toLocaleString()}`);
+    this.audit("billing.reminder", "Customer", customer.id, `Balance PHP ${outstanding.toLocaleString()}`);
     this.saveData();
     return {
       ok: true,
       customerId: customer.id,
       customerName: customer.businessName,
-      balance,
-      smsStatus: input.smsReady ? "SMS API not integrated yet" : "Internal notification only"
+      balance: outstanding,
+      channel: "in-app"
     };
   }
 
