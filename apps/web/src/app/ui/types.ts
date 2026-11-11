@@ -161,6 +161,12 @@ export interface PaymentRecord {
   cargoPackageId: string;
   amountDue: number;
   amountPaid: number;
+  /**
+   * Historical PER-CALL value (audit §2.3.1) — what that one
+   * recordPayment call computed from its own amount alone. NOT the
+   * package's remaining balance; displays use the cumulative figure
+   * from payment-display.ts instead.
+   */
   balance: number;
   method: string;
   collectionPoint?: "Receiving" | "Delivery" | "Owner" | "Online" | "Other";

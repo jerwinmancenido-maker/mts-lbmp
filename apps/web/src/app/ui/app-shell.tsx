@@ -33,6 +33,7 @@ import { isSessionExpiredError, SESSION_EXPIRED_MESSAGE } from "./session-expiry
 import { appendDiagnosticLog, clearCachedRecords, clearDiagnosticLogs, deleteOfflineQueueRecord, deleteQueuedPhoto, enqueueOfflineAction, getOfflineStorageSummary, listDiagnosticLogs, listOfflineQueue, listQueuedPhotos, newOfflineQueueRecordId, pruneOfflineQueue, readCachedRecord, readCachedValue, replaceQueuedPhotoReferences, requestPersistentStorage, updateOfflineQueueRecord, updateQueuedPhoto, writeCachedValue, type DiagnosticLogRecord, type OfflineQueueRecord, type OfflineStorageSummary, type QueuedPhotoRecord } from "./cache";
 import { OFFLINE_QUEUE_MAX_AUTO_ATTEMPTS, attemptQueueRecordSync, queueItemView, shouldAutoRetryQueueRecord, sortQueueItemViews, type QueueItemView } from "./queue-view";
 import { cacheReceivingFormStore, clearReceivingFormSnapshot, loadReceivingFormSnapshot, receivingFormHasContent, saveReceivingFormSnapshot, type ReceivingFormSnapshot } from "./receiving-form-persistence";
+import { paymentSearchDetails, remainingBalanceForPackage } from "./payment-display";
 import { parsePhilippineAddress, readDeliveryReceiptPhoto, type DrOcrConfidence, type DrOcrProgress, type DrOcrResult } from "./dr-ocr";
 import { setPhotoAuditUser, setPhotoUploadContext, takeNativeCameraPhoto, uploadCompressedImage, uploadPathForPhotoType } from "./media";
 import type { PrinterDiagnosticCheck } from "@mts-lbmp/printing";
@@ -1284,7 +1285,9 @@ export function AppShell() {
       [
         payment.amountDue,
         payment.amountPaid,
-        payment.balance,
+        // P6-2 §2.3.1: match the package's cumulative remaining balance,
+        // never the stored per-call Payment.balance.
+        pkg ? remainingBalanceForPackage(pkg, branchScopedPayments) : payment.balance,
         payment.method,
         payment.status,
         payment.createdAt,
@@ -1846,7 +1849,7 @@ export function AppShell() {
           payment.method,
           payment.status,
           payment.amountPaid,
-          payment.balance
+          pkg ? remainingBalanceForPackage(pkg, branchScopedPayments) : payment.balance
         ],
         query
       );
@@ -1859,7 +1862,10 @@ export function AppShell() {
         documentNumber: pkg?.receivingRecordNumber ?? pkg?.packageNumber ?? "Payment record",
         date: formatSearchDate(payment.createdAt),
         status: payment.status,
-        details: `${payment.method} - paid PHP ${payment.amountPaid.toLocaleString()} - balance PHP ${payment.balance.toLocaleString()}`,
+        // P6-2 §2.3.1: show the package's cumulative remaining balance;
+        // the stored Payment.balance is a per-call historical value and
+        // is never presented as a remaining balance.
+        details: paymentSearchDetails(payment, pkg, branchScopedPayments),
         amount: `Due PHP ${payment.amountDue.toLocaleString()}`,
         priority
       });
@@ -9897,17 +9903,24 @@ function Payments({
           <button className="smallButton" onClick={() => setMode("home")}>Back</button>
         </div>
         <div className="list compactList">
-          {displayedPayments.map((payment) => (
+          {displayedPayments.map((payment) => {
+            // P6-2 §2.3.1: the owner's Balance is the package's
+            // cumulative remaining balance (packageBalance), never the
+            // stored per-call Payment.balance.
+            const paymentPackage = packages.find((pkg) => pkg.id === payment.cargoPackageId);
+            const displayBalance = paymentPackage ? packageBalance(paymentPackage) : payment.balance;
+            return (
             <div className="row compactDataRow" key={payment.id}>
               <div>
                 <strong>PHP {payment.amountPaid.toLocaleString()} - {payment.method}</strong>
-                <p>{isOwner ? `Balance: PHP ${payment.balance.toLocaleString()}` : `${payment.collectionPoint ?? collectionPoint} - ${payment.collectedByName ?? activeUser.name}`}</p>
+                <p>{isOwner ? `Balance: PHP ${displayBalance.toLocaleString()}` : `${payment.collectionPoint ?? collectionPoint} - ${payment.collectedByName ?? activeUser.name}`}</p>
               </div>
               <div className="compactRowMeta">
                 <span className="badge">{payment.status}</span>
               </div>
             </div>
-          ))}
+            );
+          })}
           {!payments.length && <p className="muted">No payment records found.</p>}
           {payments.length > displayedPayments.length && (
             <button className="loadMoreButton" type="button" onClick={() => setPaymentHistoryLimit((limit) => limit + LIST_PAGE_SIZE)}>

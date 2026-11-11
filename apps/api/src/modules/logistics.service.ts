@@ -3388,6 +3388,9 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         );
       }
     }
+    // Per-call value only (see PaymentRecord.balance): it is stored as
+    // the historical record of this call, never as the package's
+    // remaining balance — that is always price minus ALL payments.
     const balance = Math.max(amountDue - input.amountPaid, 0);
     const status: PaymentStatus = balance === 0 ? "Paid" : input.amountPaid > 0 ? "Partially Paid" : "Unpaid";
     const payment: PaymentRecord = {

@@ -329,6 +329,14 @@ export interface PaymentRecord {
   cargoPackageId: string;
   amountDue: number;
   amountPaid: number;
+  /**
+   * HISTORICAL PER-CALL value (Phase 6 audit §2.3.1): computed at record
+   * time from THIS payment alone (max(amountDue − amountPaid, 0)). It is
+   * NOT the package's remaining balance — with instalments it can even
+   * exceed an earlier payment's value. Displays must show the cumulative
+   * figure instead (price − all payments for the package); this field is
+   * kept as the record of what that one call computed.
+   */
   balance: number;
   method: string;
   collectionPoint: "Receiving" | "Delivery" | "Owner" | "Online" | "Other";
