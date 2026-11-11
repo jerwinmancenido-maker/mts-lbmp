@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException, type OnModuleDestroy, type OnModuleInit } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, type OnModuleDestroy, type OnModuleInit } from "@nestjs/common";
 import { mkdirSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -172,6 +172,14 @@ const STAFF_CODE_LOGIN_ROLES = ["System Admin", "Daet Owner", "Naga Owner", "Rec
  * one-character temporary password is not acceptable.
  */
 const MIN_PASSWORD_LENGTH = 8;
+
+/**
+ * Phase 5 P5-3: the photo type the wall-QR intake page uploads under
+ * (apps/web — uploadCompressedImage(file, "wall-qr-dr-photo", …)). The
+ * scoped public intake-upload endpoint accepts only this type; every
+ * other photo type goes through the authenticated POST /uploads.
+ */
+const INTAKE_DR_PHOTO_TYPE = "wall-qr-dr-photo";
 
 // Phase 5 P5-2: the six hard-coded demo accounts that used to be defined
 // here are DELETED. Every account is now a real record in the user store:
@@ -466,6 +474,95 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Phase 5 P5-3 — the REDUCED public projection served by
+   * GET /bootstrap/public. The full bootstrap (above) requires a valid
+   * token: it carries the customer list and the staff directory, which
+   * the Phase 5 audit (§2.2) flagged as a public leak. The public
+   * projection is only what the unauthenticated wall-QR intake page
+   * needs: company branding, active branch names/codes for the branch
+   * picker, and the payment/expense defaults. NO users, NO customers,
+   * NO trucks, NO staff data of any kind — and the company profile is
+   * projected to branding fields only (no email), so a key/value scan
+   * of this payload finds no address book to harvest.
+   */
+  getPublicBootstrap() {
+    return {
+      companyProfile: {
+        companyName: this.companyProfile.companyName,
+        address: this.companyProfile.address,
+        phone: this.companyProfile.phone,
+        logoUrl: this.companyProfile.logoUrl
+      },
+      branches: this.branches
+        .filter((branch) => branch.status === "Active")
+        .map((branch) => ({ name: branch.name, code: branch.code })),
+      defaultPaymentMethods: this.paymentMethods,
+      defaultExpenseCategories: this.expenseCategories
+    };
+  }
+
+  /**
+   * Phase 5 P5-3 — server-side branch scoping (audit §2.3: until now
+   * branchAccess was a UI display feature; the API never consulted it).
+   *
+   * A caller's `branchAccess` is the free-text stored on their user
+   * record ("Daet", "Naga", "Daet / Naga", "All branches", …). It parses
+   * to the set of branch names the caller may see; `null` means
+   * UNRESTRICTED (no caller context supplied — internal calls —, an
+   * "All branches" grant, or a grant naming every known branch).
+   * Otherwise a record is visible when at least one of its branch
+   * attributions is in the caller's set. A record with NO branch
+   * attribution at all (a trip-less expense, a draft with no destination
+   * yet, an invoice with no packages) is not hidden: there is no branch
+   * whose data it could leak.
+   */
+  private accessibleBranchNames(user?: AuthContext): Set<string> | null {
+    if (!user) return null;
+    const access = user.branchAccess?.trim() ?? "";
+    if (!access || access.toLowerCase() === "all branches") return null;
+    const names = new Set(
+      access
+        .split(/[/,]/)
+        .map((entry) => entry.trim().toLowerCase())
+        .filter(Boolean)
+    );
+    if (!names.size) return null;
+    const known = new Set(this.branches.map((branch) => branch.name.trim().toLowerCase()).filter(Boolean));
+    if (known.size && [...known].every((name) => names.has(name))) return null;
+    return names;
+  }
+
+  private canAccessBranches(user: AuthContext | undefined, branchNames: Array<string | undefined>): boolean {
+    const accessible = this.accessibleBranchNames(user);
+    if (!accessible) return true;
+    return branchNames.some((name) => {
+      const clean = name?.trim().toLowerCase();
+      return clean ? accessible.has(clean) : false;
+    });
+  }
+
+  /** List-filter form of the branch rule: unattributed records stay visible. */
+  private branchVisibleTo(user: AuthContext | undefined, branchNames: Array<string | undefined>): boolean {
+    const attributed = branchNames.filter((name) => Boolean(name?.trim()));
+    if (!attributed.length) return true;
+    return this.canAccessBranches(user, attributed);
+  }
+
+  /**
+   * Detail-read form of the branch rule: a package outside the caller's
+   * branches is answered exactly like a package that does not exist
+   * (the same NotFoundException findPackage throws), so a scoped caller
+   * cannot probe whether another branch's package is real.
+   */
+  private assertPackageVisibleTo(user: AuthContext | undefined, cargo: CargoPackage) {
+    if (!this.canAccessBranches(user, [cargo.handlingBranchName, cargo.destination])) {
+      // Same message findPackage uses, so the two cases are
+      // indistinguishable to the caller.
+      throw new NotFoundException("Cargo package not found");
+    }
+  }
+
+  /**
    * Phase 5 P5-1 — the only shape in which a user record may leave the
    * service: credential hashes, the session watermark, and the login
    * throttle state are stripped; `hasStaffCode` reports whether a staff
@@ -748,8 +845,12 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  listPackages(query: ListQuery = {}) {
+  listPackages(query: ListQuery = {}, user?: AuthContext) {
     const records = this.packages.filter((pkg) =>
+      // Phase 5 P5-3: the caller's stored branchAccess scopes the list on
+      // the server (audit §2.1/§2.3 — this endpoint previously returned
+      // every package in the company to any authenticated token).
+      this.branchVisibleTo(user, [pkg.handlingBranchName, pkg.destination]) &&
       statusMatches(pkg.status, query.status) &&
       branchMatches(query.branch, [pkg.handlingBranchName, pkg.destination]) &&
       queryMatches([
@@ -769,8 +870,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return applyCursorAndLimit(records, query);
   }
 
-  listTrips(query: ListQuery = {}) {
+  listTrips(query: ListQuery = {}, user?: AuthContext) {
     const records = this.trips.filter((trip) =>
+      // Phase 5 P5-3 branch scoping: a trip touches both endpoint
+      // branches, so it is visible when either is in the caller's access.
+      this.branchVisibleTo(user, [trip.origin, trip.destination]) &&
       statusMatches(trip.status, query.status) &&
       branchMatches(query.branch, [trip.destination]) &&
       queryMatches([
@@ -823,18 +927,29 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return truck;
   }
 
-  listReceivingRecords() {
-    return this.receivingRecords.map((record) => this.syncReceivingRecordPackages(record));
+  listReceivingRecords(user?: AuthContext) {
+    return this.receivingRecords
+      // Phase 5 P5-3 branch scoping: a receiving record belongs to the
+      // branch that handled its packages (and names a destination).
+      .filter((record) =>
+        this.branchVisibleTo(user, [record.destination, ...record.packages.map((pkg) => pkg.handlingBranchName)])
+      )
+      .map((record) => this.syncReceivingRecordPackages(record));
   }
 
-  listDeliveries() {
-    return this.deliveries;
+  listDeliveries(user?: AuthContext) {
+    // Phase 5 P5-3 branch scoping via the delivered package's branches.
+    return this.deliveries.filter((delivery) => {
+      const cargo = this.packages.find((pkg) => pkg.id === delivery.cargoPackageId);
+      return this.branchVisibleTo(user, [cargo?.handlingBranchName, cargo?.destination]);
+    });
   }
 
-  listPayments(query: ListQuery = {}) {
+  listPayments(query: ListQuery = {}, user?: AuthContext) {
     const records = this.payments.filter((payment) => {
       const cargo = this.packages.find((pkg) => pkg.id === payment.cargoPackageId);
-      return statusMatches(payment.status, query.status) &&
+      return this.branchVisibleTo(user, [payment.branchName, cargo?.handlingBranchName, cargo?.destination]) &&
+        statusMatches(payment.status, query.status) &&
         branchMatches(query.branch, [payment.branchName, cargo?.handlingBranchName, cargo?.destination]) &&
         queryMatches([
           payment.id,
@@ -855,10 +970,14 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return applyCursorAndLimit(records, query);
   }
 
-  listExpenses(query: ListQuery = {}) {
+  listExpenses(query: ListQuery = {}, user?: AuthContext) {
     const records = this.expenses.filter((expense) => {
       const trip = expense.tripId ? this.trips.find((entry) => entry.id === expense.tripId) : undefined;
-      return statusMatches(expense.status, query.status) &&
+      // Phase 5 P5-3 branch scoping via the expense's trip; a trip-less
+      // expense has no branch attribution and stays visible (see the
+      // branchVisibleTo rule).
+      return this.branchVisibleTo(user, [trip?.origin, trip?.destination]) &&
+        statusMatches(expense.status, query.status) &&
         branchMatches(query.branch, [trip?.destination]) &&
         queryMatches([
           expense.id,
@@ -876,12 +995,28 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return applyCursorAndLimit(records, query);
   }
 
-  listReturnRecords() {
-    return [...this.returnRecords].reverse();
+  listReturnRecords(user?: AuthContext) {
+    // Phase 5 P5-3 branch scoping via the returned package's branches.
+    return [...this.returnRecords]
+      .filter((record) => {
+        const cargo = this.packages.find((pkg) => pkg.id === record.cargoPackageId);
+        return this.branchVisibleTo(user, [cargo?.handlingBranchName, cargo?.destination]);
+      })
+      .reverse();
   }
 
-  listBillingInvoices() {
-    return [...this.billingInvoices].reverse();
+  listBillingInvoices(user?: AuthContext) {
+    // Phase 5 P5-3 branch scoping via the invoice's packages: an invoice
+    // is visible when any package on it belongs to the caller's branches.
+    return [...this.billingInvoices]
+      .filter((invoice) => {
+        const branchNames = invoice.packageIds.flatMap((packageId) => {
+          const cargo = this.packages.find((pkg) => pkg.id === packageId);
+          return [cargo?.handlingBranchName, cargo?.destination];
+        });
+        return this.branchVisibleTo(user, branchNames);
+      })
+      .reverse();
   }
 
   listAuditLogs(query: ListQuery = {}) {
@@ -1149,6 +1284,24 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     this.audit("settings.expenseCategories.update", "Settings", "expenseCategories");
     this.saveData();
     return this.expenseCategories;
+  }
+
+  /**
+   * Phase 5 P5-3 — the scoped public upload variant for the wall-QR
+   * intake page (POST /public/receiving-intake/upload-photo). The staff
+   * POST /uploads endpoint now requires a token, which the
+   * unauthenticated intake page does not have; this variant is the
+   * intake flow's own public contract instead: it accepts ONLY the
+   * intake DR photo type, and the file itself passes through the same
+   * uploadFile enforcement (JPEG/PNG/WebP allow-list, 5 MB cap). A
+   * photo uploaded here is inert data until the Phase 4 resolve-photo
+   * step binds its URL to a pending intake task by exact local id.
+   */
+  async uploadIntakePhoto(input: { dataUrl: string; fileName: string; type: string; entityId?: string }) {
+    if (input.type !== INTAKE_DR_PHOTO_TYPE) {
+      throw new BadRequestException("This upload path only accepts wall-QR intake DR photos");
+    }
+    return this.uploadFile(input);
   }
 
   async uploadFile(input: { dataUrl: string; fileName: string; type: string; entityId?: string }) {
@@ -1449,8 +1602,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  listMessages(cargoPackageId: string) {
+  listMessages(cargoPackageId: string, user?: AuthContext) {
     const cargo = this.findPackage(cargoPackageId);
+    // Phase 5 P5-3: package detail reads honour the caller's branches.
+    this.assertPackageVisibleTo(user, cargo);
     return this.messages.filter((message) => message.cargoPackageId === cargo.id);
   }
 
@@ -1754,9 +1909,13 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  listReceivingDrafts() {
+  listReceivingDrafts(user?: AuthContext) {
     return this.receivingDrafts
       .filter((draft) => draft.status === "Draft" || draft.status === "Cancelled")
+      // Phase 5 P5-3 branch scoping by the draft's destination; a draft
+      // with no destination yet has no branch attribution (see
+      // branchVisibleTo) and stays visible to its branch's staff.
+      .filter((draft) => this.branchVisibleTo(user, [draft.destination]))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
@@ -1808,8 +1967,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       }));
   }
 
-  listReceivingIntakeTasks(query: ListQuery = {}) {
+  listReceivingIntakeTasks(query: ListQuery = {}, user?: AuthContext) {
     const sorted = [...this.receivingIntakeTasks]
+      // Phase 5 P5-3 branch scoping by the task's destination branch.
+      .filter((task) => this.branchVisibleTo(user, [task.destinationBranch]))
       .filter((task) => statusMatches(task.status, query.status))
       .filter((task) => branchMatches(query.branch, [task.destinationBranch]))
       .filter((task) =>
@@ -2506,8 +2667,12 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return this.syncReceivingRecordPackages(receiving);
   }
 
-  listReceivingRecordAudit(receivingRecordId: string) {
+  listReceivingRecordAudit(receivingRecordId: string, user?: AuthContext) {
     const receiving = this.findReceivingRecord(receivingRecordId);
+    // Phase 5 P5-3: same existence-hiding rule as package detail reads.
+    if (!this.canAccessBranches(user, [receiving.destination, ...receiving.packages.map((pkg) => pkg.handlingBranchName)])) {
+      throw new NotFoundException("Receiving record not found");
+    }
     const packageIds = new Set(receiving.packages.flatMap((pkg) => [pkg.id, pkg.packageNumber]));
     return this.auditLogs
       .filter((log) =>
@@ -2662,11 +2827,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return trip;
   }
 
-  loadCargo(tripId: string, input: { cargoPackageId: string; overrideReason?: string; idempotencyKey?: string }) {
-    return this.runIdempotent(`POST /trips/${tripId}/load`, input.idempotencyKey, () => this.loadCargoOnce(tripId, input));
+  loadCargo(tripId: string, input: { cargoPackageId: string; overrideReason?: string; idempotencyKey?: string }, user?: AuthContext) {
+    return this.runIdempotent(`POST /trips/${tripId}/load`, input.idempotencyKey, () => this.loadCargoOnce(tripId, input, user));
   }
 
-  private loadCargoOnce(tripId: string, input: Parameters<LogisticsService["loadCargo"]>[1]) {
+  private loadCargoOnce(tripId: string, input: Parameters<LogisticsService["loadCargo"]>[1], user?: AuthContext) {
     const trip = this.findTrip(tripId);
     const cargo = this.findPackage(input.cargoPackageId);
     // B4 replay semantics: a load of a package that is already on THIS
@@ -2685,6 +2850,16 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     if (otherTrip) {
       throw new BadRequestException(
         `${cargo.packageNumber} is already loaded on trip ${otherTrip.tripNumber} (${otherTrip.status}). It stays on that trip — unload it there before loading it elsewhere.`
+      );
+    }
+    // Phase 5 P5-3 write-path branch check: a branch-scoped loader can
+    // only load cargo handled by a branch in their access. (Callers
+    // without a user context — createTrip composing its initial loads —
+    // run under the trip-creation permission instead; the direct load
+    // endpoint always passes the guard's user.)
+    if (!this.canAccessBranches(user, [cargo.handlingBranchName])) {
+      throw new ForbiddenException(
+        `${cargo.packageNumber} is handled by ${cargo.handlingBranchName}, which is outside your branch access.`
       );
     }
     const customer = this.findCustomer(cargo.customerId);
@@ -3089,8 +3264,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return expense;
   }
 
-  renderReceivingSlip(packageId: string): RenderedDocument {
+  renderReceivingSlip(packageId: string, user?: AuthContext): RenderedDocument {
     const cargo = this.findPackage(packageId);
+    // Phase 5 P5-3: document renders are package detail reads — the
+    // caller's branch scope applies (existence-hiding 404).
+    this.assertPackageVisibleTo(user, cargo);
     const copy = this.peekPrintCopy(cargo.packageNumber);
     const text = renderReceivingSlip({
       documentNumber: cargo.receivingRecordNumber,
@@ -3129,8 +3307,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  renderReceivingDocument(receivingRecordId: string): RenderedDocument {
+  renderReceivingDocument(receivingRecordId: string, user?: AuthContext): RenderedDocument {
     const receiving = this.findReceivingRecord(receivingRecordId);
+    if (!this.canAccessBranches(user, [receiving.destination, ...receiving.packages.map((pkg) => pkg.handlingBranchName)])) {
+      throw new NotFoundException("Receiving record not found");
+    }
     const copy = this.peekPrintCopy(receiving.recordNumber);
     const text = renderReceivingDocument({
       recordNumber: receiving.recordNumber,
@@ -3152,8 +3333,9 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  renderQrLabel(packageId: string): RenderedDocument {
+  renderQrLabel(packageId: string, user?: AuthContext): RenderedDocument {
     const cargo = this.findPackage(packageId);
+    this.assertPackageVisibleTo(user, cargo);
     const text = renderQrLabel({
       packageNumber: cargo.packageNumber,
       description: cargo.description,
@@ -3172,8 +3354,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  renderTripManifest(tripId: string): RenderedDocument {
+  renderTripManifest(tripId: string, user?: AuthContext): RenderedDocument {
     const trip = this.findTrip(tripId);
+    if (!this.canAccessBranches(user, [trip.origin, trip.destination])) {
+      throw new NotFoundException("Trip not found");
+    }
     const cargo = trip.cargoPackageIds.map((packageId) => this.findPackage(packageId));
     const copy = this.peekPrintCopy(trip.tripNumber);
     const text = renderLoadingManifest({
@@ -3203,8 +3388,9 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  renderDeliveryReceipt(packageId: string): RenderedDocument {
+  renderDeliveryReceipt(packageId: string, user?: AuthContext): RenderedDocument {
     const cargo = this.findPackage(packageId);
+    this.assertPackageVisibleTo(user, cargo);
     const delivery = [...this.deliveries].reverse().find((entry) => entry.cargoPackageId === cargo.id && entry.status === "Delivered");
     if (!delivery) throw new BadRequestException("Package has no completed delivery receipt yet");
     const latestPayment = [...this.payments].reverse().find((entry) => entry.cargoPackageId === cargo.id);

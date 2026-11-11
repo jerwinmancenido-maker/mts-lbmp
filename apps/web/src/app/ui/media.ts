@@ -268,6 +268,16 @@ function blobToDataUrl(blob: Blob) {
 }
 
 /**
+ * Phase 5 P5-3: staff uploads go to POST /uploads, which now requires a
+ * staff token. Wall-QR intake DR photos are uploaded from the
+ * unauthenticated intake page, so they use the API's scoped public
+ * intake-upload variant instead (it accepts only this photo type).
+ */
+export function uploadPathForPhotoType(photoType: string) {
+  return photoType === "wall-qr-dr-photo" ? "/public/receiving-intake/upload-photo" : "/uploads";
+}
+
+/**
  * Uploads photos still sitting in the device queue and, for each one, lets
  * the server attach the real URL wherever the photo's local id was submitted
  * as a pending reference (wall-QR intake DR photos — Phase 4 audit A6). The
@@ -284,7 +294,7 @@ export async function syncQueuedPhotos(): Promise<number> {
     await updateQueuedPhoto(syncingRecord);
     try {
       const dataUrl = await blobToDataUrl(record.compressedBlob);
-      const uploaded = await apiPost<{ fileUrl: string }>("/uploads", {
+      const uploaded = await apiPost<{ fileUrl: string }>(uploadPathForPhotoType(record.photoType), {
         dataUrl,
         fileName: record.fileName,
         type: record.photoType,
@@ -352,7 +362,7 @@ export async function uploadCompressedImage(file: File, type: string, entityId?:
     };
   }
   try {
-    return await apiPost<{ fileUrl: string; size: number; mimeType: string; type: string }>("/uploads", payload);
+    return await apiPost<{ fileUrl: string; size: number; mimeType: string; type: string }>(uploadPathForPhotoType(type), payload);
   } catch (error) {
     if (!isNetworkError(error)) throw error;
     const { blob, mimeType } = dataUrlToBlob(dataUrl);

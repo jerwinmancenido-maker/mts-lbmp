@@ -24,8 +24,26 @@ app.use((_request: unknown, response: MiddlewareResponse, next: MiddlewareNext) 
   next();
 });
 
+/**
+ * Phase 5 P5-3: CORS is an env-driven allow-list (CORS_ORIGINS,
+ * comma-separated), replacing `origin: true`, which reflected any
+ * origin with credentials allowed. When CORS_ORIGINS is unset, the
+ * defaults are the local-dev origins only: the Next.js dev server and
+ * the Capacitor shell. Production deployments must set CORS_ORIGINS to
+ * the real web origin(s) — see .env.example.
+ */
+const corsAllowList = (process.env.CORS_ORIGINS ?? "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const localDevCorsOrigins = [
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  "capacitor://localhost",
+  "http://localhost"
+];
 app.enableCors({
-  origin: true,
+  origin: corsAllowList.length ? corsAllowList : localDevCorsOrigins,
   credentials: true
 });
 app.useBodyParser("json", { limit: "8mb" });

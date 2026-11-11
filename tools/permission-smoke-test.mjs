@@ -6,8 +6,12 @@
  * tools/smoke-credentials.mjs for the env vars, the ALLOW_DEMO_AUTH-gated
  * seed hook that provisions the accounts, and the local defaults).
  *
- * The /bootstrap assertion still expects the endpoint to be public; the
- * Phase 5 audit stages its flip to a reduced projection for tranche P5-3.
+ * Phase 5 P5-3 flipped the /bootstrap assertions: the FULL bootstrap now
+ * requires a token (403 without one, 200 with the owner's), and the
+ * public route /bootstrap/public must return only the reduced projection
+ * — company branding, branch names, payment/expense defaults — asserted
+ * here by key scan: no users/customers/trucks keys and no staff email
+ * anywhere in the payload.
  */
 import { resolveSmokeCredentials } from "./smoke-credentials.mjs";
 
@@ -36,7 +40,27 @@ const ownerToken = await login(smoke.email, smoke.password);
 const deliveryToken = await login(smoke.limitedEmail, smoke.limitedPassword);
 
 const dashboardWithoutToken = await request("/dashboard");
-const bootstrapPublic = await request("/bootstrap");
+const bootstrapWithoutToken = await request("/bootstrap");
+const bootstrapAsOwner = await request("/bootstrap", {
+  headers: { Authorization: `Bearer ${ownerToken}` }
+});
+const publicBootstrap = await request("/bootstrap/public");
+let publicBootstrapBody = null;
+try {
+  publicBootstrapBody = JSON.parse(publicBootstrap.text);
+} catch {
+  publicBootstrapBody = null;
+}
+const publicBootstrapKeys = publicBootstrapBody ? Object.keys(publicBootstrapBody) : [];
+const publicBootstrapLeaks = ["users", "customers", "trucks"].some((key) => publicBootstrapKeys.includes(key))
+  || publicBootstrap.text.includes(smoke.email)
+  || publicBootstrap.text.includes(smoke.limitedEmail)
+  || publicBootstrap.text.includes("@mts.local");
+const publicBootstrapHasIntakeData = Boolean(publicBootstrapBody?.companyProfile?.companyName)
+  && Array.isArray(publicBootstrapBody?.branches)
+  && publicBootstrapBody.branches.every((branch) => typeof branch?.name === "string")
+  && Array.isArray(publicBootstrapBody?.defaultPaymentMethods)
+  && Array.isArray(publicBootstrapBody?.defaultExpenseCategories);
 const protectedAsDelivery = await request("/expenses/non-existent/approve", {
   method: "POST",
   headers: { Authorization: `Bearer ${deliveryToken}` }
@@ -66,7 +90,11 @@ const hardwareAsOwner = await request("/hardware/tests", {
 const result = {
   ok: true,
   dashboardWithoutToken: dashboardWithoutToken.status,
-  bootstrapPublic: bootstrapPublic.status,
+  bootstrapWithoutToken: bootstrapWithoutToken.status,
+  bootstrapAsOwner: bootstrapAsOwner.status,
+  publicBootstrap: publicBootstrap.status,
+  publicBootstrapLeaks,
+  publicBootstrapHasIntakeData,
   deliveryCannotApproveExpense: protectedAsDelivery.status,
   ownerDashboard: protectedAsOwner.status,
   deliveryCannotViewAudit: auditAsDelivery.status,
@@ -78,7 +106,11 @@ const result = {
 };
 
 if (result.dashboardWithoutToken !== 403) throw new Error("Dashboard should reject missing token");
-if (result.bootstrapPublic !== 200) throw new Error("Bootstrap should be public");
+if (result.bootstrapWithoutToken !== 403) throw new Error("Full bootstrap should reject missing token");
+if (result.bootstrapAsOwner !== 200) throw new Error("Owner should access the full bootstrap");
+if (result.publicBootstrap !== 200) throw new Error("Public bootstrap projection should be public");
+if (result.publicBootstrapLeaks) throw new Error("Public bootstrap projection must not contain users/customers/trucks or staff emails");
+if (!result.publicBootstrapHasIntakeData) throw new Error("Public bootstrap projection should carry company branding, branch names and the payment/expense defaults");
 if (result.deliveryCannotApproveExpense !== 403) throw new Error("Delivery user should not approve expenses");
 if (result.ownerDashboard !== 200) throw new Error("Owner should access dashboard");
 if (result.deliveryCannotViewAudit !== 403) throw new Error("Delivery user should not view audit");

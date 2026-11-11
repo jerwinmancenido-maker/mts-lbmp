@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { Camera, CheckCircle2, FileText, PackagePlus, Send, ShieldCheck } from "lucide-react";
-import { apiPost } from "../../ui/api";
+import { apiGet, apiPost } from "../../ui/api";
 import { readDeliveryReceiptPhoto, type DrOcrConfidence, type DrOcrProgress, type DrOcrResult } from "../../ui/dr-ocr";
 import { syncQueuedPhotos, takeNativeCameraPhoto, uploadCompressedImage } from "../../ui/media";
 
@@ -91,6 +91,22 @@ export default function WarehouseIntakePage() {
   const [customerSuggestionOpen, setCustomerSuggestionOpen] = useState(false);
   const [status, setStatus] = useState("Fill the details and submit. Receiving staff will review before saving.");
   const [submitting, setSubmitting] = useState(false);
+  // Branch options come from the API's reduced public bootstrap
+  // projection (Phase 5 P5-3 — the full bootstrap needs a staff token
+  // this page does not have). The two defaults keep the form usable
+  // when the API is unreachable; the fetch replaces them when it lands.
+  const [branchNames, setBranchNames] = useState<string[]>(["Daet", "Naga"]);
+
+  useEffect(() => {
+    apiGet<{ branches?: Array<{ name?: string }> }>("/bootstrap/public")
+      .then((data) => {
+        const names = (data.branches ?? []).map((branch) => branch.name?.trim() ?? "").filter(Boolean);
+        if (!names.length) return;
+        setBranchNames(names);
+        setDestinationBranch((current) => (names.includes(current) ? current : names[0] ?? current));
+      })
+      .catch(() => undefined);
+  }, []);
 
   // This page queues DR photos (uploadCompressedImage) but has no staff
   // shell to drain the queue — drain it here whenever the page is open and
@@ -360,8 +376,9 @@ export default function WarehouseIntakePage() {
           </label>
           <label>Branch
             <select value={destinationBranch} onChange={(event) => setDestinationBranch(event.target.value)}>
-              <option>Daet</option>
-              <option>Naga</option>
+              {branchNames.map((name) => (
+                <option key={name}>{name}</option>
+              ))}
             </select>
           </label>
           <label>Delivery Area / Address

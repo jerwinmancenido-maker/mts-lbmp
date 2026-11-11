@@ -12,10 +12,27 @@ export class LogisticsController {
     return { ok: true, service: "MTS LBMP API" };
   }
 
+  /**
+   * Phase 5 P5-3: the FULL bootstrap now requires a valid token (the
+   * staff shell fetches it after sign-in). It carries the customer list
+   * and the staff directory, which the Phase 5 audit flagged as a public
+   * leak when this route was unauthenticated.
+   */
   @Get("bootstrap")
-  @PublicRoute()
   bootstrap() {
     return this.logistics.getBootstrap();
+  }
+
+  /**
+   * Phase 5 P5-3: the reduced public projection for unauthenticated
+   * callers (the wall-QR intake page): company branding, branch names,
+   * payment/expense defaults — no users, customers, trucks, or staff
+   * data. The permission smoke asserts this shape by key scan.
+   */
+  @Get("bootstrap/public")
+  @PublicRoute()
+  publicBootstrap() {
+    return this.logistics.getPublicBootstrap();
   }
 
   @Post("auth/login")
@@ -149,20 +166,23 @@ export class LogisticsController {
 
   @Get("receiving")
   @RequirePermissions("receiving.view")
-  receivingRecords() {
-    return this.logistics.listReceivingRecords();
+  receivingRecords(@Req() request: { user?: { branchAccess?: string } }) {
+    return this.logistics.listReceivingRecords(request.user);
   }
 
   @Get("receiving/drafts")
   @RequirePermissions("receiving.view")
-  receivingDrafts() {
-    return this.logistics.listReceivingDrafts();
+  receivingDrafts(@Req() request: { user?: { branchAccess?: string } }) {
+    return this.logistics.listReceivingDrafts(request.user);
   }
 
   @Get("receiving/intake")
   @RequirePermissions("receiving.view")
-  receivingIntakeTasks(@Query() query: Parameters<LogisticsService["listReceivingIntakeTasks"]>[0]) {
-    return this.logistics.listReceivingIntakeTasks(query);
+  receivingIntakeTasks(
+    @Req() request: { user?: { branchAccess?: string } },
+    @Query() query: Parameters<LogisticsService["listReceivingIntakeTasks"]>[0]
+  ) {
+    return this.logistics.listReceivingIntakeTasks(query, request.user);
   }
 
   @Post("public/receiving-intake/validate")
@@ -183,9 +203,9 @@ export class LogisticsController {
     return this.logistics.createReceivingIntakeTask(body);
   }
 
-  // Public like /uploads: the unauthenticated intake page and the staff shell
-  // both call this when a queued device photo finishes uploading. It only
-  // acts on an exact pending local-photo reference match (Phase 4 audit A6).
+  // Public: the unauthenticated intake page and the staff shell both call
+  // this when a queued device photo finishes uploading. It only acts on
+  // an exact pending local-photo reference match (Phase 4 audit A6).
   @Post("public/receiving-intake/resolve-photo")
   @PublicRoute()
   resolveReceivingIntakeQueuedPhoto(@Body() body: Parameters<LogisticsService["resolveReceivingIntakeQueuedPhoto"]>[0]) {
@@ -255,8 +275,8 @@ export class LogisticsController {
 
   @Get("receiving/:id/audit")
   @RequirePermissions("receiving.view")
-  receivingRecordAudit(@Param("id") id: string) {
-    return this.logistics.listReceivingRecordAudit(id);
+  receivingRecordAudit(@Req() request: { user?: { branchAccess?: string } }, @Param("id") id: string) {
+    return this.logistics.listReceivingRecordAudit(id, request.user);
   }
 
   @Post("receiving/drafts")
@@ -306,15 +326,44 @@ export class LogisticsController {
     return this.logistics.cancelReceivingIntake(id, body);
   }
 
+  /**
+   * Phase 5 P5-3: GET /packages gains a real permission and server-side
+   * branch scoping. The permission is the new `packages.view` (not
+   * `receiving.view`): the shell's delivery tab loads this list and
+   * Delivery Staff/Delivery Admin do not hold receiving.view, while
+   * every customer preset is empty — so packages.view goes to all staff
+   * presets and customer tokens get no package list at all (their
+   * tracking stays on the public GET /tracking/:reference below).
+   */
   @Get("packages")
-  packages(@Query() query: Parameters<LogisticsService["listPackages"]>[0]) {
-    return this.logistics.listPackages(query);
+  @RequirePermissions("packages.view")
+  packages(
+    @Req() request: { user?: { branchAccess?: string } },
+    @Query() query: Parameters<LogisticsService["listPackages"]>[0]
+  ) {
+    return this.logistics.listPackages(query, request.user);
   }
 
+  /**
+   * Phase 5 P5-3: staff uploads require a valid token (any staff role —
+   * the guard authenticates; no narrower permission is imposed). The
+   * public intake page's DR photos use the scoped variant below.
+   */
   @Post("uploads")
-  @PublicRoute()
   uploadFile(@Body() body: { dataUrl: string; fileName: string; type: string; entityId?: string }) {
     return this.logistics.uploadFile(body);
+  }
+
+  /**
+   * Phase 5 P5-3: scoped public upload variant for the wall-QR intake
+   * flow. Accepts only the intake DR photo type, with the shared
+   * type/size enforcement in the service; the uploaded URL binds to an
+   * intake task only through the resolve-photo step.
+   */
+  @Post("public/receiving-intake/upload-photo")
+  @PublicRoute()
+  uploadIntakePhoto(@Body() body: { dataUrl: string; fileName: string; type: string; entityId?: string }) {
+    return this.logistics.uploadIntakePhoto(body);
   }
 
   @Get("tracking/:reference")
@@ -361,8 +410,8 @@ export class LogisticsController {
 
   @Get("packages/:id/messages")
   @RequirePermissions("messages.reply")
-  packageMessages(@Param("id") id: string) {
-    return this.logistics.listMessages(id);
+  packageMessages(@Req() request: { user?: { branchAccess?: string } }, @Param("id") id: string) {
+    return this.logistics.listMessages(id, request.user);
   }
 
   @Post("packages/:id/messages")
@@ -437,26 +486,26 @@ export class LogisticsController {
 
   @Get("packages/:id/receiving-slip")
   @RequirePermissions("documents.print")
-  receivingSlip(@Param("id") id: string) {
-    return this.logistics.renderReceivingSlip(id);
+  receivingSlip(@Req() request: { user?: { branchAccess?: string } }, @Param("id") id: string) {
+    return this.logistics.renderReceivingSlip(id, request.user);
   }
 
   @Get("receiving/:id/receiving-document")
   @RequirePermissions("documents.print")
-  receivingDocument(@Param("id") id: string) {
-    return this.logistics.renderReceivingDocument(id);
+  receivingDocument(@Req() request: { user?: { branchAccess?: string } }, @Param("id") id: string) {
+    return this.logistics.renderReceivingDocument(id, request.user);
   }
 
   @Get("packages/:id/qr-label")
   @RequirePermissions("documents.print")
-  qrLabel(@Param("id") id: string) {
-    return this.logistics.renderQrLabel(id);
+  qrLabel(@Req() request: { user?: { branchAccess?: string } }, @Param("id") id: string) {
+    return this.logistics.renderQrLabel(id, request.user);
   }
 
   @Get("packages/:id/delivery-receipt")
   @RequirePermissions("documents.print")
-  deliveryReceipt(@Param("id") id: string) {
-    return this.logistics.renderDeliveryReceipt(id);
+  deliveryReceipt(@Req() request: { user?: { branchAccess?: string } }, @Param("id") id: string) {
+    return this.logistics.renderDeliveryReceipt(id, request.user);
   }
 
   @Post("printing/handoffs")
@@ -476,8 +525,11 @@ export class LogisticsController {
 
   @Get("trips")
   @RequirePermissions("trips.view")
-  trips(@Query() query: Parameters<LogisticsService["listTrips"]>[0]) {
-    return this.logistics.listTrips(query);
+  trips(
+    @Req() request: { user?: { branchAccess?: string } },
+    @Query() query: Parameters<LogisticsService["listTrips"]>[0]
+  ) {
+    return this.logistics.listTrips(query, request.user);
   }
 
   @Get("trucks")
@@ -501,11 +553,12 @@ export class LogisticsController {
   @Post("trips/:id/load")
   @RequirePermissions("loading.scan")
   loadCargo(
+    @Req() request: { user?: { branchAccess?: string } },
     @Param("id") id: string,
     @Body() body: { cargoPackageId: string; overrideReason?: string; idempotencyKey?: string },
     @Headers("idempotency-key") idempotencyKey?: string
   ) {
-    return this.logistics.loadCargo(id, { ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
+    return this.logistics.loadCargo(id, { ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey }, request.user);
   }
 
   @Post("trips/:id/unload")
@@ -554,14 +607,14 @@ export class LogisticsController {
 
   @Get("trips/:id/loading-manifest")
   @RequirePermissions("documents.print")
-  loadingManifest(@Param("id") id: string) {
-    return this.logistics.renderTripManifest(id);
+  loadingManifest(@Req() request: { user?: { branchAccess?: string } }, @Param("id") id: string) {
+    return this.logistics.renderTripManifest(id, request.user);
   }
 
   @Get("deliveries")
   @RequirePermissions("delivery.complete")
-  deliveries() {
-    return this.logistics.listDeliveries();
+  deliveries(@Req() request: { user?: { branchAccess?: string } }) {
+    return this.logistics.listDeliveries(request.user);
   }
 
   @Post("deliveries/complete")
@@ -578,8 +631,8 @@ export class LogisticsController {
 
   @Get("returns")
   @RequirePermissions("delivery.complete")
-  returnRecords() {
-    return this.logistics.listReturnRecords();
+  returnRecords(@Req() request: { user?: { branchAccess?: string } }) {
+    return this.logistics.listReturnRecords(request.user);
   }
 
   @Post("returns")
@@ -593,8 +646,11 @@ export class LogisticsController {
 
   @Get("payments")
   @RequirePermissions("payments.record")
-  payments(@Query() query: Parameters<LogisticsService["listPayments"]>[0]) {
-    return this.logistics.listPayments(query);
+  payments(
+    @Req() request: { user?: { branchAccess?: string } },
+    @Query() query: Parameters<LogisticsService["listPayments"]>[0]
+  ) {
+    return this.logistics.listPayments(query, request.user);
   }
 
   @Post("payments")
@@ -605,8 +661,8 @@ export class LogisticsController {
 
   @Get("billing/invoices")
   @RequirePermissions("customers.manage")
-  billingInvoices() {
-    return this.logistics.listBillingInvoices();
+  billingInvoices(@Req() request: { user?: { branchAccess?: string } }) {
+    return this.logistics.listBillingInvoices(request.user);
   }
 
   @Post("billing/invoices")
@@ -617,8 +673,11 @@ export class LogisticsController {
 
   @Get("expenses")
   @RequirePermissions("expenses.create")
-  expenses(@Query() query: Parameters<LogisticsService["listExpenses"]>[0]) {
-    return this.logistics.listExpenses(query);
+  expenses(
+    @Req() request: { user?: { branchAccess?: string } },
+    @Query() query: Parameters<LogisticsService["listExpenses"]>[0]
+  ) {
+    return this.logistics.listExpenses(query, request.user);
   }
 
   @Post("expenses")
