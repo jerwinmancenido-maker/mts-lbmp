@@ -802,6 +802,22 @@ export class LogisticsController {
     return this.logistics.getProfitabilityReport(query, request.user);
   }
 
+  // Phase 6 P6-6: the dashboard charts' daily series (deliveries /
+  // collections / received per Asia/Manila day; definitions live in
+  // LogisticsService.getReportSeries). Same gate as profitability —
+  // reports.view alone: this is company activity data for the same
+  // owner/admin audience, and it is also the permission that now
+  // gates the dashboard's own financial fields, so the charts and
+  // the tiles appear for exactly the same sessions.
+  @Get("reports/series")
+  @RequirePermissions("reports.view")
+  reportSeries(
+    @Req() request: { user?: { branchAccess?: string } },
+    @Query() query: { days?: string }
+  ) {
+    return this.logistics.getReportSeries(query, request.user);
+  }
+
   @Get("expenses")
   @RequirePermissions("expenses.create")
   expenses(

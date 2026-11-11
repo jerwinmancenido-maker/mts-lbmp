@@ -39,8 +39,9 @@ import type {
  * - expense discipline: Fuel / Toll / Truck Rental require a real trip
  *   (400 without one, 400 for a missing trip, case-insensitive match);
  *   other categories are unchanged;
- * - the dashboard's profitThisMonth is month-scoped while the deprecated
- *   estimatedProfit stays all-time in the same response;
+ * - the dashboard's profitThisMonth is month-scoped (P6-6 removed the
+ *   deprecated all-time estimatedProfit after its one release — the
+ *   dashboard test below now pins its ABSENCE);
  * - branch scoping follows P5-3 per fact, and the endpoint's gate is
  *   reports.view ALONE (customers.manage does not admit — the documented
  *   difference from the balances endpoints).
@@ -387,7 +388,7 @@ describe("expense trip discipline", () => {
 });
 
 describe("dashboard profit definitions", () => {
-  test("profitThisMonth is month-scoped; estimatedProfit stays all-time alongside it", () => {
+  test("profitThisMonth is month-scoped; the deprecated estimatedProfit is gone (P6-6)", () => {
     const service = new LogisticsService();
     const state = internals(service);
     const nowIso = new Date().toISOString();
@@ -403,7 +404,12 @@ describe("dashboard profit definitions", () => {
 
     const dashboard = service.getDashboard({ id: "user_p65_admin", role: "System Admin", branchAccess: "All branches" }) as unknown as Record<string, unknown>;
     expect(dashboard.profitThisMonth).toBe(700);
-    expect(dashboard.estimatedProfit).toBe(3700);
+    // P6-6: estimatedProfit (all-time delivered revenue − all-time
+    // approved expenses; it would have read 3700 on this fixture) was
+    // removed after its one deprecated release — the key must not
+    // exist at all, not merely be undefined.
+    expect("estimatedProfit" in dashboard).toBe(false);
+    expect(dashboard.estimatedProfit).toBeUndefined();
     const expectedPeriod = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit" }).format(new Date());
     expect(dashboard.profitThisMonthPeriod).toBe(expectedPeriod);
   });

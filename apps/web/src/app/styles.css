@@ -4970,3 +4970,74 @@ textarea {
     scroll-behavior: auto !important;
   }
 }
+
+/* Phase 6 P6-6 — dashboard series charts (hand-rolled SVG bars).
+   Colours come from the palette tokens above so the charts follow
+   the app theme; figures inherit the body's tabular numerals. The
+   charts are static (no transitions), so the reduced-motion rule
+   above has nothing to tame here. */
+.seriesCharts {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 980px) {
+  .seriesCharts {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.seriesChart {
+  margin: 0;
+  min-width: 0;
+}
+
+.seriesChart figcaption {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: var(--font-label);
+  color: var(--muted);
+}
+
+.seriesChart figcaption strong {
+  color: var(--text);
+  font-size: var(--font-card-title);
+}
+
+.seriesChartSvg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.seriesBar-collections {
+  fill: var(--green);
+}
+
+.seriesBar-deliveries {
+  fill: var(--blue);
+}
+
+.seriesBar-received {
+  fill: var(--navy);
+}
+
+.seriesPeakLabel {
+  fill: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.seriesAxisLabel {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
+.seriesBaseline {
+  stroke: var(--border);
+  stroke-width: 1;
+}

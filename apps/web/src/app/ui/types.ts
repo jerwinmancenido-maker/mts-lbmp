@@ -7,14 +7,27 @@ export interface DashboardData {
   failedDeliveries: number;
   paymentsCollected?: number;
   expensesAwaitingApproval?: number;
-  /** @deprecated Phase 6 P6-5: all-time delivered revenue − all-time approved expenses. Kept in the API response for one release; the tile reads profitThisMonth. */
-  estimatedProfit?: number;
-  /** Phase 6 P6-5: this calendar month's (Asia/Manila) delivered revenue − this month's approved expenses. */
+  /** Phase 6 P6-5: this calendar month's (Asia/Manila) delivered revenue − this month's approved expenses. (The all-time estimatedProfit it replaced was removed in P6-6 after its one deprecated release.) */
   profitThisMonth?: number;
   /** The YYYY-MM (Asia/Manila) profitThisMonth covers. */
   profitThisMonthPeriod?: string;
   branchScope?: string;
   notifications: Array<{ id: string; title: string; message: string; priority: string; createdAt: string }>;
+}
+
+/** Phase 6 P6-6: one Asia/Manila day from GET /reports/series — mirrors the API type. */
+export interface ReportSeriesDay {
+  date: string;
+  deliveries: number;
+  collections: number;
+  received: number;
+}
+
+/** Phase 6 P6-6: GET /reports/series (reports.view) — the dashboard charts' data. Every day present, quiet days are 0. */
+export interface ReportSeries {
+  period: { from: string; to: string };
+  days: ReportSeriesDay[];
+  totals: { deliveries: number; collections: number; received: number };
 }
 
 export interface Customer {
@@ -84,6 +97,8 @@ export interface BootstrapData {
     branchId?: string;
     branchAccess?: string;
     permissionPreset?: string;
+    /** Phase 6 P6-6: the account's effective permissions, resolved server-side from the role presets. Permission-gated surfaces (dashboard financials, charts) key on this list, never on role names. */
+    permissions?: string[];
     canApprove?: string[];
     status?: "Active" | "Inactive";
     hasStaffCode?: boolean;

@@ -659,6 +659,33 @@ export interface ProfitabilityReport {
   };
 }
 
+/** One Asia/Manila calendar day of the dashboard series (Phase 6 P6-6). */
+export interface ReportSeriesDay {
+  /** YYYY-MM-DD (Asia/Manila). */
+  date: string;
+  /** Packages that reached Delivered that day — counted on the same Delivered-record anchor invoices, balances and the profitability report use (see LogisticsService.deliveredAtForPackage). */
+  deliveries: number;
+  /** Σ Payment.amountPaid received that day (the payment's createdAt, Asia/Manila). Counts every payment state the dashboard's all-time paymentsCollected counts. */
+  collections: number;
+  /** Packages received that day: a package's createdAt IS its receiving-intake time in this model (intakes create the package rows). */
+  received: number;
+}
+
+/**
+ * Phase 6 P6-6 — GET /reports/series, the dashboard charts' data.
+ * Built by LogisticsService.getReportSeries — the one place this
+ * aggregation lives. Every requested day is present, oldest first;
+ * a day with no activity is an explicit 0, never a gap, so a chart
+ * can draw the array as-is.
+ */
+export interface ReportSeries {
+  /** Inclusive Asia/Manila date range covered: `days` calendar days ending today (Manila). */
+  period: { from: string; to: string };
+  days: ReportSeriesDay[];
+  /** Column sums over `days` — what a chart header or a test can check the bars against. */
+  totals: { deliveries: number; collections: number; received: number };
+}
+
 export interface StaffUserRecord {
   id: string;
   name: string;

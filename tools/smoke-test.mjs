@@ -172,7 +172,7 @@ console.log(
       trackingStatus: tracking.status,
       delivered: dashboard.delivered,
       paymentsCollected: dashboard.paymentsCollected,
-      estimatedProfit: dashboard.estimatedProfit,
+      profitThisMonth: dashboard.profitThisMonth,
       documents: {
         receivingSlip: receivingSlip.text.includes("RECEIVING SLIP"),
         qrLabel: qrLabel.text.includes("PACKAGE QR LABEL"),
