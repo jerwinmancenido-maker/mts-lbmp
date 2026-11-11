@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LBMP — Offline</title>
+    <style>
+      :root { color-scheme: light; }
+      body { margin: 0; min-height: 100dvh; display: grid; place-items: center; background: #f8fafc; color: #0f172a; font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+      main { max-width: 420px; margin: 16px; background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 24px; display: grid; gap: 12px; }
+      h1 { margin: 0; font-size: 22px; }
+      p { margin: 0; color: #64748b; line-height: 1.5; }
+      button { min-height: 48px; border: 1px solid #2563eb; border-radius: 12px; background: #2563eb; color: #fff; font: inherit; font-weight: 800; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>You are offline</h1>
+      <p>This page has not been opened on this device yet, so it cannot be shown without a connection. Work already saved on this tablet is safe and will sync when the connection returns.</p>
+      <p>Reconnect to the network, then try again.</p>
+      <button type="button" onclick="window.location.reload()">Try again</button>
+    </main>
+  </body>
+</html>

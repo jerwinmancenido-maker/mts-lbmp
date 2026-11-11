@@ -233,8 +233,12 @@ export class LogisticsController {
 
   @Patch("receiving/drafts/:id")
   @RequirePermissions("receiving.create")
-  updateReceivingDraft(@Param("id") id: string, @Body() body: Parameters<LogisticsService["updateReceivingDraft"]>[1]) {
-    return this.logistics.updateReceivingDraft(id, body);
+  updateReceivingDraft(
+    @Param("id") id: string,
+    @Body() body: Parameters<LogisticsService["updateReceivingDraft"]>[1],
+    @Headers("idempotency-key") idempotencyKey?: string
+  ) {
+    return this.logistics.updateReceivingDraft(id, { ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
   }
 
   @Post("receiving/drafts/:id/finalize")

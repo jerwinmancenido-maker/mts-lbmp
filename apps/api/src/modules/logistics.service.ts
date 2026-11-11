@@ -1789,7 +1789,20 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return draft;
   }
 
-  updateReceivingDraft(draftId: string, input: Partial<Pick<ReceivingDraft, "customerId" | "customerDrNumber" | "destination" | "drPhotoUrl" | "formState" | "productLines">>) {
+  updateReceivingDraft(
+    draftId: string,
+    input: Partial<Pick<ReceivingDraft, "customerId" | "customerDrNumber" | "destination" | "drPhotoUrl" | "formState" | "productLines">> & {
+      idempotencyKey?: string;
+    }
+  ) {
+    // Phase 4 PR 3: draft updates are queueable offline (queueablePatch) and
+    // replay with the queue record's id as the key, like every other
+    // queueable write — a replay after a lost response returns the original
+    // result instead of re-applying the update.
+    return this.runIdempotent("PATCH /receiving/drafts/:id", input.idempotencyKey, () => this.updateReceivingDraftOnce(draftId, input));
+  }
+
+  private updateReceivingDraftOnce(draftId: string, input: Partial<Pick<ReceivingDraft, "customerId" | "customerDrNumber" | "destination" | "drPhotoUrl" | "formState" | "productLines">>) {
     this.assertNoLocalPhotoReference(input.drPhotoUrl, "DR photo");
     const draft = this.findReceivingDraft(draftId);
     if (draft.status !== "Draft") throw new BadRequestException("Only draft records can be updated");

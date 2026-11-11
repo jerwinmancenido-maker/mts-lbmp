@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./styles.css";
+import { ServiceWorkerRegistrar } from "./sw-registrar";
 
 export const metadata: Metadata = {
   title: "LBMP",
@@ -91,7 +92,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <style dangerouslySetInnerHTML={{ __html: criticalFallbackCss }} />
       </head>
-      <body>{children}</body>
+      <body>
+        <ServiceWorkerRegistrar />
+        {children}
+      </body>
     </html>
   );
 }
