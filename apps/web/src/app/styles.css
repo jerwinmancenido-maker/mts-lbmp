@@ -4530,6 +4530,23 @@ textarea {
     font-size: var(--font-label);
   }
 
+  /* P6-4 worklist rows carry a badge + three actions in .rowActions.
+     At phone widths that group is wider than the row, and the shared
+     compactDataRow treatment (actions at min-width: max-content in the
+     second grid column) squeezes the invoice/customer info column to
+     0px and clips the last action. Stack these rows instead: info
+     full width on top, actions wrapping on their own line below. */
+  .compactDataRow.worklistRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .compactDataRow.worklistRow .rowActions {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-width: 0;
+    justify-content: flex-start;
+  }
+
   .paymentEntryGrid {
     grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
     gap: 5px;

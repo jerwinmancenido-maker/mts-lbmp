@@ -9941,7 +9941,7 @@ function DueWorklist({
       </div>
       <div className="list compactList">
         {rows.map((row) => (
-          <div className="row compactDataRow" key={row.invoiceId}>
+          <div className="row compactDataRow worklistRow" key={row.invoiceId}>
             <div>
               <strong>{row.invoiceNumber}</strong>
               <p>{row.customerName}</p>
