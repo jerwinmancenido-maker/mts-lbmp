@@ -3736,6 +3736,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     draftId: string,
     input: Partial<Pick<ReceivingDraft, "customerId" | "customerDrNumber" | "destination" | "drPhotoUrl" | "formState" | "productLines">> & {
       idempotencyKey?: string;
+      baseEditVersion?: number;
     },
     actorUserId?: string
   ) {
@@ -3746,15 +3747,55 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return this.runIdempotent("PATCH /receiving/drafts/:id", input.idempotencyKey, () => this.updateReceivingDraftOnce(draftId, input, actorUserId));
   }
 
-  private updateReceivingDraftOnce(draftId: string, input: Partial<Pick<ReceivingDraft, "customerId" | "customerDrNumber" | "destination" | "drPhotoUrl" | "formState" | "productLines">>, actorUserId?: string) {
+  private updateReceivingDraftOnce(draftId: string, input: Partial<Pick<ReceivingDraft, "customerId" | "customerDrNumber" | "destination" | "drPhotoUrl" | "formState" | "productLines">> & { baseEditVersion?: number }, actorUserId?: string) {
     this.assertNoLocalPhotoReference(input.drPhotoUrl, "DR photo");
     const draft = this.findReceivingDraft(draftId);
     if (draft.status !== "Draft") throw new BadRequestException("Only draft records can be updated");
+    // Round 1 PR-7c (L21-F2): optimistic concurrency on the draft as a
+    // whole — the draft analogue of PR-7b's receiving-record guard. A
+    // save that names the editVersion it was based on is refused with
+    // 409 when the draft has moved since that read: the L21 interleave
+    // (two sessions patch the same draft, the later save silently wins)
+    // previously destroyed the first saver's edit with no signal to
+    // either. The refusal carries the current version so the caller
+    // can reload and re-apply. Placement is the replay-safety point:
+    // this check runs inside the Once, which runIdempotent invokes
+    // ONLY for a genuinely new request — a replayed queued save (same
+    // idempotency key) is answered from the stored result before the
+    // Once is ever called, so a retry after a lost response returns
+    // its original result instead of a fresh 409 against the version
+    // its own first attempt created. A refused save is never recorded
+    // under its key (runIdempotent stores only successes), so the
+    // caller can reload and retry under the same key. A save that
+    // names NO base keeps the pre-PR-7c behaviour (older clients and
+    // already-queued offline entries send none); the shipped web
+    // shell always sends the base for a live save.
+    const currentEditVersion = draft.editVersion ?? 0;
+    if (input.baseEditVersion !== undefined && input.baseEditVersion !== currentEditVersion) {
+      throw new ConflictException({
+        message: `Receiving draft ${draft.draftNumber} was changed by someone else (edit version now ${currentEditVersion}). Reload the draft and re-apply your changes.`,
+        currentEditVersion
+      });
+    }
     // Round 1 PR-6 (C-M7): the scalar header fields carry a before/after
     // delta; formState/productLines are whole replacement blobs whose
     // content is the draft record itself, so they are not duplicated
     // into the audit entry.
     const beforeDraft = { customerDrNumber: draft.customerDrNumber, destination: draft.destination };
+    // PR-7c: the full mutable set, snapshotted before applying so the
+    // edit version moves only on an actual change — a re-save of
+    // identical content (an autosave echo, a queued duplicate) must
+    // not invalidate another editor's base.
+    const beforeMutable = {
+      customerId: draft.customerId,
+      customerNameSnapshot: draft.customerNameSnapshot,
+      customerStatusSnapshot: draft.customerStatusSnapshot,
+      customerDrNumber: draft.customerDrNumber,
+      destination: draft.destination,
+      drPhotoUrl: draft.drPhotoUrl,
+      formState: JSON.stringify(draft.formState),
+      productLines: JSON.stringify(draft.productLines)
+    };
     const customer = input.customerId ? this.customers.find((entry) => entry.id === input.customerId) : undefined;
     draft.customerId = customer?.id ?? input.customerId ?? draft.customerId;
     draft.customerNameSnapshot = customer?.businessName ?? draft.customerNameSnapshot;
@@ -3766,6 +3807,16 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     draft.productLines = input.productLines ?? draft.productLines;
     draft.updatedBy = "Current User";
     draft.updatedAt = new Date().toISOString();
+    const changed =
+      draft.customerId !== beforeMutable.customerId ||
+      draft.customerNameSnapshot !== beforeMutable.customerNameSnapshot ||
+      draft.customerStatusSnapshot !== beforeMutable.customerStatusSnapshot ||
+      draft.customerDrNumber !== beforeMutable.customerDrNumber ||
+      draft.destination !== beforeMutable.destination ||
+      draft.drPhotoUrl !== beforeMutable.drPhotoUrl ||
+      JSON.stringify(draft.formState) !== beforeMutable.formState ||
+      JSON.stringify(draft.productLines) !== beforeMutable.productLines;
+    if (changed) draft.editVersion = currentEditVersion + 1;
     const { before: changedBefore, after: changedAfter } = diffSnapshots(beforeDraft, {
       customerDrNumber: draft.customerDrNumber,
       destination: draft.destination

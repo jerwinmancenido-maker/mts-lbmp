@@ -191,6 +191,19 @@ export interface ReceivingDraft {
   id: string;
   draftNumber: string;
   status: "Draft" | "Finalized" | "Cancelled";
+  /**
+   * Round 1 PR-7c (L21-F2): optimistic-concurrency counter for the
+   * draft as a whole — the draft analogue of ReceivingRecord's
+   * editVersion (PR-7b). Bumped on every actual change made through
+   * updateReceivingDraft; a draft save that names a stale base
+   * version (baseEditVersion) is refused with 409 instead of silently
+   * overwriting another session's edit. The check lives inside
+   * updateReceivingDraftOnce, which runIdempotent only invokes for a
+   * genuinely new request — a replayed queued save (same idempotency
+   * key) returns its stored original result without re-checking.
+   * Absent on pre-PR-7c drafts — treated as 0.
+   */
+  editVersion?: number;
   customerId?: string;
   customerNameSnapshot?: string;
   customerStatusSnapshot?: Customer["status"];

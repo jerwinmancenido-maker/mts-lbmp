@@ -1150,7 +1150,28 @@ export function AppShell() {
     // so editing a saved draft failed hard offline while creating one
     // queued. The API honours the key on PATCH /receiving/drafts/:id.
     const idempotencyKey = newOfflineQueueRecordId();
+    // Round 1 PR-7c (L21-F2): a draft update's body is a FULL snapshot
+    // of the form, and autosave can queue several of them for the same
+    // draft during one offline stretch. Only the newest snapshot is
+    // still work — a newer queued save supersedes any still-waiting
+    // one for the same draft (same type + method + path; Pending or
+    // Failed), so the queue never replays a stale snapshot after a
+    // fresher one. This also keeps the draft's baseEditVersion
+    // coherent: the surviving record carries the newest body with the
+    // base this tablet last loaded, so its replay applies cleanly
+    // when nobody else touched the draft and is refused with 409 —
+    // parked visibly in Device Setup — when someone did.
+    const supersedeQueuedDraftPatches = async () => {
+      if (type !== "receivingDraft") return;
+      const waiting = await listOfflineQueue().catch(() => [] as OfflineQueueRecord[]);
+      for (const record of waiting) {
+        if (record.type === type && record.method === "PATCH" && record.path === path && (record.status === "Pending" || record.status === "Failed")) {
+          await deleteOfflineQueueRecord(record.id).catch(() => undefined);
+        }
+      }
+    };
     if (!isOnline || (typeof navigator !== "undefined" && !navigator.onLine)) {
+      await supersedeQueuedDraftPatches();
       await enqueueOfflineAction({ id: idempotencyKey, type, method: "PATCH", path, body, userId: activeUser.id, branch: branchScope });
       void appendDiagnosticLog({ level: "warning", source: "offline", message: `Queued offline ${type} update`, details: { path, body }, userId: activeUser.id, branch: branchScope, module: activeTab });
       await refreshPendingSyncCount();
@@ -1163,6 +1184,7 @@ export function AppShell() {
       return { queued: false as const, result };
     } catch (error) {
       if (!isNetworkError(error)) throw error;
+      await supersedeQueuedDraftPatches();
       await enqueueOfflineAction({ id: idempotencyKey, type, method: "PATCH", path, body, userId: activeUser.id, branch: branchScope });
       void appendDiagnosticLog({ level: "warning", source: "offline", message: `Queued failed ${type} update`, details: { path, body, error }, userId: activeUser.id, branch: branchScope, module: activeTab });
       await refreshPendingSyncCount();
@@ -4357,6 +4379,8 @@ interface ReceivingDraftRecord {
   id: string;
   draftNumber: string;
   status: "Draft" | "Finalized" | "Cancelled";
+  /** Round 1 PR-7c (L21-F2): the draft's optimistic-concurrency counter; absent on pre-PR-7c drafts = 0. */
+  editVersion?: number;
   customerId?: string;
   customerNameSnapshot?: string;
   customerStatusSnapshot?: string;
@@ -4482,6 +4506,26 @@ interface PriceSuggestion {
   reason: string;
   source: string;
   warnings: string[];
+}
+
+/**
+ * Round 1 PR-7c (L21-F2): the API's draft-save 409 body is a JSON
+ * object ({ message, currentEditVersion }) and api.ts surfaces a
+ * failed response as an Error whose message is the raw body text.
+ * Parse it back so the shell can tell a version conflict (recoverable:
+ * refresh the base, let staff decide) from any other failure.
+ */
+function draftConflictFromError(error: unknown): { currentEditVersion: number; message: string } | null {
+  if (!(error instanceof Error)) return null;
+  try {
+    const parsed = JSON.parse(error.message) as { currentEditVersion?: unknown; message?: unknown };
+    if (typeof parsed.currentEditVersion === "number") {
+      return { currentEditVersion: parsed.currentEditVersion, message: typeof parsed.message === "string" ? parsed.message : "" };
+    }
+  } catch {
+    // Not a JSON error body — not a version conflict.
+  }
+  return null;
 }
 
 /**
@@ -4716,6 +4760,17 @@ function Receiving({
   const barcodeInputRef = useRef<HTMLInputElement | null>(null);
   const autoFilledPriceRef = useRef<string | null>(null);
   const lastAutoSavedDraftRef = useRef("");
+  // Round 1 PR-7c (L21-F2): the editVersion of the server draft this
+  // form is editing (the base the next save names), and the conflict
+  // latch — set when a save is refused 409 because the draft changed
+  // on another device. While latched, autosave stops sending (the
+  // typist is never spammed or blocked; the edits stay on screen and
+  // in the local form snapshot) until an explicit Save Draft spends
+  // the refreshed base as a deliberate overwrite, or the draft is
+  // reopened at the other version. Refs, not state: neither may
+  // retrigger the autosave effect.
+  const activeDraftEditVersionRef = useRef(0);
+  const draftSaveConflictRef = useRef(false);
   const [restoredForm, setRestoredForm] = useState<ReceivingFormSnapshot | null>(null);
   const formRestoreAttemptedRef = useRef(false);
   const visibleCustomers = customers.filter((customer) => !/(demo|test)/i.test(customer.businessName));
@@ -5650,47 +5705,14 @@ function Receiving({
 
   async function saveDraft(options: { silent?: boolean; linesOverride?: ReceivingLineDraft[]; drPhotoUrlOverride?: string } = {}) {
     const payload = buildDraftPayload(options);
-    if (!activeDraftId) {
-      const result = await queueablePost<ReceivingDraftRecord>("receivingDraft", "/receiving/drafts", payload);
-      if (result.queued) {
-        const localDraftNumber = `LOCAL-DRAFT-${Date.now().toString().slice(-6)}`;
-        setActiveDraftNumber(localDraftNumber);
-        setDraftSaveStatus(`${localDraftNumber} saved on tablet`);
-        if (!options.silent) setReceiveMessage("Draft saved on tablet. It will sync when online.");
-        return {
-          id: localDraftNumber,
-          draftNumber: localDraftNumber,
-          status: "Draft",
-          customerId: payload.customerId,
-          customerDrNumber: payload.customerDrNumber,
-          destination: payload.destination,
-          drPhotoUrl: payload.drPhotoUrl,
-          formState: payload.formState,
-          productLines: payload.productLines,
-          createdBy: activeUser.name,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        } as ReceivingDraftRecord;
-      }
-      const draft = result.result;
-      setActiveDraftId(draft.id);
-      setActiveDraftNumber(draft.draftNumber);
-      const savedAt = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      setDraftSaveStatus(`${draft.draftNumber} saved ${savedAt}`);
-      if (!options.silent) setReceiveMessage(`${draft.draftNumber} saved. You can find it in Records.`);
-      await loadDrafts();
-      return draft;
-    }
-    // Phase 4 A3: draft updates go through queueablePatch so an offline
-    // edit to a saved draft queues and replays (with its idempotency key)
-    // instead of failing hard while new-draft creation queued.
-    const result = await queueablePatch<ReceivingDraftRecord>("receivingDraft", `/receiving/drafts/${activeDraftId}`, payload);
-    if (result.queued) {
-      setDraftSaveStatus(`${activeDraftNumber || "Draft"} saved on tablet`);
-      if (!options.silent) setReceiveMessage("Draft update saved on tablet. It will sync when online.");
-      return {
-        id: activeDraftId,
-        draftNumber: activeDraftNumber,
+    // The on-screen form as a draft-shaped record, returned when the
+    // save does not reach the server in this call (queued offline, or
+    // held back by the PR-7c conflict latch) so callers carry on with
+    // the local state.
+    const localDraft = (idValue: string, draftNumberValue: string): ReceivingDraftRecord =>
+      ({
+        id: idValue,
+        draftNumber: draftNumberValue,
         status: "Draft",
         customerId: payload.customerId,
         customerDrNumber: payload.customerDrNumber,
@@ -5701,9 +5723,79 @@ function Receiving({
         createdBy: activeUser.name,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
-      } as ReceivingDraftRecord;
+      }) as ReceivingDraftRecord;
+    if (!activeDraftId) {
+      const result = await queueablePost<ReceivingDraftRecord>("receivingDraft", "/receiving/drafts", payload);
+      if (result.queued) {
+        const localDraftNumber = `LOCAL-DRAFT-${Date.now().toString().slice(-6)}`;
+        setActiveDraftNumber(localDraftNumber);
+        setDraftSaveStatus(`${localDraftNumber} saved on tablet`);
+        if (!options.silent) setReceiveMessage("Draft saved on tablet. It will sync when online.");
+        return localDraft(localDraftNumber, localDraftNumber);
+      }
+      const draft = result.result;
+      setActiveDraftId(draft.id);
+      setActiveDraftNumber(draft.draftNumber);
+      // PR-7c: the created draft's edit version becomes the base the
+      // first update names.
+      activeDraftEditVersionRef.current = draft.editVersion ?? 0;
+      draftSaveConflictRef.current = false;
+      const savedAt = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      setDraftSaveStatus(`${draft.draftNumber} saved ${savedAt}`);
+      if (!options.silent) setReceiveMessage(`${draft.draftNumber} saved. You can find it in Records.`);
+      await loadDrafts();
+      return draft;
+    }
+    // Round 1 PR-7c (L21-F2): while the conflict latch is set, autosave
+    // stays out of the way — the server draft is no longer the one this
+    // form loaded, and silently rebasing onto it would recreate the
+    // silent overwrite the guard exists to stop. The typist keeps
+    // typing (the form and its local snapshot are untouched) and the
+    // status line holds the explanation, until an explicit Save Draft
+    // spends the refreshed base as a deliberate overwrite or the draft
+    // is reopened at the other version.
+    if (draftSaveConflictRef.current && options.silent) {
+      setDraftSaveStatus(`${activeDraftNumber || "Draft"} changed on another device — tap Save Draft to overwrite, or reopen it from Records`);
+      return localDraft(activeDraftId, activeDraftNumber);
+    }
+    // Phase 4 A3: draft updates go through queueablePatch so an offline
+    // edit to a saved draft queues and replays (with its idempotency key)
+    // instead of failing hard while new-draft creation queued.
+    // PR-7c: a live save names the edit version it is based on; a stale
+    // base is refused 409 instead of silently overwriting (L21-F2). A
+    // queued save carries the same base in its body — queueablePatch
+    // supersedes any still-waiting save for this draft, so the queued
+    // body is always this tablet's newest snapshot at that base, and
+    // its replay is answered from the stored result if the original
+    // attempt had in fact landed.
+    let result: { queued: true } | { queued: false; result: ReceivingDraftRecord };
+    try {
+      result = await queueablePatch<ReceivingDraftRecord>("receivingDraft", `/receiving/drafts/${activeDraftId}`, {
+        ...payload,
+        baseEditVersion: activeDraftEditVersionRef.current
+      });
+    } catch (error) {
+      const conflict = draftConflictFromError(error);
+      if (!conflict) throw error;
+      // Latch the conflict and refresh the base from the refusal
+      // itself, so the next explicit Save Draft is a deliberate
+      // overwrite at the current version — and refuses again if the
+      // draft moves once more in between.
+      draftSaveConflictRef.current = true;
+      activeDraftEditVersionRef.current = conflict.currentEditVersion;
+      if (!options.silent) throw error; // runAction banners the server's reload message
+      setDraftSaveStatus(`${activeDraftNumber || "Draft"} changed on another device — tap Save Draft to overwrite, or reopen it from Records`);
+      setReceiveMessage(conflict.message || "This draft was changed on another device. Your edits are still on screen.");
+      return localDraft(activeDraftId, activeDraftNumber);
+    }
+    if (result.queued) {
+      setDraftSaveStatus(`${activeDraftNumber || "Draft"} saved on tablet`);
+      if (!options.silent) setReceiveMessage("Draft update saved on tablet. It will sync when online.");
+      return localDraft(activeDraftId, activeDraftNumber);
     }
     const draft = result.result;
+    draftSaveConflictRef.current = false;
+    activeDraftEditVersionRef.current = draft.editVersion ?? activeDraftEditVersionRef.current;
     setActiveDraftId(draft.id);
     setActiveDraftNumber(draft.draftNumber);
     const savedAt = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -5832,6 +5924,11 @@ function Receiving({
   function resumeDraft(draft: ReceivingDraftRecord) {
     setActiveDraftId(draft.id);
     setActiveDraftNumber(draft.draftNumber);
+    // PR-7c: the resumed draft's version is the base the next save
+    // names; reopening also clears any conflict latch from a previous
+    // editing session on this form.
+    activeDraftEditVersionRef.current = draft.editVersion ?? 0;
+    draftSaveConflictRef.current = false;
     applyDraftFormState(draft.formState ?? {}, draft);
     setMode("receive");
     setDraftSaveStatus(`${draft.draftNumber} resumed`);
@@ -5872,6 +5969,18 @@ function Receiving({
     }
     setActiveDraftId(snapshot.activeDraftId);
     setActiveDraftNumber(snapshot.activeDraftNumber);
+    // PR-7c: the snapshot predates the version counter, so seed the
+    // save base from the server's current draft when it can be read.
+    // If it cannot (offline at restore), the base stays 0 and a first
+    // save that finds the draft moved lands in the conflict latch —
+    // visible and recoverable, never a silent overwrite.
+    if (snapshot.activeDraftId) {
+      const serverDraft = await apiGet<ReceivingDraftRecord[]>("/receiving/drafts")
+        .then((list) => list.find((entry) => entry.id === snapshot.activeDraftId))
+        .catch(() => undefined);
+      activeDraftEditVersionRef.current = serverDraft?.editVersion ?? 0;
+      draftSaveConflictRef.current = false;
+    }
     applyDraftFormState(snapshot.payload.formState as ReceivingDraftRecord["formState"], {
       customerId: snapshot.payload.customerId,
       customerDrNumber: snapshot.payload.customerDrNumber,
@@ -5991,6 +6100,8 @@ function Receiving({
     setPrintStatus("");
     setDraftSaveStatus("");
     lastAutoSavedDraftRef.current = "";
+    activeDraftEditVersionRef.current = 0;
+    draftSaveConflictRef.current = false;
     setMode("receive");
     setReceiveMessage("New receiving started.");
   }
@@ -6743,6 +6854,8 @@ function Receiving({
     setProductLines([]);
     setDraftSaveStatus("");
     lastAutoSavedDraftRef.current = "";
+    activeDraftEditVersionRef.current = 0;
+    draftSaveConflictRef.current = false;
     setCustomerDrNumber("");
     setDrPhotoUrl("");
     setReceivingPaymentStatus("Unpaid");
