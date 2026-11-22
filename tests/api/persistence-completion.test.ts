@@ -72,7 +72,7 @@ async function bootService(options: { seedState?: unknown } = {}) {
   return { service, dir };
 }
 
-/** saveData() persists fire-and-forget; poll until the write lands. */
+/** saveData() persists synchronously on the JSON store; the poll stays as a belt-and-braces read-back. */
 async function readPersistedState(dir: string, marker: string) {
   const path = join(dir, "storage", "dev-data", "mts-lbmp.json");
   for (let attempt = 0; attempt < 50; attempt++) {

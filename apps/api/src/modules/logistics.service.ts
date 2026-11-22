@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException, type OnModuleDestroy, type OnModuleInit } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable, InternalServerErrorException, NotFoundException, type OnModuleDestroy, type OnModuleInit } from "@nestjs/common";
 import { mkdirSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -344,6 +344,22 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   private readonly dataFile = resolve(process.env.INIT_CWD ?? process.cwd(), "storage/dev-data/mts-lbmp.json");
   private readonly uploadDir = resolve(process.env.INIT_CWD ?? process.cwd(), "storage/test-uploads");
   private readonly store: StateStore = createStateStore(this.dataFile);
+  /**
+   * Round 1 finding C-B1: the JSON of the last state confirmed durable —
+   * saveData's rollback target when a save fails, so a failed mutation
+   * leaves neither a phantom in-memory record nor a later accidental
+   * persistence of it. Set when loadData completes and after every save
+   * that is known to have landed.
+   */
+  private lastDurableStateJson: string | undefined;
+  /**
+   * Round 1 finding C-B1: set when an asynchronous save (the Prisma path)
+   * rejects after its mutation already returned. From then on saveData
+   * refuses every further mutation (fail closed) instead of piling new
+   * writes onto a store that is not persisting; only a restart against a
+   * recovered store clears it.
+   */
+  private persistenceFailure: Error | undefined;
   private companyProfile: CompanyProfile = {
     companyName: "Mancenido Trucking Services",
     address: "Configured by owner",
@@ -1384,7 +1400,17 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
    * overdue at the top and due-soon rows after them in due order.
    */
   listDueWorklist(user?: AuthContext, now: Date = new Date()): DueWorklistRow[] {
-    this.runDueReminderScan(now);
+    try {
+      this.runDueReminderScan(now);
+    } catch (error) {
+      // The scan is a catch-up trigger riding on a read: if its save fails
+      // (saveData has already rolled the scan's changes back), the read
+      // itself must not fail — the scan retries on the next tick or read,
+      // exactly like the scheduler's guarded scans. The manual scan
+      // endpoint keeps the throwing behaviour, so an admin who runs it
+      // explicitly sees the failure.
+      console.error("[due-reminders] worklist catch-up scan failed", error);
+    }
     const todayKey = this.businessDateKey(now);
     const rows: DueWorklistRow[] = [];
     for (const invoice of this.billingInvoices) {
@@ -4899,6 +4925,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     if (migratedStaffCodes || foldedBranchAccessOverrides) {
       this.saveData();
     }
+    // The state now in memory is the state the store holds (plus the
+    // deterministic load normalizations above): it becomes saveData's
+    // rollback target until the first post-boot save lands.
+    this.lastDurableStateJson = JSON.stringify(this.snapshotState());
   }
 
   private snapshotState(): ServiceState {
@@ -4975,11 +5005,94 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return result;
   }
 
+  /**
+   * The single persistence choke point for every mutation (Round 1
+   * finding C-B1 — this used to be fire-and-forget: `void …save(…).catch(
+   * console.error)`, so a failed save still answered 201 for a record that
+   * did not exist durably).
+   *
+   * - Synchronous stores (the JSON file store) do their I/O inside the
+   *   save() call: a failure throws here, inside the mutation that caused
+   *   it. The in-memory state is rolled back to the last durable snapshot
+   *   and the request fails — never a success for an unpersisted record.
+   * - Asynchronous stores (Prisma) settle after the mutation returns; the
+   *   promise is tracked, not swallowed. On success the snapshot becomes
+   *   the rollback target; on failure the error is logged AND the service
+   *   fails closed — the next mutation rolls back and is refused — rather
+   *   than continuing to answer successes against a dead store.
+   */
   private saveData() {
+    if (this.persistenceFailure) {
+      this.restoreLastDurableState();
+      throw new InternalServerErrorException(
+        "Logistics state is not persisting: an earlier save failed, so this change was refused and rolled back. " +
+          "Restart the API once the store is healthy; the last durable state is intact.",
+        { cause: this.persistenceFailure }
+      );
+    }
     const state = this.snapshotState();
-    void this.store.save(state).catch((error: unknown) => {
-      console.error("Failed to persist logistics state", error);
-    });
+    const stateJson = JSON.stringify(state);
+    let pending: Promise<void> | void;
+    try {
+      pending = this.store.save(state);
+    } catch (error) {
+      this.restoreLastDurableState();
+      throw new InternalServerErrorException("Failed to persist logistics state; the change was rolled back and not saved.", {
+        cause: error instanceof Error ? error : new Error(String(error))
+      });
+    }
+    if (pending === undefined) {
+      // Synchronous store: the write completed (or threw) inside save().
+      this.lastDurableStateJson = stateJson;
+      return;
+    }
+    pending.then(
+      () => {
+        this.lastDurableStateJson = stateJson;
+      },
+      (error: unknown) => {
+        this.persistenceFailure = error instanceof Error ? error : new Error(String(error));
+        console.error("Failed to persist logistics state", error);
+      }
+    );
+  }
+
+  /**
+   * Restore every state field from the last durable snapshot. Used when a
+   * save fails after the in-memory mutation already landed, so the failed
+   * change exists nowhere — not in the store, not in memory, and not in a
+   * later save that would otherwise have carried it along.
+   */
+  private restoreLastDurableState() {
+    if (this.lastDurableStateJson === undefined) return;
+    const state = JSON.parse(this.lastDurableStateJson) as ServiceState;
+    this.sequences = new Map(state.sequences);
+    this.customers = state.customers;
+    this.receivingRecords = state.receivingRecords;
+    this.receivingDrafts = state.receivingDrafts;
+    this.receivingIntakeTasks = state.receivingIntakeTasks;
+    this.packages = state.packages;
+    this.productMasters = state.productMasters;
+    this.trucks = state.trucks;
+    this.trips = state.trips;
+    this.deliveries = state.deliveries;
+    this.payments = state.payments;
+    this.expenses = state.expenses;
+    this.returnRecords = state.returnRecords;
+    this.billingInvoices = state.billingInvoices;
+    this.notifications = state.notifications;
+    this.auditLogs = state.auditLogs;
+    this.descriptionBarcodes = state.descriptionBarcodes;
+    this.messages = state.messages;
+    this.operationChatThreads = state.operationChatThreads;
+    this.hardwareTests = state.hardwareTests;
+    this.printLogs = state.printLogs;
+    this.customUsers = state.customUsers;
+    this.idempotencyRecords = state.idempotencyRecords;
+    this.companyProfile = state.companyProfile;
+    this.branches = state.branches;
+    this.paymentMethods = state.paymentMethods;
+    this.expenseCategories = state.expenseCategories;
   }
 
   private cleanList(values: string[], label: string) {
