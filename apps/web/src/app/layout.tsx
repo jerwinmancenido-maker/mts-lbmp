@@ -28,16 +28,16 @@ export const viewport: Viewport = {
 };
 
 const criticalFallbackCss = `
-  :root{color-scheme:light;--role-accent:#2563eb;--role-soft:#dbeafe;--surface:#f8fafc;--panel:#fff;--border:#e2e8f0;--text:#0f172a;--muted:#64748b;--font-page-title:28px;--font-body:16px;--font-label:14px;--font-caption:12px;--font-button:16px;--font-tile-title:22px;--font-tile-note:13px}
+  :root{color-scheme:light;--role-accent:#2563eb;--role-soft:#dbeafe;--badge-text:#1e40af;--surface:#f8fafc;--panel:#fff;--border:#e2e8f0;--text:#0f172a;--muted:#64748b;--font-page-title:28px;--font-body:16px;--font-label:14px;--font-caption:12px;--font-button:16px;--font-tile-title:22px;--font-tile-note:13px}
   *{box-sizing:border-box}
   html,body{margin:0;min-height:100%;background:var(--surface);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow-x:hidden;font-size:var(--font-body)}
   button,input,select,textarea{font:inherit}
   button{min-height:44px;border:1px solid var(--border);border-radius:12px;background:var(--panel);color:var(--text);font-weight:800}
   input,select,textarea{width:100%;min-height:52px;border:1px solid var(--border);border-radius:12px;background:var(--panel);padding:0 14px;color:var(--text);font-weight:800}
   .app{min-height:100dvh;background:var(--surface);overflow-x:hidden}
-  .app.role-admin{--role-accent:#2563eb;--role-soft:#dbeafe}
-  .app.role-receiving{--role-accent:#16a34a;--role-soft:#dcfce7}
-  .app.role-delivery{--role-accent:#f59e0b;--role-soft:#fef3c7}
+  .app.role-admin{--role-accent:#2563eb;--role-soft:#dbeafe;--badge-text:#1e40af}
+  .app.role-receiving{--role-accent:#16a34a;--role-soft:#dcfce7;--badge-text:#166534}
+  .app.role-delivery{--role-accent:#f59e0b;--role-soft:#fef3c7;--badge-text:#92400e}
   .mobileTopbar,.mobileTabs{display:none}
   .swipeContent,.homeScreen{display:grid;gap:14px;min-width:0}
   .topbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:18px;margin:0 0 10px;padding:18px;border:1px solid var(--border);border-radius:10px;background:var(--panel);min-width:0}
@@ -61,7 +61,7 @@ const criticalFallbackCss = `
   .tile span,.moduleTile span,.homeTile span{font-size:var(--font-tile-note)}
   .homeTileTop{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
   .homeTileBadge{min-width:32px;min-height:32px;border-radius:999px;background:var(--role-soft);color:var(--role-accent);display:inline-flex;align-items:center;justify-content:center;padding:0 8px;font-weight:900}
-  .badge,.syncBadge{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;background:var(--role-soft);color:var(--role-accent);padding:6px 10px;font-weight:900}
+  .badge,.syncBadge{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;background:var(--role-soft);color:var(--badge-text);padding:6px 10px;font-weight:900}
   .primaryButton,.actionButton{display:inline-flex;align-items:center;justify-content:center;gap:8px;background:var(--role-accent);border-color:var(--role-accent);color:#fff;font-size:var(--font-button)}
   .smallButton,.iconOnlyButton{min-height:40px}
   .formGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}

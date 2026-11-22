@@ -57,6 +57,28 @@ export interface DashboardTile {
   value: string | number;
 }
 
+/**
+ * Round 1 fix loop PR-12 (recommendation R3, the labelling half of
+ * C-M13) — the Dashboard now names the scope its figures describe.
+ * PR-11 settled that scope as the signed-in user's stored
+ * branchAccess (the server applies the same value in getDashboard);
+ * this label states it in plain words above the tiles, derived from
+ * that same branchAccess string ("Daet", "Naga", "Daet / Naga").
+ * Returns null when no branch access is recorded, so the Dashboard
+ * never prints an empty or guessed scope.
+ */
+export function dashboardScopeLabel(branchAccess: string | null | undefined): string | null {
+  const branches = (branchAccess ?? "")
+    .split("/")
+    .map((branch) => branch.trim())
+    .filter(Boolean);
+  if (!branches.length) return null;
+  // The all-branches grant is stored as the literal "All branches"
+  // (the bootstrap admin's value) — it states its own scope.
+  if (branches.length === 1 && branches[0] === "All branches") return "All branches";
+  return branches.length === 1 ? `Your branch: ${branches[0]}` : `Your branches: ${branches.join(" / ")}`;
+}
+
 export function dashboardTiles(
   dashboard: DashboardData | null,
   options: { canViewFinancialSummary: boolean; collectedTotal: number; unpaidCount: number }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { dashboardTiles } from "../../apps/web/src/app/ui/dashboard-tiles";
+import { dashboardScopeLabel, dashboardTiles } from "../../apps/web/src/app/ui/dashboard-tiles";
 import type { DashboardData } from "../../apps/web/src/app/ui/types";
 
 /**
@@ -131,5 +131,40 @@ describe("dashboardTiles — the non-financial (no reports.view) tile set", () =
     expect(byKeyStaff.get("unpaid")?.value).toBe(9);
     expect(byKeyStaff.has("payments")).toBe(false);
     expect(byKeyStaff.has("profit")).toBe(false);
+  });
+});
+
+/**
+ * Round 1 fix loop PR-12 — dashboard scope label (recommendation
+ * R3, the labelling half of C-M13). PR-11 settled the tiles' scope
+ * as the signed-in user's stored branchAccess; the label states
+ * that same scope in plain words above the tiles, derived from the
+ * branchAccess string itself — never from the branch-workspace
+ * switcher, which was the silent second scope in the finding.
+ */
+describe("dashboardScopeLabel (PR-12, R3)", () => {
+  test("a two-branch user reads both branches", () => {
+    expect(dashboardScopeLabel("Daet / Naga")).toBe("Your branches: Daet / Naga");
+  });
+
+  test("a single-branch user reads the singular label", () => {
+    expect(dashboardScopeLabel("Daet")).toBe("Your branch: Daet");
+    expect(dashboardScopeLabel("Naga")).toBe("Your branch: Naga");
+  });
+
+  test("the stored all-branches grant states itself", () => {
+    expect(dashboardScopeLabel("All branches")).toBe("All branches");
+  });
+
+  test("spacing variants of the stored string normalise", () => {
+    expect(dashboardScopeLabel("Daet/Naga")).toBe("Your branches: Daet / Naga");
+    expect(dashboardScopeLabel("  Daet  ")).toBe("Your branch: Daet");
+  });
+
+  test("no recorded branch access prints no label at all", () => {
+    expect(dashboardScopeLabel(undefined)).toBeNull();
+    expect(dashboardScopeLabel(null)).toBeNull();
+    expect(dashboardScopeLabel("")).toBeNull();
+    expect(dashboardScopeLabel(" / ")).toBeNull();
   });
 });

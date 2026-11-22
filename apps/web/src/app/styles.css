@@ -5,6 +5,13 @@
   --role-accent: #2563eb;
   --role-soft: #dbeafe;
   --role-contrast: #ffffff;
+  /* Round 1 PR-12 (C-M15): badge/pill TEXT colour. The accent itself
+     on the soft fill measured 4.24:1 (blue), 3.00:1 (green) and
+     1.93:1 (amber) — all below the AA 4.5:1 floor at 14px. The badge
+     text therefore uses a darker step of the same hue per role
+     theme (7.15:1 / 6.49:1 / 6.37:1 / 7.57:1); the accent keeps
+     carrying buttons, tiles and headings as before. */
+  --badge-text: #1e40af;
   --green: #16a34a;
   --amber: #f59e0b;
   --red: #dc2626;
@@ -69,24 +76,28 @@ select {
   --role-accent: #2563eb;
   --role-soft: #dbeafe;
   --role-contrast: #ffffff;
+  --badge-text: #1e40af;
 }
 
 .app.role-receiving {
   --role-accent: #16a34a;
   --role-soft: #dcfce7;
   --role-contrast: #ffffff;
+  --badge-text: #166534;
 }
 
 .app.role-delivery {
   --role-accent: #f59e0b;
   --role-soft: #fef3c7;
   --role-contrast: #111827;
+  --badge-text: #92400e;
 }
 
 .app.role-customer {
   --role-accent: #7c3aed;
   --role-soft: #ede9fe;
   --role-contrast: #ffffff;
+  --badge-text: #5b21b6;
 }
 
 .publicIntakePage {
@@ -470,7 +481,7 @@ nav,
 .badge {
   border-radius: 999px;
   background: var(--role-soft);
-  color: var(--role-accent);
+  color: var(--badge-text);
   padding: 8px 12px;
   font-weight: 800;
   max-width: 100%;
@@ -993,6 +1004,74 @@ nav,
   color: #92400e;
 }
 
+/* Round 1 PR-12 (C-M15 + R2): semantic status tones. Colour now
+   carries the state, not the signed-in role: the mapping from a
+   status string to a tone lives in ui/status-tone.ts and every
+   status pill renders with one of these classes. Pairs are fixed
+   (role-independent) and each measures at least 4.5:1 at the pill's
+   14px/800 text — success 8.30:1, progress 8.49:1, attention
+   6.37:1, problem 6.80:1, neutral 8.40:1 (recomputed from this
+   file by tests/web/status-tone.test.ts). `.badge.warning` above
+   predates the tone system and is the attention pair under its
+   legacy name; it is kept so any unconverted site stays consistent. */
+.badge.tone-success {
+  background: #dcfce7;
+  color: #14532d;
+}
+
+.badge.tone-progress {
+  background: #dbeafe;
+  color: #1e3a8a;
+}
+
+.badge.tone-attention {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.badge.tone-problem {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.badge.tone-neutral {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+/* Round 1 PR-12 (C-M16 via R1): the Profitability Report's totals
+   are the screen's headline figures — first in the results, largest
+   type on the panel, full-contrast — instead of a small muted line
+   at the foot of the page. Labels and figures are unchanged. */
+.reportTotals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.reportTotals > div {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+  padding: 10px 14px;
+  display: grid;
+  gap: 2px;
+}
+
+.reportTotals span {
+  color: var(--muted);
+  font-size: var(--font-caption);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.reportTotals strong {
+  color: var(--text);
+  font-size: var(--font-metric);
+  line-height: 1.1;
+}
+
 .panel,
 .metric {
   background: var(--panel);
@@ -1072,6 +1151,16 @@ nav,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Round 1 PR-12 (C-M14): on billing invoice rows the badges are
+   money figures and a status — they keep their full width at
+   every screen width. The shared cap above ellipsises a
+   seven-figure total ("PHP 1,234,567.89") even on desktop, the
+   same clipping class as the balance line the finding names;
+   the Reports margin badge already holds this rule inline. */
+.compactDataRow.invoiceRow .compactRowMeta .badge {
+  max-width: none;
 }
 
 .cargoListMeta {
@@ -4546,6 +4635,36 @@ textarea {
     min-width: 0;
     justify-content: flex-start;
   }
+
+  /* Round 1 PR-12 (C-M14; A-F1 = B-F5 = C-F9): billing invoice rows
+     carry two badges in .compactRowMeta, and at phone widths the
+     meta column squeezes the info column until the "Due … /
+     Balance PHP …" line ellipsises — the balance, the figure
+     collections acts on, is exactly what gets cut. Same restack
+     as the worklist rows above: info full width on top, badges on
+     their own line below, and the due/balance line may wrap
+     instead of ellipsising so the full figure always renders. */
+  .compactDataRow.invoiceRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .compactDataRow.invoiceRow .compactRowMeta {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-width: 0;
+    justify-content: flex-start;
+  }
+
+  .compactDataRow.invoiceRow .invoiceMetaLine {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+
+  /* (Invoice badges keep their full width at phone widths too —
+     the general .invoiceRow rule above the media queries covers
+     every width; the meta row wraps them onto a second line.) */
 
   .paymentEntryGrid {
     grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
