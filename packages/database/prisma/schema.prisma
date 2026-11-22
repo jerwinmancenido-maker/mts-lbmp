@@ -226,6 +226,7 @@ model ReceivingRecord {
   drPhotoAttachReason  String?
   originBranchId       String?
   destination          String?
+  editVersion          Int                     @default(0)
   status               String                @default("Received")
   receivedById         String?
   receivedAt           DateTime              @default(now())

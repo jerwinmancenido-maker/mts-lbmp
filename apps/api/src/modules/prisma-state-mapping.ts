@@ -154,6 +154,7 @@ export interface ReceivingRecordRow {
   drPhotoAttachReason: string | null;
   originBranchId: string | null;
   destination: string | null;
+  editVersion: number;
   status: string;
   receivedById: string | null;
   receivedAt: DateValue;
@@ -719,6 +720,7 @@ export function stateToRows(state: ServiceState): PrismaStateRows {
       drPhotoAttachReason: record.drPhotoAttachReason ?? null,
       originBranchId: null,
       destination: record.destination,
+      editVersion: record.editVersion ?? 0,
       status: "Received",
       receivedById: null,
       receivedAt: new Date(record.createdAt),
@@ -1149,6 +1151,7 @@ export function rowsToState(rows: PrismaStateRows): LoadedServiceState {
       sender: record.sender ?? undefined,
       consignee: record.consignee ?? undefined,
       destination: record.destination ?? "",
+      editVersion: record.editVersion ? record.editVersion : undefined,
       drPhotoUrl: record.customerDrPhotoUrl ?? undefined,
       drPhotoAttachedAt: record.drPhotoAttachedAt ? toIso(record.drPhotoAttachedAt) : undefined,
       drPhotoAttachReason: record.drPhotoAttachReason ?? undefined,
