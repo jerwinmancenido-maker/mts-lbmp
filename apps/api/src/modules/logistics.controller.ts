@@ -131,16 +131,25 @@ export class LogisticsController {
     return this.logistics.updateUserBranchAccess(id, body);
   }
 
+  // Round 1 PR-5 (C-M6): the acting user's id rides along (the same
+  // pattern as reset-password below) because the service reserves
+  // branch-owner provisioning to a System Admin actor — the
+  // users.manage gate alone also admits the owner presets, who manage
+  // their own branch's staff but do not mint owners.
   @Post("settings/users")
   @RequirePermissions("users.manage")
-  createStaffUser(@Body() body: Parameters<LogisticsService["createStaffUser"]>[0]) {
-    return this.logistics.createStaffUser(body);
+  createStaffUser(@Req() request: { user?: { id?: string } }, @Body() body: Parameters<LogisticsService["createStaffUser"]>[0]) {
+    return this.logistics.createStaffUser(body, request.user?.id);
   }
 
   @Patch("settings/users/:id")
   @RequirePermissions("users.manage")
-  updateStaffUser(@Param("id") id: string, @Body() body: Parameters<LogisticsService["updateStaffUser"]>[1]) {
-    return this.logistics.updateStaffUser(id, body);
+  updateStaffUser(
+    @Req() request: { user?: { id?: string } },
+    @Param("id") id: string,
+    @Body() body: Parameters<LogisticsService["updateStaffUser"]>[1]
+  ) {
+    return this.logistics.updateStaffUser(id, body, request.user?.id);
   }
 
   /** Phase 5 P5-2: admin password reset (temporary password + forced change + session revocation). */
