@@ -163,6 +163,106 @@ function queryMatches(values: unknown[], search?: string) {
   return values.some((value) => String(value ?? "").toLowerCase().includes(query));
 }
 
+/**
+ * Round 1 fix loop PR-10 (C-M12; filed as L25-F2) — typo-tolerant
+ * fallback tier for staff search. Every list search in this service was
+ * substring-only, so a one-letter typo ("Findabilty" for "Findability")
+ * returned zero records and staff concluded the record did not exist.
+ *
+ * The tiering rule (applySearchTiers): the substring tier runs first
+ * and its results are returned untouched — same records, same order —
+ * whenever it finds anything. The fuzzy tier runs ONLY when the
+ * substring tier found nothing, so a correctly-spelled search can never
+ * gain or lose a record because of this code.
+ *
+ * Fuzzy matching mirrors queryMatches' shape (the whole query must be
+ * satisfied inside ONE field value) but compares word tokens instead of
+ * the raw string: every query token must match a token of that value by
+ * equality, by containment (partial typing: "mot" inside "motors"), or
+ * by a bounded Damerau edit distance — at most ONE edit (substitution,
+ * insertion, deletion or transposition) for tokens of 4+ chars, none
+ * for tokens under 4 chars (short tokens stay strict so "san" cannot
+ * pull in "Sam", and a two-letter garble never matches anything).
+ * Typo tolerance
+ * applies to words only: purely numeric tokens (document fragments,
+ * phone digits) match by equality/containment alone, so a mistyped
+ * digit can never surface the wrong package or customer.
+ */
+function searchTokens(value: unknown): string[] {
+  return String(value ?? "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+function maxFuzzyEdits(tokenLength: number): number {
+  return tokenLength < 4 ? 0 : 1;
+}
+
+/** Bounded Damerau (optimal string alignment) distance check. */
+function withinEditDistance(a: string, b: string, maxEdits: number): boolean {
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > maxEdits) return false;
+  let twoRowsBack: number[] | undefined;
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    const current = new Array<number>(b.length + 1);
+    current[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      // Rows are fully populated for indices 0..b.length by
+      // construction, so the ?? 0 fallbacks below never engage; they
+      // only satisfy noUncheckedIndexedAccess.
+      const substitutionCost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let best = Math.min((previous[j] ?? 0) + 1, (current[j - 1] ?? 0) + 1, (previous[j - 1] ?? 0) + substitutionCost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        best = Math.min(best, (twoRowsBack?.[j - 2] ?? 0) + 1);
+      }
+      current[j] = best;
+    }
+    twoRowsBack = previous;
+    previous = current;
+  }
+  return (previous[b.length] ?? Number.POSITIVE_INFINITY) <= maxEdits;
+}
+
+function searchTokenMatches(queryToken: string, fieldToken: string): boolean {
+  if (queryToken === fieldToken) return true;
+  // Partial typing only in this direction: the query token is a piece
+  // of the field token ("mot" inside "motors"). The reverse — a query
+  // token that merely CONTAINS a field token — is deliberately not a
+  // match: "findxbilty" contains "find", and record ids tokenize to
+  // fragments like that, which would rescue a two-letter garble
+  // through an unrelated field.
+  if (queryToken.length >= 3 && fieldToken.includes(queryToken)) return true;
+  if (!/[a-z]/.test(queryToken) || !/[a-z]/.test(fieldToken)) return false;
+  const maxEdits = Math.min(maxFuzzyEdits(queryToken.length), maxFuzzyEdits(fieldToken.length));
+  if (maxEdits === 0) return false;
+  return withinEditDistance(queryToken, fieldToken, maxEdits);
+}
+
+function queryFuzzyMatches(values: unknown[], search?: string) {
+  const queryTokens = searchTokens(search?.trim());
+  if (!queryTokens.length) return false;
+  return values.some((value) => {
+    const fieldTokens = searchTokens(value);
+    if (!fieldTokens.length) return false;
+    return queryTokens.every((queryToken) => fieldTokens.some((fieldToken) => searchTokenMatches(queryToken, fieldToken)));
+  });
+}
+
+/**
+ * Two-tier search filter shared by every list method: substring tier
+ * first (identical predicate and order to the pre-PR-10 behaviour);
+ * the typo-tolerant tier only when the substring tier is empty.
+ */
+function applySearchTiers<T>(records: T[], valuesOf: (record: T) => unknown[], search?: string): T[] {
+  const query = search?.trim();
+  if (!query) return records;
+  const substringTier = records.filter((record) => queryMatches(valuesOf(record), query));
+  if (substringTier.length > 0) return substringTier;
+  return records.filter((record) => queryFuzzyMatches(valuesOf(record), query));
+}
+
 function statusMatches(status: string | undefined, filter?: string) {
   const filters = filter?.split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean) ?? [];
   if (!filters.length) return true;
@@ -1127,50 +1227,50 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   }
 
   listPackages(query: ListQuery = {}, user?: AuthContext) {
-    const records = this.packages.filter((pkg) =>
+    const scoped = this.packages.filter((pkg) =>
       // Phase 5 P5-3: the caller's stored branchAccess scopes the list on
       // the server (audit §2.1/§2.3 — this endpoint previously returned
       // every package in the company to any authenticated token).
       this.branchVisibleTo(user, [pkg.handlingBranchName, pkg.destination]) &&
       statusMatches(pkg.status, query.status) &&
-      branchMatches(query.branch, [pkg.handlingBranchName, pkg.destination]) &&
-      queryMatches([
-        pkg.id,
-        pkg.packageNumber,
-        pkg.receivingRecordNumber,
-        pkg.customerName,
-        pkg.description,
-        pkg.consigneeName,
-        pkg.destination,
-        pkg.handlingBranchName,
-        pkg.city,
-        pkg.status,
-        pkg.price
-      ], query.search)
+      branchMatches(query.branch, [pkg.handlingBranchName, pkg.destination])
     );
+    const records = applySearchTiers(scoped, (pkg) => [
+      pkg.id,
+      pkg.packageNumber,
+      pkg.receivingRecordNumber,
+      pkg.customerName,
+      pkg.description,
+      pkg.consigneeName,
+      pkg.destination,
+      pkg.handlingBranchName,
+      pkg.city,
+      pkg.status,
+      pkg.price
+    ], query.search);
     return applyCursorAndLimit(records, query);
   }
 
   listTrips(query: ListQuery = {}, user?: AuthContext) {
-    const records = this.trips.filter((trip) =>
+    const scoped = this.trips.filter((trip) =>
       // Phase 5 P5-3 branch scoping: a trip touches both endpoint
       // branches, so it is visible when either is in the caller's access.
       this.branchVisibleTo(user, [trip.origin, trip.destination]) &&
       statusMatches(trip.status, query.status) &&
-      branchMatches(query.branch, [trip.destination]) &&
-      queryMatches([
-        trip.id,
-        trip.tripNumber,
-        trip.origin,
-        trip.destination,
-        trip.status,
-        trip.vehicleDescription,
-        trip.plateNumber,
-        trip.driverName,
-        trip.driverContactNumber,
-        trip.truckOwnerName
-      ], query.search)
+      branchMatches(query.branch, [trip.destination])
     );
+    const records = applySearchTiers(scoped, (trip) => [
+      trip.id,
+      trip.tripNumber,
+      trip.origin,
+      trip.destination,
+      trip.status,
+      trip.vehicleDescription,
+      trip.plateNumber,
+      trip.driverName,
+      trip.driverContactNumber,
+      trip.truckOwnerName
+    ], query.search);
     return applyCursorAndLimit(records, query);
   }
 
@@ -1237,52 +1337,58 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   }
 
   listPayments(query: ListQuery = {}, user?: AuthContext) {
-    const records = this.payments.filter((payment) => {
+    const scoped = this.payments.filter((payment) => {
       const cargo = this.packages.find((pkg) => pkg.id === payment.cargoPackageId);
       return this.branchVisibleTo(user, [payment.branchName, cargo?.handlingBranchName, cargo?.destination]) &&
         statusMatches(payment.status, query.status) &&
-        branchMatches(query.branch, [payment.branchName, cargo?.handlingBranchName, cargo?.destination]) &&
-        queryMatches([
-          payment.id,
-          payment.cargoPackageId,
-          payment.amountDue,
-          payment.amountPaid,
-          payment.balance,
-          payment.method,
-          payment.status,
-          payment.collectionPoint,
-          payment.collectedByName,
-          cargo?.packageNumber,
-          cargo?.receivingRecordNumber,
-          cargo?.customerName,
-          cargo?.description
-        ], query.search);
+        branchMatches(query.branch, [payment.branchName, cargo?.handlingBranchName, cargo?.destination]);
     });
+    const records = applySearchTiers(scoped, (payment) => {
+      const cargo = this.packages.find((pkg) => pkg.id === payment.cargoPackageId);
+      return [
+        payment.id,
+        payment.cargoPackageId,
+        payment.amountDue,
+        payment.amountPaid,
+        payment.balance,
+        payment.method,
+        payment.status,
+        payment.collectionPoint,
+        payment.collectedByName,
+        cargo?.packageNumber,
+        cargo?.receivingRecordNumber,
+        cargo?.customerName,
+        cargo?.description
+      ];
+    }, query.search);
     return applyCursorAndLimit(records, query);
   }
 
   listExpenses(query: ListQuery = {}, user?: AuthContext) {
-    const records = this.expenses.filter((expense) => {
+    const scoped = this.expenses.filter((expense) => {
       const trip = expense.tripId ? this.trips.find((entry) => entry.id === expense.tripId) : undefined;
       // Phase 5 P5-3 branch scoping via the expense's trip; a trip-less
       // expense has no branch attribution and stays visible (see the
       // branchVisibleTo rule).
       return this.branchVisibleTo(user, [trip?.origin, trip?.destination]) &&
         statusMatches(expense.status, query.status) &&
-        branchMatches(query.branch, [trip?.destination]) &&
-        queryMatches([
-          expense.id,
-          expense.category,
-          expense.amount,
-          expense.description,
-          expense.status,
-          expense.tripId,
-          trip?.tripNumber,
-          trip?.destination,
-          trip?.plateNumber,
-          trip?.driverName
-        ], query.search);
+        branchMatches(query.branch, [trip?.destination]);
     });
+    const records = applySearchTiers(scoped, (expense) => {
+      const trip = expense.tripId ? this.trips.find((entry) => entry.id === expense.tripId) : undefined;
+      return [
+        expense.id,
+        expense.category,
+        expense.amount,
+        expense.description,
+        expense.status,
+        expense.tripId,
+        trip?.tripNumber,
+        trip?.destination,
+        trip?.plateNumber,
+        trip?.driverName
+      ];
+    }, query.search);
     return applyCursorAndLimit(records, query);
   }
 
@@ -1943,10 +2049,8 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   }
 
   listAuditLogs(query: ListQuery = {}) {
-    const records = [...this.auditLogs].reverse().filter((log) =>
-      statusMatches(log.entityType, query.status) &&
-      queryMatches([log.id, log.action, log.entityType, log.entityId, log.reason, log.createdAt], query.search)
-    );
+    const scoped = [...this.auditLogs].reverse().filter((log) => statusMatches(log.entityType, query.status));
+    const records = applySearchTiers(scoped, (log) => [log.id, log.action, log.entityType, log.entityId, log.reason, log.createdAt], query.search);
     return applyCursorAndLimit(records, query);
   }
 
@@ -2475,20 +2579,18 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   }
 
   listProductMasters(query: ListQuery = {}) {
-    const records = this.productMasters.filter((product) =>
-      product.status !== "Archived" &&
-      queryMatches([
-        product.id,
-        product.name,
-        product.sku,
-        product.barcode,
-        product.category,
-        product.brand,
-        product.defaultUnit,
-        product.defaultPrice,
-        product.notes
-      ], query.search)
-    );
+    const scoped = this.productMasters.filter((product) => product.status !== "Archived");
+    const records = applySearchTiers(scoped, (product) => [
+      product.id,
+      product.name,
+      product.sku,
+      product.barcode,
+      product.category,
+      product.brand,
+      product.defaultUnit,
+      product.defaultPrice,
+      product.notes
+    ], query.search);
     return applyCursorAndLimit(records, query);
   }
 
@@ -3332,27 +3434,22 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   }
 
   listReceivingIntakeTasks(query: ListQuery = {}, user?: AuthContext) {
-    const sorted = [...this.receivingIntakeTasks]
+    const scoped = [...this.receivingIntakeTasks]
       // Phase 5 P5-3 branch scoping by the task's destination branch.
       .filter((task) => this.branchVisibleTo(user, [task.destinationBranch]))
       .filter((task) => statusMatches(task.status, query.status))
-      .filter((task) => branchMatches(query.branch, [task.destinationBranch]))
-      .filter((task) =>
-        queryMatches(
-          [
-            task.intakeNumber,
-            task.customerNameTyped,
-            task.customerDrNumber,
-            task.dropOffPerson,
-            task.consigneeName,
-            task.destinationBranch,
-            task.deliveryArea,
-            task.itemDescription,
-            task.status
-          ],
-          query.search
-        )
-      )
+      .filter((task) => branchMatches(query.branch, [task.destinationBranch]));
+    const sorted = applySearchTiers(scoped, (task) => [
+      task.intakeNumber,
+      task.customerNameTyped,
+      task.customerDrNumber,
+      task.dropOffPerson,
+      task.consigneeName,
+      task.destinationBranch,
+      task.deliveryArea,
+      task.itemDescription,
+      task.status
+    ], query.search)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     return applyCursorAndLimit(sorted, query);
   }
