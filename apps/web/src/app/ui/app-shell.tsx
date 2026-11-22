@@ -2935,14 +2935,25 @@ function OwnerSettings({
     const branchNames = operationalBranchNames(bootstrap?.branches ?? []);
     return ["All branches", "Origin Warehouse", "Daet / Naga", ...branchNames];
   }, [bootstrap?.branches]);
-  const staffRoleOptions = ["Receiving Staff", "Delivery Staff", "Delivery Admin"];
+  // Round 1 PR-5b (C-M6): PR-5 opened the API user lifecycle to branch
+  // owner provisioning for System Admin actors only, so the role
+  // dropdown offers the owner presets only to a System Admin (or the
+  // legacy "Administrator" alias). Every other signed-in role keeps the
+  // staff-only list exactly as before. An owner's branch access is its
+  // preset's branch — never a wider grant — so the map below drives
+  // both the option list and the branch-access lock in the forms.
+  const isSystemAdmin = ["Administrator", "System Admin"].includes(activeUser.role);
+  const ownerBranchByRole: Record<string, string> = { "Daet Owner": "Daet", "Naga Owner": "Naga" };
+  const staffRoleOptions = isSystemAdmin
+    ? ["Receiving Staff", "Delivery Staff", "Delivery Admin", ...Object.keys(ownerBranchByRole)]
+    : ["Receiving Staff", "Delivery Staff", "Delivery Admin"];
 
   async function createStaffFromSettings() {
     await apiPost("/settings/users", {
       name: newStaffName,
       phone: newStaffPhone,
       role: newStaffRole,
-      branchAccess: newStaffBranchAccess,
+      branchAccess: ownerBranchByRole[newStaffRole] ?? newStaffBranchAccess,
       staffCode: newStaffCode || undefined,
       password: newStaffPassword.trim() || undefined,
       status: "Active"
@@ -3082,8 +3093,8 @@ function OwnerSettings({
           <div className="formGrid">
             <label>Full Name<input value={newStaffName} onChange={(event) => setNewStaffName(event.target.value)} placeholder="Example: Juan Delivery" /></label>
             <label>Mobile Number<input value={newStaffPhone} onChange={(event) => setNewStaffPhone(event.target.value)} placeholder="" /></label>
-            <label>Role<select value={newStaffRole} onChange={(event) => setNewStaffRole(event.target.value)}>{staffRoleOptions.map((role) => <option key={role}>{role}</option>)}</select></label>
-            <label>Branch Access<select value={newStaffBranchAccess} onChange={(event) => setNewStaffBranchAccess(event.target.value)}>{branchAccessOptions.map((option) => <option key={option}>{option}</option>)}</select></label>
+            <label>Role<select value={newStaffRole} onChange={(event) => { const role = event.target.value; setNewStaffRole(role); const ownerBranch = ownerBranchByRole[role]; if (ownerBranch) setNewStaffBranchAccess(ownerBranch); }}>{staffRoleOptions.map((role) => <option key={role}>{role}</option>)}</select></label>
+            <label>Branch Access<select value={newStaffBranchAccess} disabled={Boolean(ownerBranchByRole[newStaffRole])} onChange={(event) => setNewStaffBranchAccess(event.target.value)}>{branchAccessOptions.map((option) => <option key={option}>{option}</option>)}</select></label>
             <label>Staff PIN<input value={newStaffCode} onChange={(event) => setNewStaffCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="4-6 digits (optional if password set)" /></label>
             <label>Initial Password<input type="password" value={newStaffPassword} onChange={(event) => setNewStaffPassword(event.target.value)} autoComplete="new-password" placeholder="Optional, min 8 characters" /></label>
           </div>
@@ -3095,6 +3106,8 @@ function OwnerSettings({
           {bootstrap?.users.map((user) => {
             const canEdit = activeUser.role === "System Admin" || user.id === activeUser.id || user.role.includes("Staff");
             const editableRole = staffRoleOptions.includes(user.role);
+            const selectedRole = userRoleSelections[user.id] ?? user.role;
+            const selectedOwnerBranch = ownerBranchByRole[selectedRole];
             return (
               <div className="row editableRow" key={user.id}>
                 <UserCog />
@@ -3107,9 +3120,14 @@ function OwnerSettings({
                 <label>
                   Role
                   <select
-                    value={userRoleSelections[user.id] ?? user.role}
+                    value={selectedRole}
                     disabled={!canEdit || !editableRole}
-                    onChange={(event) => setUserRoleSelections((values) => ({ ...values, [user.id]: event.target.value }))}
+                    onChange={(event) => {
+                      const role = event.target.value;
+                      setUserRoleSelections((values) => ({ ...values, [user.id]: role }));
+                      const ownerBranch = ownerBranchByRole[role];
+                      if (ownerBranch) setUserBranchSelections((values) => ({ ...values, [user.id]: ownerBranch }));
+                    }}
                   >
                     {(editableRole ? staffRoleOptions : [user.role]).map((role) => <option key={role}>{role}</option>)}
                   </select>
@@ -3117,8 +3135,8 @@ function OwnerSettings({
                 <label>
                   Branch Access
                   <select
-                    value={userBranchSelections[user.id] ?? user.branchAccess ?? "Daet / Naga"}
-                    disabled={!canEdit}
+                    value={selectedOwnerBranch ?? userBranchSelections[user.id] ?? user.branchAccess ?? "Daet / Naga"}
+                    disabled={!canEdit || Boolean(selectedOwnerBranch)}
                     onChange={(event) => setUserBranchSelections((values) => ({ ...values, [user.id]: event.target.value }))}
                   >
                     {branchAccessOptions.map((option) => <option key={option}>{option}</option>)}
@@ -3151,8 +3169,8 @@ function OwnerSettings({
                   onClick={() =>
                     onAction("Save staff access", () =>
                       apiPatch(`/settings/users/${user.id}`, {
-                        role: editableRole ? userRoleSelections[user.id] ?? user.role : user.role,
-                        branchAccess: userBranchSelections[user.id] ?? user.branchAccess,
+                        role: editableRole ? selectedRole : user.role,
+                        branchAccess: selectedOwnerBranch ?? userBranchSelections[user.id] ?? user.branchAccess,
                         status: userStatusSelections[user.id] ?? user.status ?? "Active",
                         staffCode: userStaffCodeUpdates[user.id] || undefined
                       })
