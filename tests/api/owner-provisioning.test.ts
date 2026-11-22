@@ -37,6 +37,16 @@ import type { CargoPackage, PaymentRecord, StaffUserRecord } from "../../apps/ap
  *   owner role via updateStaffUser; the promotion narrows branchAccess
  *   to the preset branch and bumps sessionVersion (the promoted user's
  *   old token dies). Staff-role edits behave exactly as before.
+ *
+ * PR-5c addendum (re-walk 3, probes M5a/M5b/M5c): preset scope is now
+ * enforced on EVERY write to an owner record, not only when the role
+ * is assigned. Re-walk 3 proved live that an admin could widen a Daet
+ * Owner to "Daet / Naga" via updateStaffUser with the role unchanged
+ * (M5a) and via PATCH /settings/users/:id/branch-access (M5b), and
+ * that the owner could widen their OWN record through that endpoint
+ * (M5c). All three are refused below, with the stored grant verified
+ * unchanged on read-back; in-scope owner edits and staff grants
+ * through both paths are unchanged.
  */
 
 type ServiceInternals = {
@@ -410,6 +420,98 @@ describe("update path: assigning an owner role is a System Admin act", () => {
     const moved = service.updateStaffUser(staff.id, { role: "Delivery Staff" });
     expect(moved.role).toBe("Delivery Staff");
     expect(internals(service).customUsers.find((user) => user.id === staff.id)?.permissionPreset).toBe("Delivery Staff");
+
+    await service.onModuleDestroy();
+  });
+});
+
+describe("PR-5c: owner preset scope is enforced on every write (re-walk 3, M5a/M5b/M5c)", () => {
+  async function bootWithOwner() {
+    const service = await bootService();
+    const admin = seedAdmin(service);
+    const owner = service.createStaffUser(
+      { name: "Scoped Owner", email: "scoped.owner@example.test", role: "Daet Owner", branchAccess: "Daet", password: "owner-temp-5" },
+      admin.id
+    );
+    const storedAccess = () => internals(service).customUsers.find((user) => user.id === owner.id)?.branchAccess;
+    return { service, admin, owner, storedAccess };
+  }
+
+  test("M5a: updateStaffUser cannot widen an owner with the role unchanged — refused, stored grant unchanged", async () => {
+    const { service, admin, owner, storedAccess } = await bootWithOwner();
+
+    // Role re-supplied unchanged, and role omitted entirely — both
+    // forms of the re-walk's probe hit the same rule.
+    for (const input of [
+      { role: "Daet Owner", branchAccess: "Daet / Naga" },
+      { branchAccess: "Daet / Naga" },
+      { branchAccess: "All branches" },
+      { branchAccess: "Naga" }
+    ]) {
+      expect(() => service.updateStaffUser(owner.id, input, admin.id)).toThrow("Daet Owner accounts are scoped to the Daet branch");
+      expect(storedAccess()).toBe("Daet");
+    }
+
+    await service.onModuleDestroy();
+  });
+
+  test("M5b/M5c: the branch-access endpoint cannot widen an owner — not by an admin, not by the owner themself", async () => {
+    const { service, admin, owner, storedAccess } = await bootWithOwner();
+
+    expect(() => service.updateUserBranchAccess(owner.id, { branchAccess: "Daet / Naga" }, admin.id)).toThrow(
+      "Daet Owner accounts are scoped to the Daet branch"
+    );
+    expect(storedAccess()).toBe("Daet");
+
+    // The owner holds users.manage under CR-006, so the endpoint is
+    // reachable with their own id as the actor — the scope rule, not
+    // the caller's identity, is what refuses the self-widening.
+    expect(() => service.updateUserBranchAccess(owner.id, { branchAccess: "Daet / Naga" }, owner.id)).toThrow(
+      "Daet Owner accounts are scoped to the Daet branch"
+    );
+    expect(() => service.updateUserBranchAccess(owner.id, { branchAccess: "Naga" }, owner.id)).toThrow(
+      "Daet Owner accounts are scoped to the Daet branch"
+    );
+    expect(storedAccess()).toBe("Daet");
+
+    await service.onModuleDestroy();
+  });
+
+  test("in-scope owner edits still work: preset branch supplied, and edits that supply no branchAccess", async () => {
+    const { service, admin, owner, storedAccess } = await bootWithOwner();
+
+    const viaUpdate = service.updateStaffUser(owner.id, { branchAccess: "Daet" }, admin.id);
+    expect(viaUpdate.branchAccess).toBe("Daet");
+    const viaEndpoint = service.updateUserBranchAccess(owner.id, { branchAccess: "Daet" }, admin.id);
+    expect(viaEndpoint.branchAccess).toBe("Daet");
+
+    // A name/phone edit that never mentions branchAccess is untouched
+    // by the scope rule — the stored grant stays the preset branch.
+    const renamed = service.updateStaffUser(owner.id, { name: "Renamed Owner", phone: "0917 555 0101" }, admin.id);
+    expect(renamed.name).toBe("Renamed Owner");
+    expect(storedAccess()).toBe("Daet");
+
+    await service.onModuleDestroy();
+  });
+
+  test("staff grants through both paths are unchanged, and demoting an owner to a staff role still works", async () => {
+    const { service, admin, owner, storedAccess } = await bootWithOwner();
+    void storedAccess;
+    const staff = service.createStaffUser(
+      { name: "Wide Staff", email: "wide.staff@example.test", role: "Receiving Staff", branchAccess: "Daet", staffCode: "3344" },
+      admin.id
+    );
+
+    const widened = service.updateStaffUser(staff.id, { branchAccess: "Daet / Naga" }, admin.id);
+    expect(widened.branchAccess).toBe("Daet / Naga");
+    const widenedViaEndpoint = service.updateUserBranchAccess(staff.id, { branchAccess: "All branches" }, admin.id);
+    expect(widenedViaEndpoint.branchAccess).toBe("All branches");
+
+    // Demotion: the resulting role is a staff role, so a wide grant in
+    // the same edit is a staff grant — allowed exactly as before.
+    const demoted = service.updateStaffUser(owner.id, { role: "Receiving Staff", branchAccess: "Daet / Naga" }, admin.id);
+    expect(demoted.role).toBe("Receiving Staff");
+    expect(demoted.branchAccess).toBe("Daet / Naga");
 
     await service.onModuleDestroy();
   });

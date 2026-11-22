@@ -2068,16 +2068,26 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     if (!user) throw new NotFoundException("User not found");
     const branchAccess = input.branchAccess?.trim();
     if (!branchAccess) throw new BadRequestException("Branch access is required");
+    // Round 1 PR-5c (C-M6, re-walk 3 probes M5b/M5c): an owner-preset
+    // target may only ever hold its preset's branch through this
+    // endpoint too — whoever the caller is. Before this check the
+    // endpoint wrote any non-empty grant onto any record, so an admin
+    // could widen an owner past their preset, and an owner (a
+    // users.manage holder under CR-006) could widen their OWN record.
+    // Wider or foreign grants are refused with the creation rule's
+    // wording and nothing is written; an in-scope grant stores the
+    // canonical preset branch, exactly as at creation.
+    const effectiveBranchAccess = OWNER_ROLE_BRANCH[user.role] ? this.ownerBranchAccess(user.role, branchAccess) : branchAccess;
     // Phase 5 P5-4 (CR-007): the value is written onto the user record
     // itself — branchAccess on the record is the single source of truth
     // (the separate override map this method used to write is deleted).
     const record = this.findUserRecord(userId);
     const previousBranchAccess = record?.branchAccess ?? user.branchAccess;
-    if (record) record.branchAccess = branchAccess;
-    this.audit("settings.user.branchAccess.update", "User", userId, branchAccess, {
+    if (record) record.branchAccess = effectiveBranchAccess;
+    this.audit("settings.user.branchAccess.update", "User", userId, effectiveBranchAccess, {
       actor: this.auditActorForId(actorUserId),
       before: { branchAccess: previousBranchAccess },
-      after: { branchAccess }
+      after: { branchAccess: effectiveBranchAccess }
     });
     this.saveData();
     const updated = this.getAllUsers().find((entry) => entry.id === userId)!;
@@ -2248,6 +2258,24 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       ownerBranchAssigned = this.ownerBranchAccess(input.role, input.branchAccess);
     }
 
+    // Round 1 PR-5c (C-M6, re-walk 3 probe M5a): preset scope is a rule
+    // about the account, not only about the moment its role is assigned.
+    // An edit that supplies a branchAccess while the account's RESULTING
+    // role is an owner preset — already an owner with the role untouched
+    // or re-supplied unchanged — must name exactly the preset's branch;
+    // anything wider is refused here, before anything mutates, with the
+    // creation rule's wording. (Re-walk 3 proved the gap live: an admin
+    // widened a Daet Owner to "Daet / Naga" with the role unchanged and
+    // the wider grant stuck.) The canonical stored value is the preset
+    // branch, exactly as ownerBranchAccess returns it at creation.
+    let suppliedOwnerBranch: string | undefined;
+    if (input.branchAccess?.trim() && !ownerBranchAssigned) {
+      const resultingRole = input.role && STAFF_CREATABLE_ROLES.includes(input.role) ? input.role : user.role;
+      if (OWNER_ROLE_BRANCH[resultingRole]) {
+        suppliedOwnerBranch = this.ownerBranchAccess(resultingRole, input.branchAccess);
+      }
+    }
+
     if (input.name?.trim()) user.name = input.name.trim();
     if (input.phone !== undefined) user.phone = input.phone.trim() || undefined;
     if (input.email !== undefined) user.email = input.email.trim() || undefined;
@@ -2279,7 +2307,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (input.branchAccess?.trim() && !ownerBranchAssigned) {
-      user.branchAccess = input.branchAccess.trim();
+      user.branchAccess = suppliedOwnerBranch ?? input.branchAccess.trim();
     }
 
     const { before: changedBefore, after: changedAfter } = diffSnapshots(beforeUser, {
