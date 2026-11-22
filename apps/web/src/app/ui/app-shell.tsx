@@ -40,6 +40,7 @@ import { buildSearchOverlayResults, formatSearchDate, isSearchPermissionError, s
 import { dashboardScopeLabel, dashboardTiles } from "./dashboard-tiles";
 import type { DashboardMetricKey } from "./dashboard-tiles";
 import { statusBadgeClass, toneBadgeClass } from "./status-tone";
+import { receivingBranchCounts, withResolvedLineBranches } from "./receiving-review";
 import { parsePhilippineAddress, readDeliveryReceiptPhoto, type DrOcrConfidence, type DrOcrProgress, type DrOcrResult } from "./dr-ocr";
 import { setPhotoAuditUser, setPhotoUploadContext, takeNativeCameraPhoto, uploadCompressedImage, uploadPathForPhotoType } from "./media";
 import type { PrinterDiagnosticCheck } from "@mts-lbmp/printing";
@@ -4686,6 +4687,12 @@ function Receiving({
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const attachDrPhotoInputRef = useRef<HTMLInputElement | null>(null);
   const productPhotoInputRef = useRef<HTMLInputElement | null>(null);
+  // OBS-L17-V2-1: the Add Product dialog's own photo input. The shared
+  // productPhotoInputRef input is rendered in the receive-form subtree
+  // and is unmounted while the Products dialog is open, so the dialog's
+  // button silently no-opped on web; this ref's input mounts with the
+  // dialog itself.
+  const productDialogPhotoInputRef = useRef<HTMLInputElement | null>(null);
   const receivingPaymentProofInputRef = useRef<HTMLInputElement | null>(null);
   const barcodeInputRef = useRef<HTMLInputElement | null>(null);
   const autoFilledPriceRef = useRef<string | null>(null);
@@ -5804,7 +5811,11 @@ function Receiving({
     setDescription(state.description ?? "");
     setQuantity(state.quantity ?? "1");
     setUnit(state.unit ?? "pcs");
-    setHandlingBranchName(state.handlingBranchName ?? draft.destination ?? "");
+    // OBS-L1R-01: the draft/session branch context — the form state's
+    // branch, else the draft's destination. Restored lines resolve
+    // against the same value below.
+    const resolvedDraftBranch = state.handlingBranchName ?? draft.destination ?? "";
+    setHandlingBranchName(resolvedDraftBranch);
     setDeliveryType(state.deliveryType ?? "Deliver to consignee");
     setDeliverySummary(state.deliverySummary ?? "");
     setAutoAddressNotice("");
@@ -5848,7 +5859,12 @@ function Receiving({
     setReceivingPaymentReference(state.receivingPaymentReference ?? "");
     setReceivingPaymentProofUrl(state.receivingPaymentProofUrl ?? "");
     setReceivingPaymentNotes(state.receivingPaymentNotes ?? "");
-    setProductLines(draft.productLines ?? []);
+    // OBS-L1R-01: drafts are stored verbatim, so a stored line may
+    // carry no branch (API-created drafts can omit it). Fill those
+    // from the draft/session branch context as the draft is composed
+    // into the form — the review, the items list and the save payload
+    // all read the line's branch from here.
+    setProductLines(withResolvedLineBranches(draft.productLines ?? [], resolvedDraftBranch));
   }
 
   function resumeDraft(draft: ReceivingDraftRecord) {
@@ -6506,10 +6522,11 @@ function Receiving({
     }, 50);
   }
 
-  const productBranchCounts = productsToSave.reduce<Record<string, number>>((counts, line) => {
-    counts[line.handlingBranchName] = (counts[line.handlingBranchName] ?? 0) + 1;
-    return counts;
-  }, {});
+  // OBS-L1R-01: the review's branch grouping resolves every line's
+  // branch through the session branch context (receiving-review.ts) —
+  // a branchless restored/OCR line can no longer group under the key
+  // "undefined" and render as the branch name.
+  const productBranchCounts = receivingBranchCounts(productsToSave, handlingBranchName);
 
   function getTypedCustomerMatch() {
     const typedName = customerQuery.trim().toLowerCase();
@@ -7354,8 +7371,17 @@ function Receiving({
                     <LongTextField label="Notes" value={productNotes} onChange={setProductNotes} placeholder="Product details" threshold={36} />
                   </div>
                   <div className="buttonGrid">
-                    <button className="actionButton" onClick={() => void capturePhotoOrOpenPicker(productPhotoInputRef, `product-photo-${Date.now()}.jpg`, (file) => attachCurrentProductPhoto(file))}><Camera /> Add Product Image</button>
+                    <button className="actionButton" onClick={() => void capturePhotoOrOpenPicker(productDialogPhotoInputRef, `product-photo-${Date.now()}.jpg`, (file) => attachCurrentProductPhoto(file), setReceiveMessage)}><Camera /> Add Product Image</button>
                   </div>
+                  <input ref={productDialogPhotoInputRef} className="hiddenInput" type="file" accept="image/*" onChange={(event) => {
+                    const inputElement = event.currentTarget;
+                    const file = event.target.files?.[0];
+                    if (!file) {
+                      setReceiveMessage("No product photo selected.");
+                      return;
+                    }
+                    void onAction("Upload product photo", () => attachCurrentProductPhoto(file, inputElement));
+                  }} />
                   {photoUrl && <p className="muted">Product photo attached to this product master entry.</p>}
                 </section>
                 <button
@@ -8702,6 +8728,12 @@ function Packages({
                   onClick={() =>
                     onAction("Load receiving slip", async () => {
                       const result = await apiGet<RenderedDocumentResponse>(`/packages/${selectedCargo.id}/receiving-slip`);
+                      // OBS-L17-V2-2: the PrintPanel renders in the page
+                      // tree, behind this still-open detail modal — the
+                      // preview looked like a no-op until the modal was
+                      // closed by hand. Close the detail first, the same
+                      // flow previewReceivingRecordReceipt uses.
+                      setSelectedPackage("");
                       setReceiptPreview(result.text);
                       setReceiptPrintMeta?.(result.print);
                     })
@@ -8715,6 +8747,7 @@ function Packages({
                   onClick={() =>
                     onAction("Load QR label", async () => {
                       const result = await apiGet<RenderedDocumentResponse>(`/packages/${selectedCargo.id}/qr-label`);
+                      setSelectedPackage("");
                       setReceiptPreview(result.text);
                       setReceiptPrintMeta?.(result.print);
                     })
