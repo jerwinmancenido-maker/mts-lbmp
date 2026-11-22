@@ -1,5 +1,6 @@
 import Link from "next/link";
 import "../../styles.css";
+import { formatMoney } from "../../ui/money-format";
 
 interface TrackingData {
   packageNumber: string;
@@ -63,7 +64,7 @@ export default async function TrackingPage({ params }: { params: Promise<{ refer
             </div>
             <div>
               <span>Price</span>
-              <strong>{tracking.price == null ? "For confirmation" : `PHP ${tracking.price.toLocaleString()}`}</strong>
+              <strong>{tracking.price == null ? "For confirmation" : formatMoney(tracking.price)}</strong>
             </div>
           </div>
           <div className="trackingQr">{tracking.qrValue}</div>

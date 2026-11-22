@@ -36,6 +36,7 @@
  * dashboard tab (see refreshCurrentTabData in app-shell.tsx).
  */
 
+import { formatMoney } from "./money-format";
 import type { DashboardData } from "./types";
 
 export type DashboardMetricKey =
@@ -55,6 +56,10 @@ export interface DashboardTile {
   key: DashboardMetricKey;
   label: string;
   value: string | number;
+  /** Money tiles render through the shared money format and carry
+   *  the metricMoney styling (Round 2 R2-05: currency + figure stay
+   *  on one line); count tiles keep the plain headline treatment. */
+  money?: boolean;
 }
 
 /**
@@ -92,16 +97,16 @@ export function dashboardTiles(
     { key: "failedDelivery", label: "Failed Delivery", value: dashboard?.failedDeliveries ?? 0 },
     ...(options.canViewFinancialSummary
       ? ([
-          { key: "payments", label: "Payments", value: `PHP ${(dashboard?.paymentsCollected ?? 0).toLocaleString()}` },
+          { key: "payments", label: "Payments", value: formatMoney(dashboard?.paymentsCollected ?? 0), money: true },
           { key: "expenses", label: "Expenses Review", value: dashboard?.expensesAwaitingApproval ?? 0 },
           // Phase 6 P6-5: the tile reads the period-scoped figure
           // and its label says what it is. (The all-time
           // estimatedProfit it replaced was removed from the API
           // in P6-6 after its one deprecated release.)
-          { key: "profit", label: "Profit This Month", value: `PHP ${(dashboard?.profitThisMonth ?? 0).toLocaleString()}` }
+          { key: "profit", label: "Profit This Month", value: formatMoney(dashboard?.profitThisMonth ?? 0), money: true }
         ] satisfies DashboardTile[])
       : ([
-          { key: "collected", label: "Collected Here", value: `PHP ${options.collectedTotal.toLocaleString()}` },
+          { key: "collected", label: "Collected Here", value: formatMoney(options.collectedTotal), money: true },
           { key: "unpaid", label: "Need Collection", value: options.unpaidCount }
         ] satisfies DashboardTile[]))
   ];

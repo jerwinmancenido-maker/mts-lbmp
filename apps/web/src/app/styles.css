@@ -491,6 +491,15 @@ nav,
   font-size: var(--font-label);
 }
 
+/* A money figure and its currency label stay on one line (Round 2
+   R2-05, second site): the receiving "Due PHP 0.00" badge wrapped
+   inside itself at phone widths ("Due PHP" / "0.00"). Same nowrap
+   treatment the sync/status pills already use. */
+.badge.noWrap {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
 .syncPill {
   white-space: nowrap;
   color: var(--text);
@@ -2269,6 +2278,17 @@ nav,
 
 .metric strong {
   font-size: clamp(24px, 4vw, 34px);
+}
+
+/* Round 2 R2-05: a money tile's "PHP" label must not wrap above its
+   figure ("PHP" / "3,200") — the currency and the amount are one
+   glanceable unit. Money values never break internally, and their
+   size steps down from the count tiles' headline size so the
+   longest figure (a seven-figure month, "PHP 2,758,800.60") still
+   fits the tile on one line. Count tiles keep the headline size. */
+.metric strong.metricMoney {
+  white-space: nowrap;
+  font-size: clamp(16px, 1.7vw, 28px);
 }
 
 .metric.active {

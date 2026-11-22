@@ -1,3 +1,4 @@
+import { formatMoney } from "./money-format";
 import { paymentSearchDetails, remainingBalanceForPackage } from "./payment-display";
 import { tieredSearchScores } from "./search-ranking";
 import type { AuditLog, CargoPackage, Customer, ExpenseRecord, HardwareTestRecord, PaymentRecord, Trip } from "./types";
@@ -203,7 +204,7 @@ export function buildSearchOverlayResults(
       date: formatSearchDate(pkg.createdAt),
       status: pkg.status,
       details: `${pkg.packageNumber} - ${pkg.description} - ${pkg.destination}`,
-      amount: pkg.price == null ? "No price" : `PHP ${pkg.price.toLocaleString()}`,
+      amount: pkg.price == null ? "No price" : formatMoney(pkg.price),
       priority
     });
   });
@@ -275,7 +276,7 @@ export function buildSearchOverlayResults(
       // the stored Payment.balance is a per-call historical value and
       // is never presented as a remaining balance.
       details: paymentSearchDetails(payment, pkg, branchScopedPayments),
-      amount: `Due PHP ${payment.amountDue.toLocaleString()}`,
+      amount: `Due ${formatMoney(payment.amountDue)}`,
       priority
     });
   });
@@ -296,7 +297,7 @@ export function buildSearchOverlayResults(
       date: formatSearchDate(expense.createdAt),
       status: expense.status,
       details: `${expense.category} - ${expense.description ?? "No description"}`,
-      amount: `PHP ${expense.amount.toLocaleString()}`,
+      amount: formatMoney(expense.amount),
       priority
     });
   });
