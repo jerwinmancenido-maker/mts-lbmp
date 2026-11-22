@@ -2839,21 +2839,35 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
 
   createMessage(input: { cargoPackageId: string; senderName: string; body: string }, actorUserId?: string) {
     const cargo = this.findPackage(input.cargoPackageId);
+    // Round 1 PR-13 (C-M17): this door accepts posts whose body — or
+    // sender name — is missing entirely; the runtime payload is not
+    // the TypeScript type. Composing the notification straight from
+    // the raw input shipped "PKG-…: undefined" to the Notification
+    // Center, and the stored message rendered the same way in the
+    // thread. Normalize once, here, so the record and its
+    // notification share one complete text: a real body is kept
+    // verbatim; a missing or blank one falls back to a complete
+    // sentence naming the sender, or the shipment itself when no
+    // sender was given either.
+    const bodyText = typeof input.body === "string" ? input.body.trim() : "";
+    const senderName = typeof input.senderName === "string" ? input.senderName.trim() : "";
+    const body =
+      bodyText || (senderName ? `${senderName} sent a message about this shipment.` : "A message was posted about this shipment.");
     const message = {
       id: id("msg"),
       cargoPackageId: cargo.id,
-      senderName: input.senderName,
-      body: input.body,
+      senderName: senderName || "Shipment sender",
+      body,
       createdAt: new Date().toISOString()
     };
     this.messages.push(message);
-    this.notify("Shipment message received", `${cargo.packageNumber}: ${input.body}`, "Normal");
+    this.notify("Shipment message received", `${cargo.packageNumber}: ${body}`, "Normal");
     // The shipment-message door is not an authenticated staff session:
     // with no acting user the entry records the ANONYMOUS marker and
     // the self-declared sender name as data, never as an actor.
     this.audit("messages.create", "CargoPackage", cargo.id, undefined, {
       actor: actorUserId ? this.auditActorForId(actorUserId) : ANONYMOUS_AUDIT_ACTOR,
-      after: { senderName: input.senderName }
+      after: { senderName: message.senderName }
     });
     this.saveData();
     return message;
@@ -4778,11 +4792,19 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         .find((delivery) => delivery.cargoPackageId === cargo.id && delivery.status === "Failed Delivery");
       if (existing) return existing;
     }
+    // Round 1 PR-13 (C-M17 sweep): failedReason was interpolated into
+    // the "Failed delivery" notification — and stored on the record —
+    // with no validation, so a post missing it shipped "PKG-…:
+    // undefined" exactly the way the shipment-message door did.
+    // Normalize once so the record, the notification and the audit
+    // entry all carry complete text; a real reason is kept verbatim.
+    const failedReason =
+      typeof input.failedReason === "string" && input.failedReason.trim() ? input.failedReason : "No failure reason was recorded.";
     const delivery: DeliveryRecord = {
       id: id("del"),
       cargoPackageId: cargo.id,
       status: "Failed Delivery",
-      failedReason: input.failedReason,
+      failedReason,
       notes: input.notes,
       nextAction: input.nextAction,
       createdAt: new Date().toISOString()
@@ -4790,11 +4812,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     const statusBefore = cargo.status;
     cargo.status = "Failed Delivery";
     this.deliveries.push(delivery);
-    this.notify("Failed delivery", `${cargo.packageNumber}: ${input.failedReason}`, "High");
-    this.audit("delivery.fail", "DeliveryRecord", delivery.id, input.failedReason, {
+    this.notify("Failed delivery", `${cargo.packageNumber}: ${failedReason}`, "High");
+    this.audit("delivery.fail", "DeliveryRecord", delivery.id, failedReason, {
       actor: this.auditActorForId(actorUserId),
       before: { status: statusBefore },
-      after: { status: cargo.status, cargoPackageId: cargo.id, packageNumber: cargo.packageNumber, failedReason: input.failedReason }
+      after: { status: cargo.status, cargoPackageId: cargo.id, packageNumber: cargo.packageNumber, failedReason }
     });
     this.saveData();
     return delivery;
