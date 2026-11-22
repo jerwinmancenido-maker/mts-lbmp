@@ -9,6 +9,7 @@ Items: 2 lines / Qty 3
 Total: PHP 3600.00 / 1 no price
 1: 2 bundle Angle bar / Daet / P3600
 2: 1 pcs Cement bag / Daet / NP
-Copy: 1 / 11/12/2026, 01:02:03
+Print: Printed 11/12/2026, 09:02:03
+Copy: 1
 ------------------------------------------
 Received By: _______________

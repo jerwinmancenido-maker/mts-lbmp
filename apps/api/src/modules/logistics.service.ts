@@ -71,6 +71,36 @@ function id(prefix: string) {
 }
 
 /**
+ * Round 1 follow-up (L4-F4 / R13): the ONE timestamp format for the
+ * print/copy audit line of every printed document — Asia/Manila
+ * wall-clock time as "MM/DD/YYYY, HH:mm:ss" (24-hour). Before this,
+ * the receiving slip, loading manifest and billing statement embedded
+ * the raw UTC ISO string (on Manila paper it read ~8 hours behind,
+ * and the long string pushed the line past the 42-column render
+ * width) while the receiving document used a different, server-local
+ * format entirely. Every document's audit line now comes from
+ * peekPrintCopy, which formats through this helper and nothing else,
+ * so the family can never drift into per-document formats again.
+ * Assembled from formatToParts (the businessDateKey pattern) with an
+ * explicit h23 hour cycle, so midnight renders "00", never "24".
+ */
+export function formatManilaPrintTimestamp(value: Date | string): string {
+  const date = value instanceof Date ? value : new Date(value);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date);
+  const part = (type: string) => parts.find((entry) => entry.type === type)?.value ?? "";
+  return `${part("month")}/${part("day")}/${part("year")}, ${part("hour")}:${part("minute")}:${part("second")}`;
+}
+
+/**
  * Round 1 PR-6 (C-M7): reserved audit actors for entries no signed-in
  * user performed. Scheduler scans, load-time migrations, boot
  * provisioning and internal reconciliation record SYSTEM; the public
@@ -5280,7 +5310,8 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       customerDrNumber: receiving.customerDrNumber,
       destination: receiving.destination,
       packages: receiving.packages,
-      copyLine: `${copy.copyNumber} / ${new Date(copy.at).toLocaleString("en-PH", { hour12: false })}`
+      printLine: `${copy.action} ${copy.at}`,
+      copyNumber: copy.copyNumber
     });
     return {
       text,
@@ -5335,7 +5366,8 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         status: pkg.status,
         price: pkg.price
       })),
-      auditLine: `${copy.action} ${copy.at} / Copy ${copy.copyNumber}`
+      printLine: `${copy.action} ${copy.at}`,
+      copyNumber: copy.copyNumber
     });
     return {
       text,
@@ -5422,7 +5454,8 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       amountDue: derived.amountDue,
       amountPaid: derived.amountPaid,
       balance: derived.balance,
-      copyLine: `${copy.action} ${copy.at} / Copy ${copy.copyNumber}`
+      printLine: `${copy.action} ${copy.at}`,
+      copyNumber: copy.copyNumber
     });
     return {
       text,
@@ -5614,7 +5647,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return {
       action: (existing.length ? "Reprinted" : "Printed") as PrintLog["action"],
       copyNumber: existing.length + 1,
-      at: new Date().toISOString()
+      // Display text, not an instant: the shared Manila format every
+      // document's audit line prints (L4-F4 — see
+      // formatManilaPrintTimestamp). Callers compose it verbatim.
+      at: formatManilaPrintTimestamp(new Date())
     };
   }
 

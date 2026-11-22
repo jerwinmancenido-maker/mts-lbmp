@@ -33,7 +33,10 @@ const statementInput: BillingStatementInput = {
   amountDue: 12000,
   amountPaid: 400,
   balance: 11600,
-  copyLine: "Copy 1"
+  // The API composes these from the print log through the shared
+  // Manila formatter (L4-F4); the fixture pins one rendering of them.
+  printLine: "Printed 11/12/2026, 09:02:03",
+  copyNumber: 1
 };
 
 describe("renderBillingStatement", () => {

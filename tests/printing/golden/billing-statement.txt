@@ -46,6 +46,7 @@ Due/Paid/Bal: P1000/P0/P1000
 Amount Due: PHP 12000.00
 Amount Paid: PHP 400.00
 Balance: PHP 11600.00
-Copy: Copy 1
+Print: Printed 11/12/2026, 09:02:03
+Copy: 1
 ------------------------------------------
 Signature: __________________

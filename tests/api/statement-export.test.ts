@@ -245,12 +245,16 @@ describe("customer statement CSV", () => {
     expect(payload.outstanding).toBe(800);
     expect(payload.packages.map((row) => row.packageId)).toEqual([owingOld.id, owingCurrent.id]);
 
-    // Header block carries the payload's headline figures.
+    // Header block carries the payload's headline figures. The Due /
+    // Collected labels name their scope — "(all packages)", fully-paid
+    // ones included — because the owing-table TOTAL below covers a
+    // different, smaller set and the two figures must not read as an
+    // error (L4-F5). The figures themselves are the payload's, unchanged.
     expect(csv).toContain("Customer,P6-3 Balance Customer");
     expect(csv).toContain("Statement Date,2026-11-12");
     expect(csv).toContain("Billing Terms,Net 7");
-    expect(csv).toContain("Total Due,3500.00");
-    expect(csv).toContain("Total Collected,2700.00");
+    expect(csv).toContain("Total Due (all packages),3500.00");
+    expect(csv).toContain("Total Collected (all packages),2700.00");
     expect(csv).toContain("Total Outstanding,800.00");
 
     // Every payload row appears as a CSV line with the same numbers —
@@ -286,6 +290,28 @@ describe("customer statement CSV", () => {
     expect(csv).toContain("31-60 days overdue,1,500.00");
     expect(owingCurrent).toBeDefined();
     expect(owingOld).toBeDefined();
+  });
+
+  test("both totals name their scope, so the two Total Due figures explain themselves (L4-F5)", () => {
+    const { service } = balanceFixture();
+    const { csv } = service.getCustomerStatementCsv(CUSTOMER_ID, undefined, NOW);
+    const lines = csv.replace(/^\uFEFF/, "").split("\r\n");
+
+    // Header scope: ALL packages — the fully-paid 2000 package counts
+    // here (3500 due / 2700 collected), and the label says so.
+    expect(lines).toContain("Total Due (all packages),3500.00");
+    expect(lines).toContain("Total Collected (all packages),2700.00");
+    // Table scope: owing packages only (1500 due / 700 paid), labelled
+    // as the owing subset. The 2000 difference between the two due
+    // figures is exactly the fully-paid package — and now the labels
+    // say why. No figure changed; only the labels did.
+    const totalLine = lines.find((entry) => entry.startsWith("TOTAL (owing packages)"));
+    expect(totalLine).toBeDefined();
+    expect(totalLine).toContain("1500.00");
+    expect(totalLine).toContain("700.00");
+    // The bare, unexplained labels are gone.
+    expect(csv).not.toContain("Total Due,");
+    expect(csv).not.toContain("Total Collected,");
   });
 
   test("other-branch customer is hidden exactly like a missing one", () => {
