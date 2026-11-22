@@ -196,6 +196,7 @@ export interface CargoPackageRow {
   unitPrice: DecimalValue | null;
   price: DecimalValue | null;
   priceChangeReason: string | null;
+  priceVersion: number;
   qrValue: string;
   status: string;
   createdAt: DateValue;
@@ -759,6 +760,7 @@ export function stateToRows(state: ServiceState): PrismaStateRows {
       unitPrice: pkg.unitPrice ?? null,
       price: pkg.price,
       priceChangeReason: pkg.priceChangeReason ?? null,
+      priceVersion: pkg.priceVersion ?? 0,
       qrValue: pkg.qrValue,
       status: pkg.status,
       createdAt: new Date(pkg.createdAt)
@@ -1038,6 +1040,10 @@ function cargoRowToState(
     unitPrice: decimalToNumber(row.unitPrice),
     price: decimalToNumber(row.price),
     priceChangeReason: row.priceChangeReason ?? undefined,
+    // PR-7 (C-M8): only carry the version when it has actually moved,
+    // so a legacy record (column default 0) round-trips back to the
+    // absent-field shape it had in the JSON store.
+    priceVersion: row.priceVersion ? row.priceVersion : undefined,
     weight: decimalToNumber(row.weight),
     weightUnit: row.weightUnit ?? undefined,
     length: decimalToNumber(row.length),

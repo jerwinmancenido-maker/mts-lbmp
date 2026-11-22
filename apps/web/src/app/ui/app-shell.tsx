@@ -8514,7 +8514,7 @@ function Packages({
                   <div className="formGrid">
                     <label>Unit Price<input inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value.replace(/[^\d.]/g, ""))} placeholder="Enter price" /></label>
                   </div>
-                  <button className="primaryButton" disabled={!price} onClick={() => onAction("Update price", () => apiPatch(`/packages/${selectedCargo.id}/price`, { price: Number(price), reason: "Manual cargo update" }))}>Save Price</button>
+                  <button className="primaryButton" disabled={!price} onClick={() => onAction("Update price", () => apiPatch(`/packages/${selectedCargo.id}/price`, { price: Number(price), reason: "Manual cargo update", basePriceVersion: selectedCargo.priceVersion ?? 0 }))}>Save Price</button>
                 </div>
               )}
               <div className="buttonGrid two">

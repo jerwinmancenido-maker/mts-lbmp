@@ -491,7 +491,7 @@ export class LogisticsController {
 
   @Patch("packages/:id/price")
   @RequirePermissions("pricing.edit")
-  updatePackagePrice(@Req() request: { user?: { id?: string } }, @Param("id") id: string, @Body() body: { price: number; reason?: string }) {
+  updatePackagePrice(@Req() request: { user?: { id?: string } }, @Param("id") id: string, @Body() body: { price: number; reason?: string; basePriceVersion?: number }) {
     return this.logistics.updatePackagePrice(id, body, request.user?.id);
   }
 

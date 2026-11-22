@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, InternalServerErrorException, NotFoundException, type OnModuleDestroy, type OnModuleInit } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, InternalServerErrorException, NotFoundException, type OnModuleDestroy, type OnModuleInit } from "@nestjs/common";
 import { mkdirSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -2870,6 +2870,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     const cargo = this.findPackage(thread.cargoPackageId);
     const priceBefore = { price: cargo.price, unitPrice: cargo.unitPrice, status: cargo.status };
     cargo.price = approvedPrice;
+    // Round 1 PR-7 (C-M8): an approval is a price writer — bump the
+    // version so a price-endpoint save based on a pre-approval read is
+    // refused as stale instead of silently overwriting this decision.
+    if (priceBefore.price !== approvedPrice) cargo.priceVersion = (cargo.priceVersion ?? 0) + 1;
     cargo.unitPrice = approvedPrice;
     cargo.priceChangeReason = note || `Approved in chat by ${actor.name}`;
     if (cargo.status === "Waiting for Price") cargo.status = "Waiting for Loading";
@@ -3868,6 +3872,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       const cargo = this.packages.find((pkg) => pkg.id === pkgInput.id || pkg.packageNumber === pkgInput.id);
       if (!recordPkg || !cargo) continue;
       const targets = [recordPkg, cargo];
+      // Round 1 PR-7 (C-M8): snapshot the price so a change made by
+      // this edit bumps the package's priceVersion below — a price
+      // save based on a pre-edit read must then refuse as stale.
+      const priceBeforeEdit = cargo.price;
       const changePackageField = <K extends keyof CargoPackage>(field: K, value: CargoPackage[K] | undefined) => {
         if (value === undefined) return;
         const normalized = typeof value === "string" ? value.trim() : value;
@@ -3913,6 +3921,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       changePackageField("dimensionUnit", pkgInput.dimensionUnit);
       changePackageField("condition", pkgInput.condition);
       changePackageField("conditionNotes", pkgInput.conditionNotes);
+      // Round 1 PR-7 (C-M8): if this edit changed the price, bump the
+      // version (cargo and recordPkg are the same synced object) so a
+      // price-endpoint save based on a pre-edit read refuses as stale.
+      if (cargo.price !== priceBeforeEdit) cargo.priceVersion = (cargo.priceVersion ?? 0) + 1;
     }
 
     if (!changes.length) {
@@ -3943,8 +3955,25 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       .reverse();
   }
 
-  updatePackagePrice(packageId: string, input: { price: number; reason?: string }, actorUserId?: string) {
+  updatePackagePrice(packageId: string, input: { price: number; reason?: string; basePriceVersion?: number }, actorUserId?: string) {
     const cargo = this.findPackage(packageId);
+    // Round 1 PR-7 (C-M8): optimistic concurrency on the price field.
+    // A save that names the priceVersion it was based on is refused
+    // with 409 when the price has moved since that read — the L21
+    // interleave (A reads ₱350 → B sets ₱400 → A's stale ₱375 save)
+    // previously landed silently and destroyed B's edit. The refusal
+    // carries the current price + version so the caller can reload and
+    // re-apply. A save that names NO base keeps the pre-PR-7 behaviour
+    // (the repo's own smoke script and older clients send none); every
+    // actual price change bumps the version, whichever writer made it.
+    const currentPriceVersion = cargo.priceVersion ?? 0;
+    if (input.basePriceVersion !== undefined && input.basePriceVersion !== currentPriceVersion) {
+      throw new ConflictException({
+        message: `Price for ${cargo.packageNumber} was changed by someone else (now PHP ${cargo.price == null ? "not set" : cargo.price.toLocaleString()}). Reload the package and re-apply your price change.`,
+        currentPrice: cargo.price,
+        currentPriceVersion
+      });
+    }
     if (cargo.price != null && cargo.price !== input.price && !input.reason) {
       throw new BadRequestException("Reason is required when price differs from the previous price");
     }
@@ -3952,7 +3981,9 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     // assignment — this entry is the finding's headline case (a price
     // change must answer "who changed it, from what to what?").
     const priceBefore = { price: cargo.price, status: cargo.status };
+    const priceChanged = cargo.price !== input.price;
     cargo.price = input.price;
+    if (priceChanged) cargo.priceVersion = currentPriceVersion + 1;
     cargo.priceChangeReason = input.reason;
     if (cargo.status === "Waiting for Price") cargo.status = "Waiting for Loading";
     this.audit("pricing.update", "CargoPackage", cargo.id, input.reason, {

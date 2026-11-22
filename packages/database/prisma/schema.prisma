@@ -334,6 +334,7 @@ model CargoPackage {
   unitPrice              Decimal?                @db.Decimal(12, 2)
   price                  Decimal?                @db.Decimal(12, 2)
   priceChangeReason      String?
+  priceVersion           Int                     @default(0)
   qrValue                String                  @unique
   status                 String                  @default("Received")
   createdAt              DateTime                @default(now())
