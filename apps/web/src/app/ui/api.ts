@@ -22,7 +22,13 @@ function errorForFailedResponse(response: Response, errorText: string): Error {
     sessionExpiredListener?.();
     return new SessionExpiredError();
   }
-  return new Error(errorText);
+  // The HTTP status rides on the error so a caller can tell a
+  // permission-shaped 403 (the record set is simply not this role's
+  // to read) from a genuine failure (API down, 500). Additive only:
+  // existing callers read the message exactly as before.
+  const error = new Error(errorText) as Error & { status?: number };
+  error.status = response.status;
+  return error;
 }
 
 /**

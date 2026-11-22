@@ -36,6 +36,7 @@ import { OFFLINE_QUEUE_MAX_AUTO_ATTEMPTS, attemptQueueRecordSync, queueItemView,
 import { cacheReceivingFormStore, clearReceivingFormSnapshot, loadReceivingFormSnapshot, receivingFormHasContent, saveReceivingFormSnapshot, type ReceivingFormSnapshot } from "./receiving-form-persistence";
 import { paymentSearchDetails, remainingBalanceForPackage } from "./payment-display";
 import { fuzzyRankSearchResult, rankSearchResult, tieredSearchScores } from "./search-ranking";
+import { buildSearchOverlayResults, formatSearchDate, isSearchPermissionError, searchOverlayPanelState, type SearchOverlayCollections, type SearchOverlayLoadStatus, type SearchResultItem } from "./search-overlay";
 import { dashboardScopeLabel, dashboardTiles } from "./dashboard-tiles";
 import type { DashboardMetricKey } from "./dashboard-tiles";
 import { statusBadgeClass, toneBadgeClass } from "./status-tone";
@@ -138,6 +139,12 @@ const tabsByRole: Record<string, Tab[]> = {
 
 const LIST_PAGE_SIZE = 25;
 const MODULE_FETCH_LIMIT = 250;
+// How long the search overlay's API collections stay fresh before
+// opening or typing in the overlay fetches them again (see
+// loadSearchOverlayCollections). Short enough that a record created
+// moments ago is findable, long enough that typing never refetches
+// per keystroke.
+const SEARCH_OVERLAY_FRESH_MS = 30_000;
 const DEVICE_PAPER_WIDTH_KEY = "mts-lbmp-device-paper-width";
 const DEVICE_CAMERA_UNAVAILABLE_KEY = "mts-lbmp-device-camera-unavailable";
 
@@ -170,18 +177,9 @@ function visibleTabsForRole(role: string) {
   return tabs.filter((tab) => allowed.has(tab.id));
 }
 
-interface SearchResultItem {
-  id: string;
-  tab: Tab;
-  type: string;
-  customerName: string;
-  documentNumber: string;
-  date: string;
-  status: string;
-  details: string;
-  amount?: string;
-  priority: number;
-}
+// SearchResultItem and the global search overlay's result derivation
+// live in ./search-overlay (extracted for unit testability, with the
+// overlay's API data flow documented there).
 
 function matchesSearch(values: unknown[], query: string) {
   const normalizedQuery = query.trim().toLowerCase();
@@ -426,12 +424,8 @@ function userHasPermission(user: { permissions?: string[] }, permission: string)
 // the demo accounts. The login screen is the only entry; it posts the
 // credentials the human actually typed.
 
-function formatSearchDate(value?: string) {
-  if (!value) return "No date";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
-}
+// formatSearchDate lives in ./search-overlay (it formats the dates
+// the overlay derivation scores and displays).
 
 // rankSearchResult / fuzzyRankSearchResult / tieredSearchScores live in
 // ./search-ranking (extracted in Round 1 PR-10 for unit testability).
@@ -842,6 +836,21 @@ export function AppShell() {
   const [activeBranchContext, setActiveBranchContext] = useState("Daet");
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  // Global search overlay data (L26 re-run observation N1): the
+  // collections the overlay searches, fetched from the API when the
+  // overlay is used — never the per-module list state above, which
+  // only a module visit populates. Keyed by user + branch workspace
+  // so one user's (or one branch's) collections are never served to
+  // another. Customers are not stored here: they ride the bootstrap,
+  // which sign-in always loads (see search-overlay.ts).
+  const [searchOverlayData, setSearchOverlayData] = useState<{
+    key: string;
+    collections: Omit<SearchOverlayCollections, "customers">;
+  } | null>(null);
+  const [searchOverlayStatus, setSearchOverlayStatus] = useState<SearchOverlayLoadStatus>("idle");
+  const searchOverlayLoadedAtRef = useRef(0);
+  const searchOverlaySeqRef = useRef(0);
+  const searchOverlayInFlightKeyRef = useRef<string | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
   const [navBackStack, setNavBackStack] = useState<AppView[]>([]);
   const [navForwardStack, setNavForwardStack] = useState<AppView[]>([]);
@@ -1007,6 +1016,10 @@ export function AppShell() {
       ]);
       setBootstrap(boot);
       setDashboard(dash);
+      // A shell refresh follows sign-in and every mutation path, so
+      // the search overlay's collections are stale from this moment;
+      // the next overlay open or keystroke refetches them.
+      searchOverlayLoadedAtRef.current = 0;
       await writeCachedValue(cacheKey, { bootstrap: boot, dashboard: dash }, { source: "server", userId: activeUser.id, branch: activeBranchContext, module: "shell" });
       setLastSyncedAt(new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }));
       setSyncState("Online");
@@ -1414,6 +1427,69 @@ export function AppShell() {
     if (data.operationChats) setOperationChats(data.operationChats);
     if (data.billingInvoices) setBillingInvoices(data.billingInvoices);
     if (data.customerBalances) setCustomerBalances(data.customerBalances);
+  }
+
+  /**
+   * The global search overlay's own data load (L26 re-run observation
+   * N1). Fetches every searchable collection from the API — the same
+   * endpoints and limits the module loads use — instead of reading
+   * the per-module list state, so a record is findable from the
+   * overlay in a fresh session before any module is visited. Only
+   * collections whose tab the role can see are fetched, mirroring the
+   * overlay's visible-tab result filter. A 403 on a collection is
+   * permission-shaped absence (the endpoint is not this role's to
+   * read) and contributes an empty collection, exactly as the module
+   * loads treat billing invoices and balances; any other failure
+   * fails the load, and the panel shows its error state rather than a
+   * false "No matching records" — unless earlier collections for this
+   * same user + branch are already on hand, which keep serving.
+   */
+  async function loadSearchOverlayCollections(key: string) {
+    const seq = ++searchOverlaySeqRef.current;
+    searchOverlayInFlightKeyRef.current = key;
+    setSearchOverlayStatus("loading");
+    const params = { limit: MODULE_FETCH_LIMIT, branch: branchScope };
+    const visible = new Set(visibleTabs.map((tab) => tab.id));
+    const attempt = async <T,>(request: Promise<T[]>): Promise<T[]> => {
+      try {
+        return await request;
+      } catch (error) {
+        if (isSearchPermissionError(error)) return [];
+        throw error;
+      }
+    };
+    try {
+      const [overlayPackages, overlayTrips, overlayPayments, overlayExpenses, overlayAuditLogs, overlayHardwareTests] = await Promise.all([
+        visible.has("packages") ? attempt(apiGet<CargoPackage[]>(apiQuery("/packages", params))) : Promise.resolve([]),
+        visible.has("trips") ? attempt(apiGet<Trip[]>(apiQuery("/trips", params))) : Promise.resolve([]),
+        visible.has("payments") ? attempt(apiGet<PaymentRecord[]>(apiQuery("/payments", params))) : Promise.resolve([]),
+        visible.has("expenses") ? attempt(apiGet<ExpenseRecord[]>(apiQuery("/expenses", params))) : Promise.resolve([]),
+        visible.has("admin") ? attempt(apiGet<AuditLog[]>(apiQuery("/audit", { limit: MODULE_FETCH_LIMIT }))) : Promise.resolve([]),
+        visible.has("hardware") ? attempt(apiGet<HardwareTestRecord[]>("/hardware/tests")) : Promise.resolve([])
+      ]);
+      if (seq !== searchOverlaySeqRef.current) return;
+      searchOverlayLoadedAtRef.current = Date.now();
+      setSearchOverlayData({
+        key,
+        collections: {
+          packages: overlayPackages,
+          trips: overlayTrips,
+          payments: overlayPayments,
+          expenses: overlayExpenses,
+          auditLogs: overlayAuditLogs,
+          hardwareTests: overlayHardwareTests
+        }
+      });
+      setSearchOverlayStatus("ready");
+    } catch (error) {
+      if (seq !== searchOverlaySeqRef.current) return;
+      // A dead session is already routing to the login screen via the
+      // session-expired listener; don't paint a search error over it.
+      if (isSessionExpiredError(error)) return;
+      setSearchOverlayStatus(searchOverlayData?.key === key ? "ready" : "error");
+    } finally {
+      if (searchOverlayInFlightKeyRef.current === key) searchOverlayInFlightKeyRef.current = null;
+    }
   }
 
   async function refreshCurrentTabData(tab = activeTab) {
@@ -1843,202 +1919,44 @@ export function AppShell() {
       : `Good day. You have ${waiting} packages waiting and ${approvals} expenses needing review.`;
   }, [dashboard, language]);
 
+  // The overlay's collections are keyed by user + branch workspace;
+  // anything stored under another key is not this session's to show.
+  const searchOverlayKey = `${activeUser.id}|${branchScope ?? ""}`;
+  const activeSearchOverlayCollections = searchOverlayData?.key === searchOverlayKey ? searchOverlayData.collections : null;
+
+  // Load the overlay's collections from the API when the overlay is
+  // opened or a query is typed (the desktop header box shares
+  // searchQuery), debounced so typing fetches at most once per pause
+  // and never per keystroke; a fresh load (SEARCH_OVERLAY_FRESH_MS)
+  // is not repeated. Before the first load lands, the panel shows its
+  // loading face — never a false "No matching records" (N1).
+  useEffect(() => {
+    if (!signedIn || !bootstrap || passwordChangeRequired) return;
+    if (!mobileSearchOpen && !searchQuery.trim()) return;
+    const fresh =
+      searchOverlayData?.key === searchOverlayKey && Date.now() - searchOverlayLoadedAtRef.current < SEARCH_OVERLAY_FRESH_MS;
+    if (fresh || searchOverlayInFlightKeyRef.current === searchOverlayKey) return;
+    const timer = window.setTimeout(() => {
+      void loadSearchOverlayCollections(searchOverlayKey);
+    }, mobileSearchOpen ? 0 : 250);
+    return () => window.clearTimeout(timer);
+  }, [activeUser.id, bootstrap, branchScope, mobileSearchOpen, passwordChangeRequired, searchOverlayData, searchOverlayKey, searchQuery, signedIn]);
+
   const searchResults = useMemo<SearchResultItem[]>(() => {
-    const results: SearchResultItem[] = [];
-    const query = searchQuery.trim();
-
-    // PR-10 (C-M12): every collection below is scored with
-    // tieredSearchScores — substring priorities exactly as before when
-    // anything matches; typo-tolerant priorities only when a
-    // collection's substring tier found nothing.
-    const packagePriorities = tieredSearchScores(
-      branchScopedPackages.map((pkg) => [
-        pkg.customerName,
-        pkg.receivingRecordNumber,
-        pkg.packageNumber,
-        formatSearchDate(pkg.createdAt),
-        pkg.destination,
-        pkg.description,
-        pkg.status
-      ]),
-      query
+    if (!activeSearchOverlayCollections) return [];
+    return buildSearchOverlayResults(
+      { ...activeSearchOverlayCollections, customers: bootstrap?.customers ?? [] },
+      branchScope,
+      searchQuery,
+      visibleTabs.map((tab) => tab.id)
     );
-    branchScopedPackages.forEach((pkg, pkgIndex) => {
-      const priority = packagePriorities[pkgIndex] ?? 0;
-      if (query && priority === 0) return;
-      results.push({
-        id: `package-${pkg.id}`,
-        tab: "packages",
-        type: "Package",
-        customerName: pkg.customerName,
-        documentNumber: pkg.receivingRecordNumber || pkg.packageNumber,
-        date: formatSearchDate(pkg.createdAt),
-        status: pkg.status,
-        details: `${pkg.packageNumber} - ${pkg.description} - ${pkg.destination}`,
-        amount: pkg.price == null ? "No price" : `PHP ${pkg.price.toLocaleString()}`,
-        priority
-      });
-    });
+  }, [activeSearchOverlayCollections, bootstrap?.customers, branchScope, searchQuery, visibleTabs]);
 
-    const tripSearchEntries = branchScopedTrips.map((trip) => {
-      const relatedPackages = trip.cargoPackageIds.map((id) => packageById.get(id)).filter(Boolean) as CargoPackage[];
-      const customerNames = Array.from(new Set(relatedPackages.map((pkg) => pkg.customerName))).join(", ");
-      return {
-        trip,
-        customerNames,
-        values: [
-          customerNames,
-          trip.tripNumber,
-          trip.origin,
-          trip.destination,
-          trip.status,
-          trip.vehicleDescription,
-          trip.driverName
-        ]
-      };
-    });
-    const tripPriorities = tieredSearchScores(tripSearchEntries.map((entry) => entry.values), query);
-    tripSearchEntries.forEach(({ trip, customerNames }, tripIndex) => {
-      const priority = tripPriorities[tripIndex] ?? 0;
-      if (query && priority === 0) return;
-      results.push({
-        id: `trip-${trip.id}`,
-        tab: "trips",
-        type: "Trip",
-        customerName: customerNames || "Multiple customers",
-        documentNumber: trip.tripNumber,
-        date: "Trip date pending",
-        status: trip.status,
-        details: `${trip.origin} to ${trip.destination} - ${trip.cargoPackageIds.length} package(s)`,
-        priority
-      });
-    });
-
-    const paymentSearchEntries = branchScopedPayments.map((payment) => {
-      const pkg = packageById.get(payment.cargoPackageId);
-      return {
-        payment,
-        pkg,
-        values: [
-          pkg?.customerName,
-          pkg?.receivingRecordNumber,
-          pkg?.packageNumber,
-          formatSearchDate(payment.createdAt),
-          payment.method,
-          payment.status,
-          payment.amountPaid,
-          pkg ? remainingBalanceForPackage(pkg, branchScopedPayments) : payment.balance
-        ]
-      };
-    });
-    const paymentPriorities = tieredSearchScores(paymentSearchEntries.map((entry) => entry.values), query);
-    paymentSearchEntries.forEach(({ payment, pkg }, paymentIndex) => {
-      const priority = paymentPriorities[paymentIndex] ?? 0;
-      if (query && priority === 0) return;
-      results.push({
-        id: `payment-${payment.id}`,
-        tab: "payments",
-        type: "Payment",
-        customerName: pkg?.customerName ?? "Customer not linked",
-        documentNumber: pkg?.receivingRecordNumber ?? pkg?.packageNumber ?? "Payment record",
-        date: formatSearchDate(payment.createdAt),
-        status: payment.status,
-        // P6-2 §2.3.1: show the package's cumulative remaining balance;
-        // the stored Payment.balance is a per-call historical value and
-        // is never presented as a remaining balance.
-        details: paymentSearchDetails(payment, pkg, branchScopedPayments),
-        amount: `Due PHP ${payment.amountDue.toLocaleString()}`,
-        priority
-      });
-    });
-
-    const expensePriorities = tieredSearchScores(
-      branchScopedExpenses.map((expense) => [expense.category, expense.description, expense.status, expense.tripId, formatSearchDate(expense.createdAt), expense.amount]),
-      query
-    );
-    branchScopedExpenses.forEach((expense, expenseIndex) => {
-      const priority = expensePriorities[expenseIndex] ?? 0;
-      if (query && priority === 0) return;
-      results.push({
-        id: `expense-${expense.id}`,
-        tab: "expenses",
-        type: "Expense",
-        customerName: "Operations",
-        documentNumber: expense.tripId ?? "General expense",
-        date: formatSearchDate(expense.createdAt),
-        status: expense.status,
-        details: `${expense.category} - ${expense.description ?? "No description"}`,
-        amount: `PHP ${expense.amount.toLocaleString()}`,
-        priority
-      });
-    });
-
-    const overlayCustomers = bootstrap?.customers ?? [];
-    const customerPriorities = tieredSearchScores(
-      overlayCustomers.map((customer) => [customer.businessName, customer.contactPerson, customer.phone, customer.billingTerm, customer.status]),
-      query
-    );
-    overlayCustomers.forEach((customer, customerIndex) => {
-      const priority = customerPriorities[customerIndex] ?? 0;
-      if (query && priority === 0) return;
-      results.push({
-        id: `customer-${customer.id}`,
-        tab: "customer",
-        type: "Customer",
-        customerName: customer.businessName,
-        documentNumber: customer.phone ?? "No phone",
-        date: customer.billingTerm ?? "No billing term",
-        status: customer.status,
-        details: customer.contactPerson ?? "Customer profile",
-        priority
-      });
-    });
-
-    const auditPriorities = tieredSearchScores(
-      auditLogs.map((log) => [log.action, log.entityType, log.entityId, log.reason, formatSearchDate(log.createdAt)]),
-      query
-    );
-    auditLogs.forEach((log, logIndex) => {
-      const priority = auditPriorities[logIndex] ?? 0;
-      if (query && priority === 0) return;
-      results.push({
-        id: `audit-${log.id}`,
-        tab: "admin",
-        type: "Audit",
-        customerName: "System audit",
-        documentNumber: log.entityId,
-        date: formatSearchDate(log.createdAt),
-        status: log.action,
-        details: `${log.entityType}${log.reason ? ` - ${log.reason}` : ""}`,
-        priority
-      });
-    });
-
-    const hardwarePriorities = tieredSearchScores(
-      hardwareTests.map((test) => [test.deviceName, test.scannerResult, test.printerResult, test.cameraResult, test.signatureResult, test.pwaResult, test.notes, formatSearchDate(test.createdAt)]),
-      query
-    );
-    hardwareTests.forEach((test, testIndex) => {
-      const priority = hardwarePriorities[testIndex] ?? 0;
-      if (query && priority === 0) return;
-      results.push({
-        id: `hardware-${test.id}`,
-        tab: "hardware",
-        type: "Hardware",
-        customerName: "Device test",
-        documentNumber: test.deviceName,
-        date: formatSearchDate(test.createdAt),
-        status: test.pwaResult,
-        details: `Scanner ${test.scannerResult} - Printer ${test.printerResult}`,
-        priority
-      });
-    });
-
-    return results
-      .filter((item) => visibleTabs.some((tab) => tab.id === item.tab))
-      .sort((a, b) => b.priority - a.priority || b.date.localeCompare(a.date))
-      .slice(0, query ? 16 : 10);
-  }, [auditLogs, bootstrap?.customers, branchScopedExpenses, branchScopedPackages, branchScopedPayments, branchScopedTrips, hardwareTests, packageById, searchQuery, visibleTabs]);
+  const searchPanelState = searchOverlayPanelState({
+    status: searchOverlayStatus,
+    hasCollections: activeSearchOverlayCollections !== null,
+    resultCount: searchResults.length
+  });
 
   useEffect(() => {
     if (!mobileSearchOpen) return;
@@ -2159,7 +2077,19 @@ export function AppShell() {
                     </div>
                   </button>
                 ))}
-                {!searchResults.length && (
+                {searchPanelState === "loading" && (
+                  <div className="searchEmpty">
+                    <strong>Searching…</strong>
+                    <p>Loading the latest records from the server.</p>
+                  </div>
+                )}
+                {searchPanelState === "error" && (
+                  <div className="searchEmpty">
+                    <strong>Search unavailable</strong>
+                    <p>Records could not be loaded. Check the connection, then close and reopen search to try again.</p>
+                  </div>
+                )}
+                {searchPanelState === "empty" && (
                   <div className="searchEmpty">
                     <strong>No matching records</strong>
                     <p>Try customer name, document number, date, destination, package description, or payment method.</p>
