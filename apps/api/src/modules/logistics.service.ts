@@ -36,6 +36,7 @@ import type {
   ExpenseRecord,
   OperationChatThread,
   PackageMessage,
+  PossibleCustomerDuplicate,
   PaymentRecord,
   PrintLog,
   ProfitabilityCategoryTotal,
@@ -2926,7 +2927,135 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return thread;
   }
 
-  createCustomer(input: { businessName: string; tin?: string; companyPhone?: string; contactPerson?: string; contactRole?: string; contactEmail?: string; contactIsPrimary?: boolean; phone?: string; address?: string; billingAddress?: string; shippingAddress?: string; billingTerm?: string; billingTermDays?: number | null }, actorUserId?: string) {
+  /**
+   * Round 1 PR-9 (C-M11 / L25-F1): customer creation carried no
+   * duplicate check at all — an exact name+phone re-POST returned 201
+   * with a brand-new id and no warning, leaving twin masters that
+   * split billing, balances and reminder history. Both create paths
+   * (createCustomer / createPendingCustomer) now run the same guard
+   * before anything is written: likely duplicates refuse the create
+   * with 409 + the candidate records, and only an explicit
+   * confirmDuplicate from the operator lets the create proceed. This
+   * is a warning, never a hard block — legitimate near-namesakes
+   * exist, and the override is a deliberate act, never a default.
+   *
+   * Matching rules (deterministic; the round's cases are exact and
+   * legal-suffix-variant names, so no fuzzy scorer is needed):
+   * - "same name": canonical names equal. The canonical form
+   *   lowercases, strips punctuation and drops trailing legal-form
+   *   tokens (Inc / Incorporated / Corp / Corporation / Company / Co /
+   *   Ltd / Limited / LLC / OPC), so "Findability Motors Inc" and
+   *   "Findability Motors Incorporated" are the same name.
+   * - "same phone and similar name" / "same phone and contact
+   *   person": a shared phone — digits compared on the last 10, so
+   *   0917… and +63 917… agree — plus a name token (≥3 chars) in
+   *   common or the same contact person. A shared phone ALONE does
+   *   not warn: switchboards and agents' numbers are legitimately
+   *   shared by distinct customers, and the split-record harm needs
+   *   name/contact confusion too.
+   * Archived records never match — they are out of circulation.
+   *
+   * Visibility: customers are a shared master — GET /bootstrap hands
+   * every staff token the full list (P5-3 design, recorded as L5-F1)
+   * and the Customer record carries no branch field — so naming the
+   * existing record in the warning discloses nothing the creator
+   * cannot already see in the Customers list. The candidate payload
+   * is limited to fields of that public record shape.
+   */
+  private normalizeCustomerNameKey(value: string) {
+    return value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  private canonicalCustomerNameKey(value: string) {
+    const suffixes = new Set(["inc", "incorporated", "corp", "corporation", "company", "co", "ltd", "limited", "llc", "opc"]);
+    const tokens = this.normalizeCustomerNameKey(value).split(" ").filter(Boolean);
+    while (tokens.length > 1) {
+      const last = tokens[tokens.length - 1];
+      if (last === undefined || !suffixes.has(last)) break;
+      tokens.pop();
+    }
+    return tokens.join(" ");
+  }
+
+  private customerPhoneKeys(source: { phone?: string; companyPhone?: string; contacts?: { phone?: string }[] }) {
+    const keys = new Set<string>();
+    const rawValues = [source.phone, source.companyPhone, ...(source.contacts ?? []).map((contact) => contact.phone)];
+    for (const raw of rawValues) {
+      const digits = String(raw ?? "").replace(/\D/g, "");
+      if (digits.length >= 7) keys.add(digits.length > 10 ? digits.slice(-10) : digits);
+    }
+    return keys;
+  }
+
+  private findPossibleCustomerDuplicates(input: { businessName: string; phone?: string; companyPhone?: string; contactPerson?: string }): PossibleCustomerDuplicate[] {
+    const canonical = this.canonicalCustomerNameKey(input.businessName ?? "");
+    const inputPhones = this.customerPhoneKeys({ phone: input.phone, companyPhone: input.companyPhone });
+    const inputContact = this.normalizeCustomerNameKey(input.contactPerson ?? "");
+    const inputNameTokens = new Set(canonical.split(" ").filter((token) => token.length >= 3));
+    const matches: PossibleCustomerDuplicate[] = [];
+    for (const existing of this.customers) {
+      if (existing.status === "Archived") continue;
+      const existingCanonical = this.canonicalCustomerNameKey(existing.businessName);
+      let matchedOn: string | undefined;
+      if (canonical && existingCanonical && canonical === existingCanonical) {
+        matchedOn = "same name";
+      } else if (inputPhones.size > 0) {
+        const existingPhones = this.customerPhoneKeys(existing);
+        const sharesPhone = [...inputPhones].some((key) => existingPhones.has(key));
+        if (sharesPhone) {
+          const existingTokens = new Set(existingCanonical.split(" ").filter((token) => token.length >= 3));
+          const sharesNameToken = [...inputNameTokens].some((token) => existingTokens.has(token));
+          const existingContact = this.normalizeCustomerNameKey(existing.contactPerson ?? "");
+          if (sharesNameToken) matchedOn = "same phone and similar name";
+          else if (inputContact && existingContact && inputContact === existingContact) matchedOn = "same phone and contact person";
+        }
+      }
+      if (matchedOn) {
+        matches.push({
+          id: existing.id,
+          businessName: existing.businessName,
+          status: existing.status,
+          phone: existing.phone,
+          companyPhone: existing.companyPhone,
+          contactPerson: existing.contactPerson,
+          matchedOn
+        });
+      }
+    }
+    return matches;
+  }
+
+  /**
+   * Returns the likely duplicates of a create that the operator has
+   * explicitly confirmed past (for the audit trail); throws 409 with
+   * the candidates when matches exist and no confirmation was given.
+   * Runs before any mutation, so a refused create writes nothing and
+   * an offline replay of the refusal is equally safe.
+   */
+  private guardAgainstCustomerDuplicate(input: { businessName: string; phone?: string; companyPhone?: string; contactPerson?: string; confirmDuplicate?: boolean }): PossibleCustomerDuplicate[] {
+    const matches = this.findPossibleCustomerDuplicates(input);
+    if (matches.length === 0 || input.confirmDuplicate) return matches;
+    const summary = matches
+      .slice(0, 3)
+      .map((match) => `"${match.businessName}" (${match.matchedOn})`)
+      .join(", ");
+    throw new ConflictException({
+      message:
+        `Possible duplicate customer: ${summary} already exists` +
+        (matches.length > 3 ? ` — and ${matches.length - 3} more possible matches` : "") +
+        `. Nothing was created. Use the existing record, or create anyway only if this is a different customer.`,
+      possibleDuplicates: matches,
+      requiresDuplicateConfirmation: true
+    });
+  }
+
+  createCustomer(input: { businessName: string; tin?: string; companyPhone?: string; contactPerson?: string; contactRole?: string; contactEmail?: string; contactIsPrimary?: boolean; phone?: string; address?: string; billingAddress?: string; shippingAddress?: string; billingTerm?: string; billingTermDays?: number | null; confirmDuplicate?: boolean }, actorUserId?: string) {
+    const duplicateMatches = this.guardAgainstCustomerDuplicate(input);
     const customer: Customer = {
       id: id("cust"),
       businessName: input.businessName,
@@ -2945,14 +3074,20 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     this.customers.push(customer);
     this.audit("customers.create", "Customer", customer.id, undefined, {
       actor: this.auditActorForId(actorUserId),
-      after: { businessName: customer.businessName, status: customer.status, billingTermDays: customer.billingTermDays }
+      after: {
+        businessName: customer.businessName,
+        status: customer.status,
+        billingTermDays: customer.billingTermDays,
+        ...(duplicateMatches.length > 0 ? { duplicateConfirmed: true, duplicateOf: duplicateMatches.map((match) => match.id) } : {})
+      }
     });
     this.saveData();
     return customer;
   }
 
-  createPendingCustomer(input: { businessName: string; tin?: string; companyPhone?: string; contactPerson?: string; contactRole?: string; contactEmail?: string; contactIsPrimary?: boolean; phone?: string; address?: string; billingAddress?: string; shippingAddress?: string; reviewBranchName?: string; notes?: string }, actorUserId?: string) {
+  createPendingCustomer(input: { businessName: string; tin?: string; companyPhone?: string; contactPerson?: string; contactRole?: string; contactEmail?: string; contactIsPrimary?: boolean; phone?: string; address?: string; billingAddress?: string; shippingAddress?: string; reviewBranchName?: string; notes?: string; confirmDuplicate?: boolean }, actorUserId?: string) {
     if (!input.businessName?.trim()) throw new BadRequestException("Customer name is required");
+    const duplicateMatches = this.guardAgainstCustomerDuplicate(input);
     const customer: Customer = {
       id: id("cust"),
       businessName: input.businessName.trim(),
@@ -2981,7 +3116,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     );
     this.audit("customer.pending_created", "Customer", customer.id, undefined, {
       actor: this.auditActorForId(actorUserId),
-      after: { businessName: customer.businessName, status: customer.status }
+      after: {
+        businessName: customer.businessName,
+        status: customer.status,
+        ...(duplicateMatches.length > 0 ? { duplicateConfirmed: true, duplicateOf: duplicateMatches.map((match) => match.id) } : {})
+      }
     });
     this.saveData();
     return customer;

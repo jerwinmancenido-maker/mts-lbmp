@@ -43,6 +43,24 @@ export interface Customer {
   finalizedBy?: string;
 }
 
+/**
+ * Round 1 PR-9 (C-M11): one likely-duplicate candidate as returned in
+ * the 409 body of a refused customer create. Every field here is part
+ * of the ordinary customer record that GET /bootstrap already hands to
+ * every staff token (customers are a shared master with no branch
+ * field), so naming the existing record discloses nothing new.
+ */
+export interface PossibleCustomerDuplicate {
+  id: string;
+  businessName: string;
+  status: Customer["status"];
+  phone?: string;
+  companyPhone?: string;
+  contactPerson?: string;
+  /** Why this record matched: "same name" | "same phone and similar name" | "same phone and contact person". */
+  matchedOn: string;
+}
+
 export interface CompanyProfile {
   companyName: string;
   address: string;
