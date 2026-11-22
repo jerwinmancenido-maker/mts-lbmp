@@ -13,6 +13,7 @@ Dest: Daet
 2. Package: PKG-2026-11-000002
 Desc: Cement bag
 Dest: Naga
-Print: Printed 2026-11-12T01:02:03.456Z / Copy 1
+Print: Printed 11/12/2026, 09:02:03
+Copy: 1
 ------------------------------------------
 Loaded By: ________________

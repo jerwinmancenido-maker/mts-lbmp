@@ -5,10 +5,11 @@
 // LogisticsService then), so these tests also prove the extraction of those
 // two renderers into @mts-lbmp/printing changed no output byte.
 //
-// Every document is composed at the canonical WIDTH_80MM (42 cols). The one
-// known exception is locked deliberately: the Loading Manifest's "Print:"
-// audit line embeds an ISO timestamp and is 48 chars — it is asserted
-// verbatim below instead of being hidden or shortened.
+// Every document is composed at the canonical WIDTH_80MM (42 cols) —
+// including the print/copy audit lines. (The Loading Manifest's audit
+// line used to be a locked 48-char exception because it embedded a raw
+// ISO timestamp; the Round 1 L4-F4 follow-up replaced that with the
+// shared Manila format the API composes, and the exception is gone.)
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import {
@@ -31,7 +32,12 @@ function expectWithinRenderWidth(text: string, allowLonger: (line: string) => bo
   }
 }
 
-const CREATED_AT = "2026-11-12T01:02:03.456Z";
+// The instant 2026-11-12T01:02:03.456Z as the API's shared
+// print-timestamp formatter renders it (Asia/Manila wall clock —
+// formatManilaPrintTimestamp, L4-F4). The renderer fixtures below
+// carry this form because the service composes the audit lines; the
+// formatter itself is pinned in tests/api/print-copy-lines.test.ts.
+const CREATED_AT_MANILA = "11/12/2026, 09:02:03";
 const QR_VALUE = "MTS:PKG:PKG-2026-11-000001";
 const QR_LINE = `QR: ${QR_VALUE}`;
 
@@ -57,7 +63,7 @@ const slipInput = {
   unitPrice: 1800,
   price: 3600,
   qrValue: QR_VALUE,
-  printLine: `Printed ${CREATED_AT}`,
+  printLine: `Printed ${CREATED_AT_MANILA}`,
   copyNumber: 1
 };
 
@@ -113,8 +119,10 @@ const documentInput = {
     { quantity: 2, unit: "bundle", description: "Angle bar", handlingBranchName: "Daet", destination: "Daet", price: 3600 },
     { quantity: 1, unit: "pcs", description: "Cement bag", handlingBranchName: "Daet", destination: "Daet", price: null }
   ],
-  // The API formats this from the print log; the fixture pins one rendering of it.
-  copyLine: "1 / 11/12/2026, 01:02:03"
+  // The API composes these from the print log through the shared
+  // Manila formatter; the fixture pins one rendering of them.
+  printLine: `Printed ${CREATED_AT_MANILA}`,
+  copyNumber: 1
 };
 
 describe("renderReceivingDocument", () => {
@@ -229,7 +237,8 @@ const manifestInput = {
     { packageNumber: "PKG-2026-11-000001", description: "Angle bar", destination: "Daet", status: "Loaded", price: 3600 },
     { packageNumber: "PKG-2026-11-000002", description: "Cement bag", destination: "Naga", status: "Loaded", price: null }
   ],
-  auditLine: `Printed ${CREATED_AT} / Copy 1`
+  printLine: `Printed ${CREATED_AT_MANILA}`,
+  copyNumber: 1
 };
 
 describe("renderLoadingManifest", () => {
@@ -241,12 +250,15 @@ describe("renderLoadingManifest", () => {
     expect(renderLoadingManifest(manifestInput)).toBe(renderLoadingManifest(manifestInput));
   });
 
-  test("keeps every composed line within 42 cols; the print-audit line is the locked exception", () => {
+  test("keeps every composed line within 42 cols, the print-audit lines included (L4-F4)", () => {
     const text = renderLoadingManifest(manifestInput);
-    // The audit line embeds an ISO timestamp, so it is 48 chars by
-    // construction. It is asserted verbatim rather than silently allowed.
-    expect(text).toContain(`Print: Printed ${CREATED_AT} / Copy 1`);
-    expectWithinRenderWidth(text, (line) => line.startsWith("Print: "));
+    // The audit line used to embed a raw ISO timestamp and run to 48
+    // chars — a locked exception in this suite. With the shared
+    // Manila format the API now composes, the two audit lines fit
+    // the render width like every other line.
+    expect(text).toContain(`Print: Printed ${CREATED_AT_MANILA}`);
+    expect(text).toContain("Copy: 1");
+    expectWithinRenderWidth(text);
   });
 
   test("lists every cargo package number verbatim", () => {

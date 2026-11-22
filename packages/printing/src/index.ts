@@ -194,7 +194,9 @@ export interface ReceivingDocumentInput {
   customerDrNumber?: string | null;
   destination: string;
   packages: ReceivingDocumentItemInput[];
-  copyLine: string;
+  /** Print/copy audit lines — the same two-line shape every document in the family carries (Round 1 follow-up, L4-F4). */
+  printLine: string;
+  copyNumber: number;
 }
 
 /**
@@ -262,7 +264,8 @@ export function renderReceivingDocument(input: ReceivingDocumentInput) {
       { label: "Items", value: `${input.packages.length} lines / Qty ${totalQuantity}` },
       { label: "Total", value: withoutPrice ? `PHP ${totalPrice.toFixed(2)} / ${withoutPrice} no price` : `PHP ${totalPrice.toFixed(2)}` },
       ...itemLines,
-      { label: "Copy", value: input.copyLine }
+      { label: "Print", value: input.printLine },
+      { label: "Copy", value: String(input.copyNumber) }
     ],
     footer: "Received By: _______________"
   });
@@ -283,7 +286,9 @@ export function renderLoadingManifest(input: {
   vehicle?: string;
   driver?: string;
   cargo: CargoPrintRow[];
-  auditLine?: string;
+  /** Print/copy audit lines — the same two-line shape every document in the family carries (Round 1 follow-up, L4-F4). */
+  printLine?: string;
+  copyNumber?: number;
 }) {
   return render80mmReceipt({
     title: "LOADING MANIFEST",
@@ -299,7 +304,8 @@ export function renderLoadingManifest(input: {
         { label: "Desc", value: cargo.description },
         { label: "Dest", value: cargo.destination }
       ]),
-      ...(input.auditLine ? [{ label: "Print", value: input.auditLine }] : [])
+      ...(input.printLine ? [{ label: "Print", value: input.printLine }] : []),
+      ...(input.copyNumber != null ? [{ label: "Copy", value: String(input.copyNumber) }] : [])
     ],
     footer: "Loaded By: ________________"
   });
@@ -368,7 +374,9 @@ export interface BillingStatementInput {
   amountDue: number;
   amountPaid: number;
   balance: number;
-  copyLine?: string;
+  /** Print/copy audit lines — the same two-line shape every document in the family carries (Round 1 follow-up, L4-F4). */
+  printLine?: string;
+  copyNumber?: number;
 }
 
 /**
@@ -411,7 +419,8 @@ export function renderBillingStatement(input: BillingStatementInput) {
       { label: "Amount Due", value: `PHP ${input.amountDue.toFixed(2)}` },
       { label: "Amount Paid", value: `PHP ${input.amountPaid.toFixed(2)}` },
       { label: "Balance", value: `PHP ${input.balance.toFixed(2)}` },
-      ...(input.copyLine ? [{ label: "Copy", value: input.copyLine }] : [])
+      ...(input.printLine ? [{ label: "Print", value: input.printLine }] : []),
+      ...(input.copyNumber != null ? [{ label: "Copy", value: String(input.copyNumber) }] : [])
     ],
     footer: "Signature: __________________"
   });

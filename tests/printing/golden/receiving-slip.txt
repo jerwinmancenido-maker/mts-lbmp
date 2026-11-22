@@ -13,7 +13,7 @@ Condition: Good
 Weight/Size: 24.5 kg / 120 x 20 x 15 cm
 Unit Price: PHP 1800.00
 Price: PHP 3600.00
-Print: Printed 2026-11-12T01:02:03.456Z
+Print: Printed 11/12/2026, 09:02:03
 Copy: 1
 ------------------------------------------
 QR: MTS:PKG:PKG-2026-11-000001

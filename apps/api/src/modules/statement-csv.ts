@@ -198,6 +198,15 @@ export interface CustomerStatementCsvInput {
  * Amount Paid totals are the owing subset — labelled as such. The
  * Outstanding total and every aging figure are the payload's own
  * numbers, so the file and GET /customers/:id/balance cannot disagree.
+ *
+ * Round 1 follow-up (L4-F5 / R13): the two scopes are spelled out on
+ * the face of the file. The header's Due/Collected cover ALL the
+ * customer's packages (fully-paid ones included) and say so —
+ * "(all packages)"; the table's TOTAL row covers the owing subset
+ * and says so — "(owing packages)". Before this, the header's
+ * "Total Due" and the table's Amount Due total differed with nothing
+ * explaining why, and a customer reconciling the file could read the
+ * difference as an error. The figures themselves are unchanged.
  */
 export function buildCustomerStatementCsv(input: CustomerStatementCsvInput): string {
   let totalDue = 0;
@@ -232,8 +241,8 @@ export function buildCustomerStatementCsv(input: CustomerStatementCsvInput): str
     ["Customer", input.customerName],
     ["Statement Date", input.statementDate],
     ["Billing Terms", input.billingTermsLabel ?? "Not set"],
-    ["Total Due", money(input.totalDue)],
-    ["Total Collected", money(input.totalCollected)],
+    ["Total Due (all packages)", money(input.totalDue)],
+    ["Total Collected (all packages)", money(input.totalCollected)],
     ["Total Outstanding", money(input.totalOutstanding)],
     [],
     [
