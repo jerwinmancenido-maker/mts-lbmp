@@ -35,6 +35,7 @@ import { appendDiagnosticLog, clearCachedRecords, clearDiagnosticLogs, deleteOff
 import { OFFLINE_QUEUE_MAX_AUTO_ATTEMPTS, attemptQueueRecordSync, queueItemView, shouldAutoRetryQueueRecord, sortQueueItemViews, type QueueItemView } from "./queue-view";
 import { cacheReceivingFormStore, clearReceivingFormSnapshot, loadReceivingFormSnapshot, receivingFormHasContent, saveReceivingFormSnapshot, type ReceivingFormSnapshot } from "./receiving-form-persistence";
 import { paymentSearchDetails, remainingBalanceForPackage } from "./payment-display";
+import { fuzzyRankSearchResult, rankSearchResult, tieredSearchScores } from "./search-ranking";
 import { parsePhilippineAddress, readDeliveryReceiptPhoto, type DrOcrConfidence, type DrOcrProgress, type DrOcrResult } from "./dr-ocr";
 import { setPhotoAuditUser, setPhotoUploadContext, takeNativeCameraPhoto, uploadCompressedImage, uploadPathForPhotoType } from "./media";
 import type { PrinterDiagnosticCheck } from "@mts-lbmp/printing";
@@ -429,18 +430,9 @@ function formatSearchDate(value?: string) {
   return date.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-function rankSearchResult(values: unknown[], query: string) {
-  const normalizedQuery = query.trim().toLowerCase();
-  if (!normalizedQuery) return 1;
-  return values.reduce<number>((score, value, index) => {
-    const text = String(value ?? "").toLowerCase();
-    if (!text) return score;
-    if (text === normalizedQuery) return Math.max(score, 100 - index);
-    if (text.startsWith(normalizedQuery)) return Math.max(score, 80 - index);
-    if (text.includes(normalizedQuery)) return Math.max(score, 50 - index);
-    return score;
-  }, 0);
-}
+// rankSearchResult / fuzzyRankSearchResult / tieredSearchScores live in
+// ./search-ranking (extracted in Round 1 PR-10 for unit testability).
+
 
 function normalizeMatchText(value: unknown) {
   return String(value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -534,11 +526,16 @@ function AutocompleteField<T>({
 }) {
   const query = value.trim();
   const showSuggestions = query.length >= minChars && selectedLabel !== query;
+  // PR-10 (C-M12): tiered scores — substring ranking untouched when it
+  // finds anything; the typo-tolerant tier only when it finds nothing.
+  const suggestionScores = showSuggestions
+    ? tieredSearchScores(items.map((item) => (getSearchValues ? getSearchValues(item) : [getLabel(item)])), query)
+    : [];
   const suggestionEntries = showSuggestions
     ? items
-      .map((item) => ({
+      .map((item, index) => ({
         item,
-        score: rankSearchResult(getSearchValues ? getSearchValues(item) : [getLabel(item)], query)
+        score: suggestionScores[index] ?? 0
       }))
       .filter((entry) => entry.score > 0)
       .sort((a, b) => b.score - a.score)
@@ -1805,20 +1802,25 @@ export function AppShell() {
     const results: SearchResultItem[] = [];
     const query = searchQuery.trim();
 
-    for (const pkg of branchScopedPackages) {
-      const priority = rankSearchResult(
-        [
-          pkg.customerName,
-          pkg.receivingRecordNumber,
-          pkg.packageNumber,
-          formatSearchDate(pkg.createdAt),
-          pkg.destination,
-          pkg.description,
-          pkg.status
-        ],
-        query
-      );
-      if (query && priority === 0) continue;
+    // PR-10 (C-M12): every collection below is scored with
+    // tieredSearchScores — substring priorities exactly as before when
+    // anything matches; typo-tolerant priorities only when a
+    // collection's substring tier found nothing.
+    const packagePriorities = tieredSearchScores(
+      branchScopedPackages.map((pkg) => [
+        pkg.customerName,
+        pkg.receivingRecordNumber,
+        pkg.packageNumber,
+        formatSearchDate(pkg.createdAt),
+        pkg.destination,
+        pkg.description,
+        pkg.status
+      ]),
+      query
+    );
+    branchScopedPackages.forEach((pkg, pkgIndex) => {
+      const priority = packagePriorities[pkgIndex] ?? 0;
+      if (query && priority === 0) return;
       results.push({
         id: `package-${pkg.id}`,
         tab: "packages",
@@ -1831,13 +1833,15 @@ export function AppShell() {
         amount: pkg.price == null ? "No price" : `PHP ${pkg.price.toLocaleString()}`,
         priority
       });
-    }
+    });
 
-    for (const trip of branchScopedTrips) {
+    const tripSearchEntries = branchScopedTrips.map((trip) => {
       const relatedPackages = trip.cargoPackageIds.map((id) => packageById.get(id)).filter(Boolean) as CargoPackage[];
       const customerNames = Array.from(new Set(relatedPackages.map((pkg) => pkg.customerName))).join(", ");
-      const priority = rankSearchResult(
-        [
+      return {
+        trip,
+        customerNames,
+        values: [
           customerNames,
           trip.tripNumber,
           trip.origin,
@@ -1845,10 +1849,13 @@ export function AppShell() {
           trip.status,
           trip.vehicleDescription,
           trip.driverName
-        ],
-        query
-      );
-      if (query && priority === 0) continue;
+        ]
+      };
+    });
+    const tripPriorities = tieredSearchScores(tripSearchEntries.map((entry) => entry.values), query);
+    tripSearchEntries.forEach(({ trip, customerNames }, tripIndex) => {
+      const priority = tripPriorities[tripIndex] ?? 0;
+      if (query && priority === 0) return;
       results.push({
         id: `trip-${trip.id}`,
         tab: "trips",
@@ -1860,12 +1867,14 @@ export function AppShell() {
         details: `${trip.origin} to ${trip.destination} - ${trip.cargoPackageIds.length} package(s)`,
         priority
       });
-    }
+    });
 
-    for (const payment of branchScopedPayments) {
+    const paymentSearchEntries = branchScopedPayments.map((payment) => {
       const pkg = packageById.get(payment.cargoPackageId);
-      const priority = rankSearchResult(
-        [
+      return {
+        payment,
+        pkg,
+        values: [
           pkg?.customerName,
           pkg?.receivingRecordNumber,
           pkg?.packageNumber,
@@ -1874,10 +1883,13 @@ export function AppShell() {
           payment.status,
           payment.amountPaid,
           pkg ? remainingBalanceForPackage(pkg, branchScopedPayments) : payment.balance
-        ],
-        query
-      );
-      if (query && priority === 0) continue;
+        ]
+      };
+    });
+    const paymentPriorities = tieredSearchScores(paymentSearchEntries.map((entry) => entry.values), query);
+    paymentSearchEntries.forEach(({ payment, pkg }, paymentIndex) => {
+      const priority = paymentPriorities[paymentIndex] ?? 0;
+      if (query && priority === 0) return;
       results.push({
         id: `payment-${payment.id}`,
         tab: "payments",
@@ -1893,14 +1905,15 @@ export function AppShell() {
         amount: `Due PHP ${payment.amountDue.toLocaleString()}`,
         priority
       });
-    }
+    });
 
-    for (const expense of branchScopedExpenses) {
-      const priority = rankSearchResult(
-        [expense.category, expense.description, expense.status, expense.tripId, formatSearchDate(expense.createdAt), expense.amount],
-        query
-      );
-      if (query && priority === 0) continue;
+    const expensePriorities = tieredSearchScores(
+      branchScopedExpenses.map((expense) => [expense.category, expense.description, expense.status, expense.tripId, formatSearchDate(expense.createdAt), expense.amount]),
+      query
+    );
+    branchScopedExpenses.forEach((expense, expenseIndex) => {
+      const priority = expensePriorities[expenseIndex] ?? 0;
+      if (query && priority === 0) return;
       results.push({
         id: `expense-${expense.id}`,
         tab: "expenses",
@@ -1913,14 +1926,16 @@ export function AppShell() {
         amount: `PHP ${expense.amount.toLocaleString()}`,
         priority
       });
-    }
+    });
 
-    for (const customer of bootstrap?.customers ?? []) {
-      const priority = rankSearchResult(
-        [customer.businessName, customer.contactPerson, customer.phone, customer.billingTerm, customer.status],
-        query
-      );
-      if (query && priority === 0) continue;
+    const overlayCustomers = bootstrap?.customers ?? [];
+    const customerPriorities = tieredSearchScores(
+      overlayCustomers.map((customer) => [customer.businessName, customer.contactPerson, customer.phone, customer.billingTerm, customer.status]),
+      query
+    );
+    overlayCustomers.forEach((customer, customerIndex) => {
+      const priority = customerPriorities[customerIndex] ?? 0;
+      if (query && priority === 0) return;
       results.push({
         id: `customer-${customer.id}`,
         tab: "customer",
@@ -1932,11 +1947,15 @@ export function AppShell() {
         details: customer.contactPerson ?? "Customer profile",
         priority
       });
-    }
+    });
 
-    for (const log of auditLogs) {
-      const priority = rankSearchResult([log.action, log.entityType, log.entityId, log.reason, formatSearchDate(log.createdAt)], query);
-      if (query && priority === 0) continue;
+    const auditPriorities = tieredSearchScores(
+      auditLogs.map((log) => [log.action, log.entityType, log.entityId, log.reason, formatSearchDate(log.createdAt)]),
+      query
+    );
+    auditLogs.forEach((log, logIndex) => {
+      const priority = auditPriorities[logIndex] ?? 0;
+      if (query && priority === 0) return;
       results.push({
         id: `audit-${log.id}`,
         tab: "admin",
@@ -1948,14 +1967,15 @@ export function AppShell() {
         details: `${log.entityType}${log.reason ? ` - ${log.reason}` : ""}`,
         priority
       });
-    }
+    });
 
-    for (const test of hardwareTests) {
-      const priority = rankSearchResult(
-        [test.deviceName, test.scannerResult, test.printerResult, test.cameraResult, test.signatureResult, test.pwaResult, test.notes, formatSearchDate(test.createdAt)],
-        query
-      );
-      if (query && priority === 0) continue;
+    const hardwarePriorities = tieredSearchScores(
+      hardwareTests.map((test) => [test.deviceName, test.scannerResult, test.printerResult, test.cameraResult, test.signatureResult, test.pwaResult, test.notes, formatSearchDate(test.createdAt)]),
+      query
+    );
+    hardwareTests.forEach((test, testIndex) => {
+      const priority = hardwarePriorities[testIndex] ?? 0;
+      if (query && priority === 0) return;
       results.push({
         id: `hardware-${test.id}`,
         tab: "hardware",
@@ -1967,7 +1987,7 @@ export function AppShell() {
         details: `Scanner ${test.scannerResult} - Printer ${test.printerResult}`,
         priority
       });
-    }
+    });
 
     return results
       .filter((item) => visibleTabs.some((tab) => tab.id === item.tab))
@@ -11016,8 +11036,15 @@ function OperationsChat({
   const selectedThread = threads.find((thread) => thread.id === selectedThreadId) ?? (mode === "global" ? globalThread : undefined);
   const canApprovePrices = isOwnerRole(activeUser.role) || activeUser.role === "System Admin" || activeUser.role === "Administrator";
   const packagesNeedingPrice = packages.filter((pkg) => pkg.price == null || pkg.status === "Waiting for Price");
-  const matchingPackages = packages
-    .filter((pkg) => rankSearchResult([pkg.packageNumber, pkg.customerName, pkg.description, pkg.receivingRecordNumber, pkg.destination], packageQuery) > 0)
+  const packageSearchValues = (pkg: CargoPackage) => [pkg.packageNumber, pkg.customerName, pkg.description, pkg.receivingRecordNumber, pkg.destination];
+  const substringMatchingPackages = packages
+    .filter((pkg) => rankSearchResult(packageSearchValues(pkg), packageQuery) > 0);
+  // PR-10 (C-M12): typo-tolerant fallback only when the substring tier
+  // found no package (an empty query scores 1 everywhere, so the
+  // unfiltered first-8 behaviour is unchanged).
+  const matchingPackages = (packageQuery.trim() && substringMatchingPackages.length === 0
+    ? packages.filter((pkg) => fuzzyRankSearchResult(packageSearchValues(pkg), packageQuery) > 0)
+    : substringMatchingPackages)
     .slice(0, 8);
   const selectedPackage = packages.find((pkg) => pkg.id === selectedPackageId);
 
@@ -11400,23 +11427,28 @@ function CustomerPortal({
   );
   const totalOutstandingAll = balances.reduce((sum, balance) => sum + balance.outstanding, 0);
   const customerBillingBranch = selectedCustomerPackages.find((pkg) => pkg.handlingBranchName)?.handlingBranchName ?? selectedCustomerPackages.find((pkg) => pkg.destination)?.destination ?? "Assigned branch";
-  const visibleCustomers = customers
-    .filter((customer) => !/(demo|test)/i.test(customer.businessName))
-    .filter((customer) => {
-      const query = customerSearch.trim();
-      if (!query) return true;
-      return rankSearchResult([
-        customer.businessName,
-        customer.tin,
-        customer.companyPhone,
-        customer.contactPerson,
-        customer.phone,
-        customer.address,
-        customer.billingAddress,
-        customer.shippingAddress,
-        ...(customer.contacts ?? []).flatMap((contact) => [contact.name, contact.role, contact.phone, contact.email, contact.address])
-      ], query) > 0;
-    });
+  const customerSearchValues = (customer: BootstrapData["customers"][number]) => [
+    customer.businessName,
+    customer.tin,
+    customer.companyPhone,
+    customer.contactPerson,
+    customer.phone,
+    customer.address,
+    customer.billingAddress,
+    customer.shippingAddress,
+    ...(customer.contacts ?? []).flatMap((contact) => [contact.name, contact.role, contact.phone, contact.email, contact.address])
+  ];
+  const searchableCustomers = customers.filter((customer) => !/(demo|test)/i.test(customer.businessName));
+  const customerQueryText = customerSearch.trim();
+  const substringVisibleCustomers = customerQueryText
+    ? searchableCustomers.filter((customer) => rankSearchResult(customerSearchValues(customer), customerQueryText) > 0)
+    : searchableCustomers;
+  // PR-10 (C-M12): the typo-tolerant tier runs only when the substring
+  // tier found no customer at all, so exact/partial searches are
+  // byte-for-byte the pre-fix behaviour.
+  const visibleCustomers = customerQueryText && substringVisibleCustomers.length === 0
+    ? searchableCustomers.filter((customer) => fuzzyRankSearchResult(customerSearchValues(customer), customerQueryText) > 0)
+    : substringVisibleCustomers;
   const displayedCustomers = visibleCustomers.slice(0, customerListLimit);
   const packageCountByCustomer = packages.reduce<Record<string, number>>((counts, pkg) => {
     counts[pkg.customerName] = (counts[pkg.customerName] ?? 0) + 1;
