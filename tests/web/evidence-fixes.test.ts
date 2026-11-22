@@ -41,6 +41,20 @@ describe("cargo list pills keep their full width (OBS-L1R-02)", () => {
   });
 });
 
+describe("customer list pills keep their full width (R2-01)", () => {
+  test("customer badges are exempt from the shared max-width cap at every width", () => {
+    expect(css).toMatch(/\.compactDataRow\.customerListRow \.compactRowMeta \.badge \{\s*max-width: none;/);
+  });
+
+  test("at phone widths the customer row restacks: info on top, pills on their own line", () => {
+    const phone = mediaBlock(css, "(max-width: 640px)");
+    expect(phone).toMatch(/\.compactDataRow\.customerListRow \{\s*grid-template-columns: minmax\(0, 1fr\);/);
+    expect(phone).toMatch(
+      /\.compactDataRow\.customerListRow \.compactRowMeta \{\s*grid-column: 1 \/ -1;\s*width: 100%;\s*min-width: 0;/
+    );
+  });
+});
+
 describe("Add Product dialog photo button (OBS-L17-V2-1)", () => {
   test("the dialog mounts its own file input", () => {
     expect(shell).toMatch(/<input ref=\{productDialogPhotoInputRef\} className="hiddenInput" type="file" accept="image\/\*"/);

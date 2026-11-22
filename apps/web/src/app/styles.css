@@ -1173,6 +1173,18 @@ nav,
   max-width: none;
 }
 
+/* Round 2 R2-01 (A2-F1 = C2R-F7 = B2R-F6): customer rows carry up
+   to four badges (status / ongoing / amount / oldest-due), and the
+   shared 132px cap clips the due-date badge mid-text even at
+   desktop widths — the strip's last badge is cut at the row edge.
+   Customer badges keep their full width at every screen width —
+   the meta wraps instead — the same rule the invoice and cargo
+   badges hold above. The phone-width restack lives in the ≤640px
+   query. */
+.compactDataRow.customerListRow .compactRowMeta .badge {
+  max-width: none;
+}
+
 .cargoListMeta {
   display: flex;
   flex-wrap: wrap;
@@ -4688,6 +4700,25 @@ textarea {
   }
 
   .compactDataRow.cargoListRow .cargoListMeta {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-width: 0;
+    justify-content: flex-start;
+  }
+
+  /* R2-01: customer rows at phone widths — the shared compactDataRow
+     treatment holds .compactRowMeta at min-width: max-content in the
+     second grid column, so a four-badge strip (status / ongoing /
+     amount / oldest-due) squeezes the info column to nothing: long
+     names render as fragments and the amount badge is cut at the
+     row edge. Same restack as the invoice and cargo rows above:
+     info full width on top, the badges on their own line below,
+     where the general customer rule gives them their full width. */
+  .compactDataRow.customerListRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .compactDataRow.customerListRow .compactRowMeta {
     grid-column: 1 / -1;
     width: 100%;
     min-width: 0;
