@@ -338,7 +338,8 @@ export interface BillingInvoicePackageRow {
   cargoPackageId: string;
 }
 
-export interface ReceivingDraftRow extends Omit<ReceivingDraft, "customerId" | "customerNameSnapshot" | "customerStatusSnapshot" | "customerDrNumber" | "destination" | "drPhotoUrl" | "finalizedReceivingId" | "createdAt" | "updatedAt"> {
+export interface ReceivingDraftRow extends Omit<ReceivingDraft, "customerId" | "customerNameSnapshot" | "customerStatusSnapshot" | "customerDrNumber" | "destination" | "drPhotoUrl" | "finalizedReceivingId" | "createdAt" | "updatedAt" | "editVersion"> {
+  editVersion: number;
   customerId: string | null;
   customerNameSnapshot: string | null;
   customerStatusSnapshot: string | null;
@@ -894,6 +895,7 @@ export function stateToRows(state: ServiceState): PrismaStateRows {
     ),
     receivingDrafts: state.receivingDrafts.map((draft) => ({
       ...draft,
+      editVersion: draft.editVersion ?? 0,
       customerId: draft.customerId ?? null,
       customerNameSnapshot: draft.customerNameSnapshot ?? null,
       customerStatusSnapshot: draft.customerStatusSnapshot ?? null,
@@ -1162,6 +1164,7 @@ export function rowsToState(rows: PrismaStateRows): LoadedServiceState {
     })),
     receivingDrafts: rows.receivingDrafts.map((draft) => ({
       ...draft,
+      editVersion: draft.editVersion ? draft.editVersion : undefined,
       customerId: draft.customerId ?? undefined,
       customerNameSnapshot: draft.customerNameSnapshot ?? undefined,
       customerStatusSnapshot: (draft.customerStatusSnapshot ?? undefined) as ReceivingDraft["customerStatusSnapshot"],

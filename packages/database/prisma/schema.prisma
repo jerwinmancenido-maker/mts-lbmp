@@ -243,6 +243,7 @@ model ReceivingDraft {
   id                     String           @id @default(cuid())
   draftNumber            String           @unique
   status                 String           @default("Draft")
+  editVersion            Int              @default(0)
   customerId             String?
   customerNameSnapshot   String?
   customerStatusSnapshot String?
