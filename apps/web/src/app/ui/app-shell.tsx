@@ -36,8 +36,9 @@ import { OFFLINE_QUEUE_MAX_AUTO_ATTEMPTS, attemptQueueRecordSync, queueItemView,
 import { cacheReceivingFormStore, clearReceivingFormSnapshot, loadReceivingFormSnapshot, receivingFormHasContent, saveReceivingFormSnapshot, type ReceivingFormSnapshot } from "./receiving-form-persistence";
 import { paymentSearchDetails, remainingBalanceForPackage } from "./payment-display";
 import { fuzzyRankSearchResult, rankSearchResult, tieredSearchScores } from "./search-ranking";
-import { dashboardTiles } from "./dashboard-tiles";
+import { dashboardScopeLabel, dashboardTiles } from "./dashboard-tiles";
 import type { DashboardMetricKey } from "./dashboard-tiles";
+import { statusBadgeClass, toneBadgeClass } from "./status-tone";
 import { parsePhilippineAddress, readDeliveryReceiptPhoto, type DrOcrConfidence, type DrOcrProgress, type DrOcrResult } from "./dr-ocr";
 import { setPhotoAuditUser, setPhotoUploadContext, takeNativeCameraPhoto, uploadCompressedImage, uploadPathForPhotoType } from "./media";
 import type { PrinterDiagnosticCheck } from "@mts-lbmp/printing";
@@ -2616,7 +2617,7 @@ function HardwarePrototype({
                   Last run {new Date(printerDiagnosticView.recordedAt).toLocaleString()} — measured on this device and saved to test history. The printer result is derived from these checks, never set by hand.
                 </p>
               </div>
-              <span className={printerDiagnosticView.result === "Pass" ? "badge" : "badge warning"}>{printerDiagnosticView.result}</span>
+              <span className={statusBadgeClass(printerDiagnosticView.result)}>{printerDiagnosticView.result}</span>
             </div>
             <div className="list">
               {printerDiagnosticView.checks.map((check) => (
@@ -2626,7 +2627,7 @@ function HardwarePrototype({
                     <strong>{check.name}</strong>
                     {check.detail && <p className="muted">{check.detail}</p>}
                   </div>
-                  <span className="badge">{check.status}</span>
+                  <span className={statusBadgeClass(check.status)}>{check.status}</span>
                 </div>
               ))}
               {!printerDiagnosticView.checks.length && printerDiagnosticView.notes && <p className="muted">{printerDiagnosticView.notes}</p>}
@@ -2798,7 +2799,7 @@ function OfflineStoragePanel({
           <h4>Offline Storage</h4>
           <p className="muted">Saved screens open faster. Pending work/photos stay on this tablet until synced.</p>
         </div>
-        <span className={hasPendingWork ? "badge warning" : "badge"}>{hasPendingWork ? "Needs Sync" : "Ready"}</span>
+        <span className={toneBadgeClass(hasPendingWork ? "attention" : "success")}>{hasPendingWork ? "Needs Sync" : "Ready"}</span>
       </div>
       <div className="metricGrid compactMetrics">
         <button className="metricCard" type="button" onClick={onRefresh}>
@@ -2843,7 +2844,7 @@ function OfflineStoragePanel({
                 </p>
                 {item.lastError && <p className="muted">Last error: {item.lastError}</p>}
               </div>
-              <span className={item.status === "Failed" ? "badge warning" : "badge"}>{item.statusLabel}</span>
+              <span className={statusBadgeClass(item.status)}>{item.statusLabel}</span>
               {item.canRetry && (
                 <button className="smallButton" type="button" onClick={() => onRetryItem(item)}>
                   Retry
@@ -3525,6 +3526,10 @@ function Dashboard({
     () => dashboardTiles(dashboard, { canViewFinancialSummary, collectedTotal, unpaidCount: unpaidPackages.length }),
     [canViewFinancialSummary, collectedTotal, dashboard, unpaidPackages.length]
   );
+  // Round 1 PR-12 (R3): name the scope the tiles describe — the
+  // signed-in user's branch access, the same scope PR-11 settled
+  // the figures on.
+  const scopeLabel = dashboardScopeLabel(activeUser.branchAccess);
 
   useEffect(() => {
     if (!cards.some((card) => card.key === selectedMetric)) {
@@ -3608,6 +3613,7 @@ function Dashboard({
 
   return (
     <div className="stack">
+      {scopeLabel && <p className="muted">{scopeLabel}</p>}
       <div className="grid metrics">
         {cards.map((card) => (
           <button
@@ -3631,8 +3637,8 @@ function Dashboard({
                 <p>{pkg.description} to {pkg.destination}</p>
                 <p className="muted">{pkg.receivingRecordNumber} - {pkg.customerName}</p>
               </div>
-              <span className="badge">{pkg.status}</span>
-              <span className="badge">{pkg.price == null ? "No Price" : `PHP ${pkg.price}`}</span>
+              <span className={statusBadgeClass(pkg.status)}>{pkg.status}</span>
+              <span className={pkg.price == null ? toneBadgeClass("attention") : "badge"}>{pkg.price == null ? "No Price" : `PHP ${pkg.price}`}</span>
             </div>
           ))}
           {visibleTrips.map((trip) => (
@@ -3643,7 +3649,7 @@ function Dashboard({
                 <p>{trip.origin} to {trip.destination}</p>
                 <p className="muted">{trip.vehicleDescription ?? "Vehicle not set"} - {trip.driverName ?? "Driver not set"}</p>
               </div>
-              <span className="badge">{trip.status}</span>
+              <span className={statusBadgeClass(trip.status)}>{trip.status}</span>
             </div>
           ))}
           {visibleCustomers.map((customer) => (
@@ -3654,7 +3660,7 @@ function Dashboard({
                 <p>{customer.phone ?? "No phone yet"}</p>
                 <p className="muted">Finalize customer before loading cargo.</p>
               </div>
-              <span className="badge warning">{customer.status}</span>
+              <span className={statusBadgeClass(customer.status)}>{customer.status}</span>
             </div>
           ))}
           {visiblePayments.map((payment) => (
@@ -3665,7 +3671,7 @@ function Dashboard({
                 <p>{payment.collectedByName ?? activeUser.name} - {payment.collectionPoint ?? "Collection"}</p>
                 <p className="muted">{new Date(payment.createdAt).toLocaleString()}</p>
               </div>
-              <span className="badge">{payment.status}</span>
+              <span className={statusBadgeClass(payment.status)}>{payment.status}</span>
             </div>
           ))}
           {!visiblePackages.length && !visibleTrips.length && !visibleCustomers.length && !visiblePayments.length && (
@@ -3724,7 +3730,7 @@ function Dashboard({
                 <strong>{notification.title}</strong>
                 <p>{notification.message}</p>
               </div>
-              <span className="badge">{notification.priority}</span>
+              <span className={toneBadgeClass(notification.priority === "High" ? "attention" : "neutral")}>{notification.priority}</span>
             </div>
           ))}
           {!dashboard?.notifications.length && <p className="muted">No alerts yet.</p>}
@@ -6909,7 +6915,7 @@ function Receiving({
                 {savedReceivingSummary ? ` - PHP ${formatReceivingMoney(savedReceivingSummary.amountDue)}` : ""}
               </p>
             </div>
-            <span className="badge">Ready to Print</span>
+            <span className={toneBadgeClass("success")}>Ready to Print</span>
           </div>
           {savedReceivingSummary && (
             <div className="grid accountInfoGrid receiveSavedSummary">
@@ -6985,7 +6991,7 @@ function Receiving({
                     <strong>{pkg.description}</strong>
                     <p>{pkg.packageNumber} - {pkg.quantity ?? 1} {pkg.unit ?? "pcs"} - {pkg.handlingBranchName ?? pkg.destination}</p>
                   </div>
-                  <span className="badge">{pkg.price == null ? "No Price" : `PHP ${pkg.price}`}</span>
+                  <span className={pkg.price == null ? toneBadgeClass("attention") : "badge"}>{pkg.price == null ? "No Price" : `PHP ${pkg.price}`}</span>
                 </div>
               ))}
             </div>
@@ -7019,7 +7025,7 @@ function Receiving({
                   {task.duplicateCount > 1 && <p className="notice">Submitted {task.duplicateCount} times. Extra notes/photos are grouped here.</p>}
                 </div>
                 <div className="rowActions">
-                  <span className={task.duplicateCount > 1 ? "badge warning" : "badge"}>{task.status}</span>
+                  <span className={statusBadgeClass(task.status)}>{task.status}</span>
                   <button className="smallButton" onClick={() => reviewIntakeTask(task)}>Review</button>
                   <button
                     className="smallButton"
@@ -7129,7 +7135,7 @@ function Receiving({
                         <p>{contact.role ?? "Contact"} {contact.phone ? `- ${contact.phone}` : ""}</p>
                         <p className="muted">{[contact.email, contact.address, contact.billingAddress ? "Billing set" : "", contact.shippingAddress ? "Shipping set" : "", contact.notes].filter(Boolean).join(" - ") || "No details yet"}</p>
                       </div>
-                      <span className={contact.isPrimary ? "badge" : "badge warning"}>{contact.isPrimary ? "Primary" : contact.status}</span>
+                      <span className={contact.isPrimary ? toneBadgeClass("neutral") : statusBadgeClass(contact.status)}>{contact.isPrimary ? "Primary" : contact.status}</span>
                     </div>
                   ))}
                   {!(contactsModalCompany.contacts ?? []).length && <p className="muted">No contacts saved for this company yet.</p>}
@@ -7430,9 +7436,9 @@ function Receiving({
                     <p>{draft.customerNameSnapshot ?? "No customer yet"} - {draft.productLines.length} item{draft.productLines.length === 1 ? "" : "s"}</p>
                     <p className="muted">Updated {new Date(draft.updatedAt).toLocaleString()}</p>
                   </div>
-                  <span className={draft.status === "Cancelled" ? "badge warning" : "badge"}>{draft.status}</span>
+                  <span className={statusBadgeClass(draft.status)}>{draft.status}</span>
                   {queuedFinalizeDraftIds.has(draft.id) && (
-                    <span className="badge warning" title="Finalize queued on this tablet — waiting for connection. Official record and package numbers arrive on sync.">
+                    <span className={toneBadgeClass("attention")} title="Finalize queued on this tablet — waiting for connection. Official record and package numbers arrive on sync.">
                       Finalize queued
                     </span>
                   )}
@@ -7474,7 +7480,7 @@ function Receiving({
                 <p className="muted">{editingReceivingRecord.customerName} - {editingReceivingRecord.packages.length} item{editingReceivingRecord.packages.length === 1 ? "" : "s"}</p>
               </div>
               <div className="rowActions">
-                <span className="badge">{editingReceivingRecord.drPhotoUrl ? "DR photo saved" : "No DR photo"}</span>
+                <span className={toneBadgeClass(editingReceivingRecord.drPhotoUrl ? "success" : "attention")}>{editingReceivingRecord.drPhotoUrl ? "DR photo saved" : "No DR photo"}</span>
                 <button className="smallButton" onClick={() => setEditingReceivingRecord(null)}>Close</button>
               </div>
             </div>
@@ -7573,7 +7579,7 @@ function Receiving({
                   <p>{draft.customerNameSnapshot ?? "No customer yet"} - {draft.productLines.length} item{draft.productLines.length === 1 ? "" : "s"}</p>
                   <p className="muted">Updated {new Date(draft.updatedAt).toLocaleString()}</p>
                 </div>
-                <span className={draft.status === "Cancelled" ? "badge warning" : "badge"}>{draft.status}</span>
+                <span className={statusBadgeClass(draft.status)}>{draft.status}</span>
                 <div className="rowActions">
                   {draft.status === "Draft" && <button className="smallButton" onClick={() => resumeDraft(draft)}>Resume</button>}
                   {draft.status === "Draft" && (
@@ -7804,7 +7810,7 @@ function Receiving({
               <p>{selectedCustomer.shippingAddress || selectedCustomer.address || selectedCustomer.billingAddress || "No default address saved"}</p>
             </div>
             <div className="rowActions">
-              <span className={selectedCustomer.status === "Pending" ? "badge warning" : "badge"}>{selectedCustomer.status}</span>
+              <span className={statusBadgeClass(selectedCustomer.status)}>{selectedCustomer.status}</span>
               <button className="smallButton" onClick={() => {
                 setSelectedCustomerId("");
                 setCustomerQuery("");
@@ -8388,7 +8394,7 @@ function Receiving({
                       <p>{line.quantity} {line.unit} - {line.handlingBranchName} - {line.condition}</p>
                       {(line.productSku || line.productBarcode) && <p className="muted">{[line.productSku ? `SKU ${line.productSku}` : "", line.productBarcode ? `Code ${line.productBarcode}` : ""].filter(Boolean).join(" / ")}</p>}
                     </div>
-                    <span className="badge">{line.price ? `PHP ${formatReceivingMoney(line.price)}` : "No Price"}</span>
+                    <span className={line.price ? "badge" : toneBadgeClass("attention")}>{line.price ? `PHP ${formatReceivingMoney(line.price)}` : "No Price"}</span>
                   </div>
                 ))}
                 {productsToSave.length > 5 && <p className="muted">+ {productsToSave.length - 5} more item line{productsToSave.length - 5 === 1 ? "" : "s"}.</p>}
@@ -8402,7 +8408,7 @@ function Receiving({
                     <strong>{branch}</strong>
                     <p>{count} item{count === 1 ? "" : "s"} will be recorded for this branch.</p>
                   </div>
-                  <span className="badge">{branch === activeBranchContext ? "Active profile" : "Changed line"}</span>
+                  <span className={toneBadgeClass(branch === activeBranchContext ? "neutral" : "attention")}>{branch === activeBranchContext ? "Active profile" : "Changed line"}</span>
                 </div>
               ))}
             </div>
@@ -8597,8 +8603,8 @@ function Packages({
                 <p className="muted">{pkg.handlingBranchName ?? pkg.destination} / {cargoNextAction(pkg)}</p>
               </div>
               <div className="compactRowMeta cargoListMeta">
-                <span className="badge">{pkg.status}</span>
-                <span className={pkg.price == null ? "badge warning" : "badge"}>{pkg.price == null ? "No Price" : `PHP ${pkg.price}`}</span>
+                <span className={statusBadgeClass(pkg.status)}>{pkg.status}</span>
+                <span className={pkg.price == null ? toneBadgeClass("attention") : "badge"}>{pkg.price == null ? "No Price" : `PHP ${pkg.price}`}</span>
               </div>
             </button>
           ))}
@@ -8621,7 +8627,7 @@ function Packages({
                 <p className="muted">{selectedCargo.packageNumber} - {selectedCargo.customerName}</p>
               </div>
               <div className="headerActionGroup">
-                <span className="badge">{selectedCargo.status}</span>
+                <span className={statusBadgeClass(selectedCargo.status)}>{selectedCargo.status}</span>
                 <button className="smallButton" onClick={() => setSelectedPackage("")}>Close</button>
               </div>
             </div>
@@ -9258,7 +9264,7 @@ function Trips({
                     <p className="muted">{trip.cargoPackageIds.length} cargo / {weight ? `${formatNumber(weight)} kg` : "0 kg"} / {volume ? `${formatNumber(volume, 4)} cbm` : "0 cbm"}</p>
                   </div>
                   <div className="rowActions">
-                    <span className="badge">{trip.status}</span>
+                    <span className={statusBadgeClass(trip.status)}>{trip.status}</span>
                     <span className="rowPseudoButton">{tripCardAction(trip)}</span>
                   </div>
                 </button>
@@ -9281,7 +9287,7 @@ function Trips({
                 <p className="muted">{activeTrip.tripNumber} - {activeTrip.origin} to {activeTrip.destination}</p>
                 <p className="muted">{activeTrip.plateNumber ?? activeTrip.vehicleDescription ?? "Truck not set"} - {activeTrip.driverName ?? "Driver not set"}{activeTrip.driverContactNumber ? ` - ${activeTrip.driverContactNumber}` : ""}</p>
               </div>
-              <span className="badge">{activeTrip.status}</span>
+              <span className={statusBadgeClass(activeTrip.status)}>{activeTrip.status}</span>
             </div>
             {canMarkArrival && (
               <section className="subPanel arrivalCallout">
@@ -9385,9 +9391,9 @@ function Trips({
                           <p className="muted">{pkg.customerName} / {pkg.status} / {pkg.price == null ? "No price" : `PHP ${pkg.price}`} / {packageWeightKg(pkg) ? `${formatNumber(packageWeightKg(pkg))} kg` : "No weight"}</p>
                         </div>
                         <div className="rowActions">
-                          {noPrice && <span className="badge warning">No Price</span>}
-                          {missingMeasurement && <span className="badge warning">Need Size</span>}
-                          {branchMismatch && <span className="badge warning">Mixed</span>}
+                          {noPrice && <span className={toneBadgeClass("attention")}>No Price</span>}
+                          {missingMeasurement && <span className={toneBadgeClass("attention")}>Need Size</span>}
+                          {branchMismatch && <span className={toneBadgeClass("attention")}>Mixed</span>}
                           <span className="rowPseudoButton">{selected ? "Selected" : "Select"}</span>
                         </div>
                       </button>
@@ -9433,7 +9439,7 @@ function Trips({
                       <p className="muted">{pkg.customerName} / {pkg.status} / {pkg.price == null ? "No price" : `PHP ${pkg.price}`} / {packageWeightKg(pkg) ? `${formatNumber(packageWeightKg(pkg))} kg` : "No weight"} / {packageVolumeCbm(pkg) ? `${formatNumber(packageVolumeCbm(pkg), 4)} cbm` : "No volume"}</p>
                     </div>
                     {queuedUnloadPackageIds.has(pkg.id) && (
-                      <span className="badge warning" title="Unload queued on this tablet — the package stays on the trip until the unload syncs.">
+                      <span className={toneBadgeClass("attention")} title="Unload queued on this tablet — the package stays on the trip until the unload syncs.">
                         Unload queued
                       </span>
                     )}
@@ -9447,7 +9453,7 @@ function Trips({
                       <p className="muted">{pkg.customerName} / {pkg.status}</p>
                     </div>
                     <span
-                      className="badge warning"
+                      className={toneBadgeClass(record.status === "Failed" ? "problem" : "attention")}
                       title={
                         record.status === "Failed"
                           ? `Load could not sync: ${record.lastError ?? "sync failed"}. Retry or discard it in Device Setup.`
@@ -9527,8 +9533,8 @@ function Trips({
                 <p className="muted">{trip.plateNumber ?? trip.vehicleDescription ?? "Truck not set"} - {trip.driverName ?? "Driver not set"} - {trip.cargoPackageIds.length} cargo</p>
               </div>
               <div className="rowActions">
-                <span className="badge">{trip.status}</span>
-                {trip.isMixedTrip && <span className="badge warning">Mixed</span>}
+                <span className={statusBadgeClass(trip.status)}>{trip.status}</span>
+                {trip.isMixedTrip && <span className={toneBadgeClass("attention")}>Mixed</span>}
               </div>
             </div>
           ))}
@@ -9794,7 +9800,7 @@ function Delivery({
                 <p className="muted">{pkg.destination} / {pkg.consigneeName ?? "No receiver"} / {paymentStatusForPackage(pkg)} / Balance PHP {packageBalance(pkg).toLocaleString()} / {deliveryNextAction(pkg)}</p>
               </div>
               <div className="rowActions">
-                <span className="badge">{pkg.status}</span>
+                <span className={statusBadgeClass(pkg.status)}>{pkg.status}</span>
                 <span className="rowPseudoButton">Select</span>
               </div>
             </button>
@@ -9996,14 +10002,14 @@ function InvoiceListAndDetail({
     <div className="stack">
       <div className="list compactList">
         {visibleInvoices.map((invoice) => (
-          <button className="row tappableRow compactDataRow" key={invoice.id} onClick={() => setSelectedInvoiceId(invoice.id === selectedInvoiceId ? "" : invoice.id)}>
+          <button className="row tappableRow compactDataRow invoiceRow" key={invoice.id} onClick={() => setSelectedInvoiceId(invoice.id === selectedInvoiceId ? "" : invoice.id)}>
             <div>
               <strong>{invoice.invoiceNumber}</strong>
               <p>{invoice.customerName}</p>
-              <p className="muted">Due {formatDueDate(invoice)} / Balance PHP {invoice.balance.toLocaleString()}</p>
+              <p className="muted invoiceMetaLine">Due {formatDueDate(invoice)} / Balance PHP {invoice.balance.toLocaleString()}</p>
             </div>
             <div className="compactRowMeta">
-              <span className={invoice.status === "Overdue" || invoice.status === "Void" ? "badge warning" : "badge"}>{invoice.status}</span>
+              <span className={statusBadgeClass(invoice.status)}>{invoice.status}</span>
               <span className="badge">PHP {invoice.amountDue.toLocaleString()}</span>
             </div>
           </button>
@@ -10039,7 +10045,7 @@ function InvoiceListAndDetail({
                     <p>{pkg?.description ?? "Package"}</p>
                     <p className="muted">Due PHP {due.toLocaleString()} / Paid PHP {paid.toLocaleString()} / Balance PHP {Math.max(due - paid, 0).toLocaleString()}</p>
                   </div>
-                  <span className="badge">{pkg?.status ?? "Unknown"}</span>
+                  <span className={statusBadgeClass(pkg?.status)}>{pkg?.status ?? "Unknown"}</span>
                 </div>
               );
             })}
@@ -10131,7 +10137,7 @@ function DueWorklist({
               <p className="muted">Due {row.dueDate} / Balance PHP {row.balance.toLocaleString()}</p>
             </div>
             <div className="rowActions">
-              <span className={row.state === "Overdue" ? "badge warning" : "badge"}>
+              <span className={toneBadgeClass(row.state === "Overdue" ? "problem" : "attention")}>
                 {row.state === "Overdue" ? `Overdue ${row.daysOverdue}d` : row.daysUntilDue === 0 ? "Due today" : `Due in ${row.daysUntilDue}d`}
               </span>
               <button className="smallButton" onClick={() => onAction("Notify billing reminder", () => notifyRow(row))}>Notify</button>
@@ -10260,6 +10266,37 @@ function Reports() {
         {loadFailed && !loading && <p className="muted">The report could not be loaded. Check the connection and refresh.</p>}
         {report && !loading && (
           <>
+            {/* Round 1 PR-12 (C-M16 via R1): the totals are the
+                report's headline figures — first in the results,
+                largest, full-contrast (see .reportTotals in
+                styles.css). The same five labels and figures that
+                used to sit in small muted text at the foot of the
+                page; nothing about the numbers changed. */}
+            <p className="eyebrow">Totals</p>
+            <div className="reportTotals" aria-label="Report totals">
+              <div>
+                <span>Billed</span>
+                <strong>{money(report.totals.billed)}</strong>
+              </div>
+              <div>
+                <span>Collected</span>
+                <strong>{money(report.totals.collected)}</strong>
+              </div>
+              <div>
+                <span>Outstanding</span>
+                <strong>{money(report.totals.outstanding)}</strong>
+              </div>
+              <div>
+                <span>Approved expenses</span>
+                <strong>{money(report.totals.approvedExpenses)}</strong>
+              </div>
+              {report.totals.margin !== null && (
+                <div>
+                  <span>Margin</span>
+                  <strong>{money(report.totals.margin)}</strong>
+                </div>
+              )}
+            </div>
             <div className="list compactList">
               {report.groups.map((group) => (
                 // Two-child row: override .row's three-column template
@@ -10285,9 +10322,9 @@ function Reports() {
                     {/* flexShrink 0: a money figure must never ellipsize
                         inside the meta flex row on narrow screens. */}
                     {group.margin !== null ? (
-                      <span className="badge" style={{ flexShrink: 0, maxWidth: "none" }}>Margin {money(group.margin)}</span>
+                      <span className={toneBadgeClass(group.margin < 0 ? "problem" : "success")} style={{ flexShrink: 0, maxWidth: "none" }}>Margin {money(group.margin)}</span>
                     ) : (
-                      <span className="badge" style={{ flexShrink: 0, maxWidth: "none" }}>Revenue only</span>
+                      <span className={toneBadgeClass("neutral")} style={{ flexShrink: 0, maxWidth: "none" }}>Revenue only</span>
                     )}
                   </div>
                 </div>
@@ -10300,7 +10337,7 @@ function Reports() {
                   <h4>Unallocated Expenses</h4>
                   <p className="muted">Approved expenses in this period with no trip link. They are shown here once — never spread across the rows above.</p>
                 </div>
-                <span className="badge warning">{money(report.unallocatedExpenses.total)}</span>
+                <span className={toneBadgeClass("attention")}>{money(report.unallocatedExpenses.total)}</span>
               </div>
               {report.unallocatedExpenses.byCategory.length > 0 ? (
                 <p className="muted">
@@ -10316,11 +10353,6 @@ function Reports() {
                 </p>
               )}
             </section>
-            <p className="muted">
-              Totals — Billed {money(report.totals.billed)} · Collected {money(report.totals.collected)} · Outstanding {money(report.totals.outstanding)} · Approved expenses{" "}
-              {money(report.totals.approvedExpenses)}
-              {report.totals.margin !== null ? ` · Margin ${money(report.totals.margin)}` : ""}
-            </p>
           </>
         )}
       </section>
@@ -10563,8 +10595,8 @@ function Payments({
                 <p className="muted">{pkg.status} / {pkg.receivingRecordNumber}</p>
               </div>
               <div className="compactRowMeta">
-                <span className="badge warning">Unpaid</span>
-                <span className="badge">{pkg.price == null ? "No price" : `PHP ${pkg.price.toLocaleString()}`}</span>
+                <span className={statusBadgeClass("Unpaid")}>Unpaid</span>
+                <span className={pkg.price == null ? toneBadgeClass("attention") : "badge"}>{pkg.price == null ? "No price" : `PHP ${pkg.price.toLocaleString()}`}</span>
               </div>
             </button>
           ))}
@@ -10600,7 +10632,7 @@ function Payments({
                 <p>{isOwner ? `Balance: PHP ${displayBalance.toLocaleString()}` : `${payment.collectionPoint ?? collectionPoint} - ${payment.collectedByName ?? activeUser.name}`}</p>
               </div>
               <div className="compactRowMeta">
-                <span className="badge">{payment.status}</span>
+                <span className={statusBadgeClass(payment.status)}>{payment.status}</span>
               </div>
             </div>
             );
@@ -10951,7 +10983,7 @@ function Expenses({
                 <p className="muted">{expenseTripNumber(expense)} / {formatSearchDate(expense.createdAt)}{expense.receiptUrl ? " / Receipt attached" : ""}</p>
               </div>
               <div className="compactRowMeta">
-                <span className="badge">{expense.status}</span>
+                <span className={statusBadgeClass(expense.status)}>{expense.status}</span>
               </div>
             </div>
           ))}
@@ -10981,7 +11013,7 @@ function Expenses({
                   <p className="muted">{expenseTripNumber(expense)} / {formatSearchDate(expense.createdAt)}{expense.receiptUrl ? " / Receipt attached" : ""}</p>
                 </div>
                 <div className="compactRowMeta">
-                  <span className="badge warning">{expense.status}</span>
+                  <span className={statusBadgeClass(expense.status)}>{expense.status}</span>
                 </div>
               </div>
             ))}
@@ -11134,7 +11166,7 @@ function OperationsChat({
                   <strong>{thread.description ?? thread.packageNumber}</strong>
                   <p>{thread.packageNumber} - {thread.customerName}</p>
                   <p className="muted">{thread.branchName ?? "No branch"} / Requested by {thread.requestedByName ?? "staff"}</p>
-                  <span className={thread.status === "Needs Approval" ? "badge warning" : "badge"}>{thread.status}</span>
+                  <span className={statusBadgeClass(thread.status)}>{thread.status}</span>
                 </div>
                 <div className="chatApprovalActions">
                   <label>
@@ -11189,7 +11221,7 @@ function OperationsChat({
                   <p>{pkg.packageNumber} - {pkg.customerName}</p>
                   <p className="muted">{pkg.receivingRecordNumber} / {pkg.handlingBranchName ?? pkg.destination} / {pkg.price == null ? "No price" : `PHP ${pkg.price.toLocaleString()}`}</p>
                 </div>
-                <span className={pkg.price == null ? "badge warning" : "badge"}>{pkg.status}</span>
+                <span className={pkg.price == null ? toneBadgeClass("attention") : statusBadgeClass(pkg.status)}>{pkg.status}</span>
               </button>
             ))}
           </div>
@@ -11224,7 +11256,7 @@ function OperationsChat({
                   <p>{thread.packageNumber ?? thread.scope} {thread.customerName ? `- ${thread.customerName}` : ""}</p>
                   <p className="muted">{thread.messages.at(-1)?.body ?? "No messages yet"}</p>
                 </div>
-                <span className={thread.status === "Needs Approval" ? "badge warning" : "badge"}>{thread.status}</span>
+                <span className={statusBadgeClass(thread.status)}>{thread.status}</span>
               </button>
             ))}
             {!threads.length && <p className="muted">No chat threads found.</p>}
@@ -11236,7 +11268,7 @@ function OperationsChat({
                   <h4>{selectedThread.title}</h4>
                   <p className="muted">{selectedThread.packageNumber ?? selectedThread.scope}</p>
                 </div>
-                <span className={selectedThread.status === "Needs Approval" ? "badge warning" : "badge"}>{selectedThread.status}</span>
+                <span className={statusBadgeClass(selectedThread.status)}>{selectedThread.status}</span>
               </div>
               <ChatMessages thread={selectedThread} />
               <div className="chatComposer">
@@ -11652,9 +11684,9 @@ function CustomerPortal({
                     <p className="muted">{customer.address ?? "Address missing"} - {customer.contacts?.length ?? 0} contact{(customer.contacts?.length ?? 0) === 1 ? "" : "s"} - {customerPackages.length} shipment{customerPackages.length === 1 ? "" : "s"}</p>
                   </div>
                   <div className="compactRowMeta">
-                    <span className={customer.status === "Active" ? "badge" : "badge warning"}>{customer.status}</span>
+                    <span className={statusBadgeClass(customer.status)}>{customer.status}</span>
                     {customerOngoing > 0 && <span className="badge">{customerOngoing} ongoing</span>}
-                    {serverCustomerBalance && serverCustomerBalance.outstanding > 0 && <span className="badge warning">PHP {serverCustomerBalance.outstanding.toLocaleString()}</span>}
+                    {serverCustomerBalance && serverCustomerBalance.outstanding > 0 && <span className={toneBadgeClass("attention")}>PHP {serverCustomerBalance.outstanding.toLocaleString()}</span>}
                     {serverCustomerBalance?.oldestDueDate && <span className="badge">Oldest due {serverCustomerBalance.oldestDueDate}</span>}
                   </div>
                 </button>
@@ -11741,7 +11773,7 @@ function CustomerPortal({
                         </p>
                       </div>
                       <div className="compactRowMeta">
-                        <span className="badge warning">PHP {row.outstanding.toLocaleString()}</span>
+                        <span className={toneBadgeClass("attention")}>PHP {row.outstanding.toLocaleString()}</span>
                         <span className="badge">{agingBucketLabel(row.agingBucket)}</span>
                       </div>
                     </div>
@@ -11808,7 +11840,7 @@ function CustomerPortal({
                       <strong>{entry.kind === "manual" ? "Manual reminder" : entry.kind === "dueSoon" ? "Due-soon notice" : "Overdue notice"}{entry.invoiceNumber ? ` — ${entry.invoiceNumber}` : ""}</strong>
                       <p className="muted">{new Date(entry.createdAt).toLocaleString()}{entry.reason ? ` / ${entry.reason}` : ""}</p>
                     </div>
-                    <span className={entry.kind === "overdue" ? "badge warning" : "badge"}>{entry.kind === "manual" ? "Manual" : entry.kind === "dueSoon" ? "Due soon" : "Overdue"}</span>
+                    <span className={toneBadgeClass(entry.kind === "overdue" ? "problem" : entry.kind === "dueSoon" ? "attention" : "neutral")}>{entry.kind === "manual" ? "Manual" : entry.kind === "dueSoon" ? "Due soon" : "Overdue"}</span>
                   </div>
                 ))}
                 {!reminderHistory.length && <p className="muted">No reminders recorded yet for this customer.</p>}
@@ -11822,7 +11854,7 @@ function CustomerPortal({
                     <p>{contact.role ?? "Contact"} {contact.phone ? `- ${contact.phone}` : ""}</p>
                     <p className="muted">{[contact.email, contact.address, contact.billingAddress ? "Billing set" : "", contact.shippingAddress ? "Shipping set" : "", contact.notes].filter(Boolean).join(" - ") || "No details yet"}</p>
                   </div>
-                  <span className={contact.isPrimary ? "badge" : "badge warning"}>{contact.isPrimary ? "Primary" : contact.status}</span>
+                  <span className={contact.isPrimary ? toneBadgeClass("neutral") : statusBadgeClass(contact.status)}>{contact.isPrimary ? "Primary" : contact.status}</span>
                 </div>
               ))}
               {!(selectedCustomer.contacts ?? []).length && <p className="muted">No contacts saved for this company yet.</p>}
@@ -11851,7 +11883,7 @@ function CustomerPortal({
                       </p>
                     </div>
                     <div className="compactRowMeta">
-                      <span className="badge">{pkg.status}</span>
+                      <span className={statusBadgeClass(pkg.status)}>{pkg.status}</span>
                     </div>
                   </button>
                 ))}
