@@ -55,6 +55,7 @@ import type {
   HardwareTestRecord,
   IdempotencyRecord,
   ProductMaster,
+  ServiceAuditActor,
   ServiceAuditLog,
   ServiceNotification,
   StaffUserRecord,
@@ -66,6 +67,34 @@ import { rolePresets } from "@mts-lbmp/permissions";
 
 function id(prefix: string) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Round 1 PR-6 (C-M7): reserved audit actors for entries no signed-in
+ * user performed. Scheduler scans, load-time migrations, boot
+ * provisioning and internal reconciliation record SYSTEM; the public
+ * wall-QR intake routes and failed sign-ins against unknown accounts
+ * record ANONYMOUS. Neither marker is a real user id, so a machine or
+ * public action can never be mistaken for a staff member's.
+ */
+const SYSTEM_AUDIT_ACTOR: ServiceAuditActor = { id: "system", role: "System", name: "System" };
+const ANONYMOUS_AUDIT_ACTOR: ServiceAuditActor = { id: "anonymous", role: "Unauthenticated", name: "Unauthenticated" };
+
+/**
+ * Round 1 PR-6 (C-M7): the before/after pair for an update — only the
+ * fields whose values actually differ, so the audit entry names the
+ * change itself instead of two full snapshots.
+ */
+function diffSnapshots(before: Record<string, unknown>, after: Record<string, unknown>) {
+  const changedBefore: Record<string, unknown> = {};
+  const changedAfter: Record<string, unknown> = {};
+  for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    if (before[key] !== after[key]) {
+      changedBefore[key] = before[key];
+      changedAfter[key] = after[key];
+    }
+  }
+  return { before: changedBefore, after: changedAfter };
 }
 
 type ListQuery = {
@@ -504,7 +533,9 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       "auth.bootstrapAdminProvisioned",
       "User",
       admin.id,
-      `Initial admin provisioned from MTS_BOOTSTRAP_* env for ${admin.email}; password change required at first sign-in`
+      `Initial admin provisioned from MTS_BOOTSTRAP_* env for ${admin.email}; password change required at first sign-in`,
+      // Boot provisioning is a system act (no actor passed → SYSTEM marker).
+      { after: { email: admin.email, role: admin.role, branchAccess: admin.branchAccess } }
     );
     console.warn(
       `[bootstrap] No user accounts existed: provisioned the initial System Admin ${admin.email} ` +
@@ -732,7 +763,9 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
    */
   private registerLoginFailure(record: StaffUserRecord | undefined, door: "password" | "staffCode", attemptedIdentifier: string, device = "Unknown device") {
     if (!record) {
-      this.audit("auth.loginFailed", "User", attemptedIdentifier, `door=${door}; device=${device}; unknown or inactive account`);
+      this.audit("auth.loginFailed", "User", attemptedIdentifier, `door=${door}; device=${device}; unknown or inactive account`, {
+        actor: ANONYMOUS_AUDIT_ACTOR
+      });
       this.saveData();
       return;
     }
@@ -743,10 +776,14 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         "auth.loginLocked",
         "User",
         record.id,
-        `door=${door}; device=${device}; ${record.failedLoginAttempts} consecutive failures; locked until ${record.loginLockedUntil}`
+        `door=${door}; device=${device}; ${record.failedLoginAttempts} consecutive failures; locked until ${record.loginLockedUntil}`,
+        { actor: this.auditActorForRecord(record), after: { failedLoginAttempts: record.failedLoginAttempts, loginLockedUntil: record.loginLockedUntil } }
       );
     } else {
-      this.audit("auth.loginFailed", "User", record.id, `door=${door}; device=${device}; consecutive failures=${record.failedLoginAttempts}`);
+      this.audit("auth.loginFailed", "User", record.id, `door=${door}; device=${device}; consecutive failures=${record.failedLoginAttempts}`, {
+        actor: this.auditActorForRecord(record),
+        after: { failedLoginAttempts: record.failedLoginAttempts }
+      });
     }
     this.saveData();
   }
@@ -775,7 +812,9 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException("Invalid email or password");
     }
     if (this.isLoginLocked(record)) {
-      this.audit("auth.loginLocked", "User", user.id, `door=password; device=${device}; sign-in attempted during lockout`);
+      this.audit("auth.loginLocked", "User", user.id, `door=password; device=${device}; sign-in attempted during lockout`, {
+        actor: this.auditActorForRecord(record)
+      });
       throw this.lockedLoginError();
     }
     // Fail closed: an account with no password hash of its own cannot sign
@@ -786,7 +825,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException("Invalid email or password");
     }
     this.registerLoginSuccess(record);
-    this.audit("auth.login", "User", user.id, `door=password; device=${device}`);
+    this.audit("auth.login", "User", user.id, `door=password; device=${device}`, {
+      actor: this.auditActorForRecord(record),
+      after: { role: user.role, branchAccess: user.branchAccess }
+    });
     return {
       user: this.toSafeUser(user),
       token: signAuthToken({
@@ -827,11 +869,16 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException("Invalid staff code");
     }
     if (this.isLoginLocked(matchedRecord)) {
-      this.audit("auth.loginLocked", "User", matchedUser.id, `door=staffCode; device=${device}; sign-in attempted during lockout`);
+      this.audit("auth.loginLocked", "User", matchedUser.id, `door=staffCode; device=${device}; sign-in attempted during lockout`, {
+        actor: this.auditActorForRecord(matchedRecord)
+      });
       throw this.lockedLoginError();
     }
     this.registerLoginSuccess(matchedRecord);
-    this.audit("auth.staffCodeLogin", "User", matchedUser.id, `door=staffCode; device=${device}`);
+    this.audit("auth.staffCodeLogin", "User", matchedUser.id, `door=staffCode; device=${device}`, {
+      actor: this.auditActorForRecord(matchedRecord),
+      after: { role: matchedUser.role, branchAccess: matchedUser.branchAccess }
+    });
     return {
       user: this.toSafeUser(matchedUser),
       token: signAuthToken({
@@ -861,7 +908,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     if (!record || record.status === "Inactive") throw new NotFoundException("User not found");
     const storedHash = this.passwordHashFor(record);
     if (!storedHash || !verifySecret(input.currentPassword ?? "", storedHash)) {
-      this.audit("auth.passwordChangeFailed", "User", record.id, "current password did not verify");
+      this.audit("auth.passwordChangeFailed", "User", record.id, "current password did not verify", { actor: this.auditActorForRecord(record) });
       throw new BadRequestException("Current password is incorrect");
     }
     const newPassword = input.newPassword ?? "";
@@ -878,7 +925,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     // has just proven possession of the current credential.
     record.failedLoginAttempts = 0;
     record.loginLockedUntil = undefined;
-    this.audit("auth.passwordChanged", "User", record.id, "self-service password change");
+    this.audit("auth.passwordChanged", "User", record.id, "self-service password change", { actor: this.auditActorForRecord(record) });
     this.saveData();
     const user = this.getAllUsers().find((entry) => entry.id === record.id) ?? record;
     return {
@@ -918,7 +965,8 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       "settings.user.passwordReset",
       "User",
       record.id,
-      `temporary password set by ${adminUserId ?? "unknown admin"}; change required at next sign-in; existing sessions revoked`
+      `temporary password set by ${adminUserId ?? "unknown admin"}; change required at next sign-in; existing sessions revoked`,
+      { actor: this.auditActorForId(adminUserId), after: { mustChangePassword: true } }
     );
     this.saveData();
     const updated = this.getAllUsers().find((entry) => entry.id === record.id) ?? record;
@@ -1129,18 +1177,25 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return this.trucks.filter((truck) => truck.status !== "Inactive");
   }
 
-  saveTruck(input: { plateNumber: string; driverName?: string; contactNumber?: string; ownerName?: string }) {
+  saveTruck(input: { plateNumber: string; driverName?: string; contactNumber?: string; ownerName?: string }, actorUserId?: string) {
     if (!input.plateNumber?.trim()) throw new BadRequestException("Plate number is required");
     const plateNumber = input.plateNumber.trim().toUpperCase();
     const existing = this.trucks.find((truck) => truck.plateNumber.toUpperCase() === plateNumber);
     const now = new Date().toISOString();
     if (existing) {
+      const before = { driverName: existing.driverName, contactNumber: existing.contactNumber, ownerName: existing.ownerName, status: existing.status };
       existing.driverName = input.driverName?.trim() || existing.driverName;
       existing.contactNumber = input.contactNumber?.trim() || existing.contactNumber;
       existing.ownerName = input.ownerName?.trim() || existing.ownerName;
       existing.status = "Active";
       existing.updatedAt = now;
-      this.audit("trucks.update", "Truck", existing.id, plateNumber);
+      const { before: changedBefore, after: changedAfter } = diffSnapshots(before, {
+        driverName: existing.driverName,
+        contactNumber: existing.contactNumber,
+        ownerName: existing.ownerName,
+        status: existing.status
+      });
+      this.audit("trucks.update", "Truck", existing.id, plateNumber, { actor: this.auditActorForId(actorUserId), before: changedBefore, after: changedAfter });
       this.saveData();
       return existing;
     }
@@ -1154,7 +1209,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       createdAt: now
     };
     this.trucks.push(truck);
-    this.audit("trucks.create", "Truck", truck.id, plateNumber);
+    this.audit("trucks.create", "Truck", truck.id, plateNumber, {
+      actor: this.auditActorForId(actorUserId),
+      after: { plateNumber: truck.plateNumber, driverName: truck.driverName, contactNumber: truck.contactNumber, ownerName: truck.ownerName }
+    });
     this.saveData();
     return truck;
   }
@@ -1356,7 +1414,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
    * Partially paid invoices past due DO notify, carrying the live
    * remaining balance.
    */
-  runDueReminderScan(now: Date = new Date()): DueReminderScanResult {
+  runDueReminderScan(now: Date = new Date(), actorUserId?: string): DueReminderScanResult {
+    // Round 1 PR-6 (C-M7): scheduler/boot/lazy scans pass no actor and
+    // record the SYSTEM marker; the manual endpoint passes the admin.
+    const scanActor = this.auditActorForId(actorUserId);
     const result: DueReminderScanResult = { scannedInvoices: 0, dueSoonNotified: [], overdueNotified: [] };
     const todayKey = this.businessDateKey(now);
     const dayWord = (days: number) => (days === 1 ? "day" : "days");
@@ -1382,7 +1443,8 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
           "billing.reminder.overdue",
           "BillingInvoice",
           invoice.id,
-          `${invoice.invoiceNumber}; ${invoice.customerName}; balance PHP ${derived.balance.toLocaleString()}; due ${dueKey}; ${daysOverdue} ${dayWord(daysOverdue)} overdue`
+          `${invoice.invoiceNumber}; ${invoice.customerName}; balance PHP ${derived.balance.toLocaleString()}; due ${dueKey}; ${daysOverdue} ${dayWord(daysOverdue)} overdue`,
+          { actor: scanActor, after: { balance: derived.balance, dueDate: dueKey, daysOverdue } }
         );
         result.overdueNotified.push(invoice.id);
       } else {
@@ -1401,7 +1463,8 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
           "billing.reminder.dueSoon",
           "BillingInvoice",
           invoice.id,
-          `${invoice.invoiceNumber}; ${invoice.customerName}; balance PHP ${derived.balance.toLocaleString()}; due ${dueKey}; ${daysUntilDue} ${dayWord(daysUntilDue)} to due date`
+          `${invoice.invoiceNumber}; ${invoice.customerName}; balance PHP ${derived.balance.toLocaleString()}; due ${dueKey}; ${daysUntilDue} ${dayWord(daysUntilDue)} to due date`,
+          { actor: scanActor, after: { balance: derived.balance, dueDate: dueKey, daysUntilDue } }
         );
         result.dueSoonNotified.push(invoice.id);
       }
@@ -1890,7 +1953,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return [...this.hardwareTests].reverse();
   }
 
-  createHardwareTest(input: Omit<HardwareTestRecord, "id" | "createdAt">) {
+  createHardwareTest(input: Omit<HardwareTestRecord, "id" | "createdAt">, actorUserId?: string) {
     const record: HardwareTestRecord = {
       id: id("hw"),
       deviceName: input.deviceName?.trim() || "NB80 Android POS",
@@ -1913,7 +1976,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     if (failed.length) {
       this.notify("NB80 hardware issue", `${failed.map(([name]) => name).join(", ")} need review.`, "High");
     }
-    this.audit("hardware.test.create", "HardwareTest", record.id);
+    this.audit("hardware.test.create", "HardwareTest", record.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      after: { deviceName: record.deviceName }
+    });
     this.saveData();
     return record;
   }
@@ -1927,18 +1993,27 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  updateCompanyProfile(input: Partial<CompanyProfile>) {
+  updateCompanyProfile(input: Partial<CompanyProfile>, actorUserId?: string) {
+    const before = { ...this.companyProfile };
     this.companyProfile = {
       ...this.companyProfile,
       ...input,
       companyName: input.companyName?.trim() || this.companyProfile.companyName
     };
-    this.audit("settings.company.update", "CompanyProfile", "company");
+    const { before: changedBefore, after: changedAfter } = diffSnapshots(
+      before as Record<string, unknown>,
+      { ...this.companyProfile } as Record<string, unknown>
+    );
+    this.audit("settings.company.update", "CompanyProfile", "company", undefined, {
+      actor: this.auditActorForId(actorUserId),
+      before: changedBefore,
+      after: changedAfter
+    });
     this.saveData();
     return this.companyProfile;
   }
 
-  createBranch(input: Omit<Branch, "id" | "status"> & { status?: "Active" | "Inactive" }) {
+  createBranch(input: Omit<Branch, "id" | "status"> & { status?: "Active" | "Inactive" }, actorUserId?: string) {
     if (!input.name?.trim() || !input.code?.trim()) {
       throw new BadRequestException("Branch name and code are required");
     }
@@ -1959,24 +2034,36 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       status: input.status ?? "Active"
     };
     this.branches.push(branch);
-    this.audit("settings.branch.create", "Branch", branch.id);
+    this.audit("settings.branch.create", "Branch", branch.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      after: { name: branch.name, code: branch.code, status: branch.status }
+    });
     this.saveData();
     return branch;
   }
 
-  updateBranch(branchId: string, input: Partial<Branch>) {
+  updateBranch(branchId: string, input: Partial<Branch>, actorUserId?: string) {
     const branch = this.branches.find((entry) => entry.id === branchId || entry.code === branchId);
     if (!branch) throw new NotFoundException("Branch not found");
+    const before = { ...branch };
     Object.assign(branch, {
       ...input,
       code: input.code ? input.code.toUpperCase() : branch.code
     });
-    this.audit("settings.branch.update", "Branch", branch.id);
+    const { before: changedBefore, after: changedAfter } = diffSnapshots(
+      before as Record<string, unknown>,
+      { ...branch } as Record<string, unknown>
+    );
+    this.audit("settings.branch.update", "Branch", branch.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      before: changedBefore,
+      after: changedAfter
+    });
     this.saveData();
     return branch;
   }
 
-  updateUserBranchAccess(userId: string, input: { branchAccess: string }) {
+  updateUserBranchAccess(userId: string, input: { branchAccess: string }, actorUserId?: string) {
     const user = this.getAllUsers().find((entry) => entry.id === userId);
     if (!user) throw new NotFoundException("User not found");
     const branchAccess = input.branchAccess?.trim();
@@ -1985,8 +2072,13 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     // itself — branchAccess on the record is the single source of truth
     // (the separate override map this method used to write is deleted).
     const record = this.findUserRecord(userId);
+    const previousBranchAccess = record?.branchAccess ?? user.branchAccess;
     if (record) record.branchAccess = branchAccess;
-    this.audit("settings.user.branchAccess.update", "User", userId, branchAccess);
+    this.audit("settings.user.branchAccess.update", "User", userId, branchAccess, {
+      actor: this.auditActorForId(actorUserId),
+      before: { branchAccess: previousBranchAccess },
+      after: { branchAccess }
+    });
     this.saveData();
     const updated = this.getAllUsers().find((entry) => entry.id === userId)!;
     return this.toSafeUser(updated);
@@ -2107,7 +2199,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       createdAt: new Date().toISOString()
     };
     this.customUsers.push(user);
-    this.audit("settings.user.create", "User", user.id, `${user.name} - ${user.role} - ${user.branchAccess}`);
+    this.audit("settings.user.create", "User", user.id, `${user.name} - ${user.role} - ${user.branchAccess}`, {
+      actor: this.auditActorForId(actorUserId),
+      after: { name: user.name, role: user.role, branchAccess: user.branchAccess, status: user.status }
+    });
     this.saveData();
     return this.toSafeUser(user);
   }
@@ -2125,6 +2220,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     // apply uniformly.
     const user = this.customUsers.find((entry) => entry.id === userId);
     if (!user) throw new NotFoundException("User not found");
+    // Round 1 PR-6 (C-M7): pre-mutation snapshot for the audit delta —
+    // the mutable lifecycle fields only; credential material is never
+    // snapshotted (a staff-code change is recorded as a boolean marker).
+    const beforeUser = { name: user.name, phone: user.phone, email: user.email, role: user.role, branchAccess: user.branchAccess, status: user.status };
 
     // "Changed" under hashed storage means: does not verify against the
     // account's current hash. Re-submitting the same code is a no-op.
@@ -2183,7 +2282,20 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       user.branchAccess = input.branchAccess.trim();
     }
 
-    this.audit("settings.user.update", "User", userId, `${user.name} - ${input.role ?? user.role} - ${input.branchAccess ?? user.branchAccess}`);
+    const { before: changedBefore, after: changedAfter } = diffSnapshots(beforeUser, {
+      name: user.name,
+      phone: user.phone,
+      email: user.email,
+      role: user.role,
+      branchAccess: user.branchAccess,
+      status: user.status
+    });
+    if (staffCodeChanged) changedAfter.staffCodeChanged = true;
+    this.audit("settings.user.update", "User", userId, `${user.name} - ${input.role ?? user.role} - ${input.branchAccess ?? user.branchAccess}`, {
+      actor: this.auditActorForId(actorUserId),
+      before: changedBefore,
+      after: changedAfter
+    });
     this.saveData();
     const updated = this.getAllUsers().find((entry) => entry.id === userId)!;
     return this.toSafeUser(updated);
@@ -2205,16 +2317,26 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  updatePaymentMethods(input: { methods: string[] }) {
+  updatePaymentMethods(input: { methods: string[] }, actorUserId?: string) {
+    const before = [...this.paymentMethods];
     this.paymentMethods = this.cleanList(input.methods, "Payment method");
-    this.audit("settings.paymentMethods.update", "Settings", "paymentMethods");
+    this.audit("settings.paymentMethods.update", "Settings", "paymentMethods", undefined, {
+      actor: this.auditActorForId(actorUserId),
+      before: { paymentMethods: before },
+      after: { paymentMethods: [...this.paymentMethods] }
+    });
     this.saveData();
     return this.paymentMethods;
   }
 
-  updateExpenseCategories(input: { categories: string[] }) {
+  updateExpenseCategories(input: { categories: string[] }, actorUserId?: string) {
+    const before = [...this.expenseCategories];
     this.expenseCategories = this.cleanList(input.categories, "Expense category");
-    this.audit("settings.expenseCategories.update", "Settings", "expenseCategories");
+    this.audit("settings.expenseCategories.update", "Settings", "expenseCategories", undefined, {
+      actor: this.auditActorForId(actorUserId),
+      before: { expenseCategories: before },
+      after: { expenseCategories: [...this.expenseCategories] }
+    });
     this.saveData();
     return this.expenseCategories;
   }
@@ -2234,10 +2356,15 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     if (input.type !== INTAKE_DR_PHOTO_TYPE) {
       throw new BadRequestException("This upload path only accepts wall-QR intake DR photos");
     }
-    return this.uploadFile(input);
+    return this.uploadFile(input, ANONYMOUS_AUDIT_ACTOR);
   }
 
-  async uploadFile(input: { dataUrl: string; fileName: string; type: string; entityId?: string }) {
+  /** Staff upload entry point (POST /uploads): threads the uploader's identity into the audit entry. */
+  async uploadFileAsUser(input: { dataUrl: string; fileName: string; type: string; entityId?: string }, actorUserId?: string) {
+    return this.uploadFile(input, this.auditActorForId(actorUserId));
+  }
+
+  async uploadFile(input: { dataUrl: string; fileName: string; type: string; entityId?: string }, actor?: ServiceAuditActor) {
     const match = input.dataUrl.match(/^data:(?<mime>[-\w/+]+);base64,(?<data>.+)$/);
     if (!match?.groups?.data || !match.groups.mime) {
       throw new BadRequestException("Upload must be a base64 data URL");
@@ -2258,7 +2385,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     const storedPath = resolve(this.uploadDir, storedName);
     await writeFile(storedPath, buffer);
     const publicUrl = `/uploads/${storedName}`;
-    this.audit("uploads.create", input.type, input.entityId ?? storedName);
+    this.audit("uploads.create", input.type, input.entityId ?? storedName, undefined, {
+      ...(actor ? { actor } : {}),
+      after: { fileName: storedName, mimeType: match.groups.mime, size: buffer.byteLength }
+    });
     this.saveData();
     return {
       fileUrl: publicUrl,
@@ -2296,7 +2426,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  linkDescriptionBarcode(input: { customerId: string; barcode: string; description: string }) {
+  linkDescriptionBarcode(input: { customerId: string; barcode: string; description: string }, actorUserId?: string) {
     const existing = this.descriptionBarcodes.find(
       (entry) => entry.customerId === input.customerId && entry.barcode === input.barcode
     );
@@ -2307,7 +2437,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     }
     const record = { id: id("bar"), customerId: input.customerId, barcode: input.barcode, description: input.description };
     this.descriptionBarcodes.push(record);
-    this.audit("barcode.link", "DescriptionBarcode", record.id);
+    this.audit("barcode.link", "DescriptionBarcode", record.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      after: { customerId: record.customerId, barcode: record.barcode, description: record.description }
+    });
     this.saveData();
     return record;
   }
@@ -2345,17 +2478,20 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return candidate;
   }
 
-  private ensureProductMasterForCargo(input: {
-    description: string;
-    sku?: string;
-    barcode?: string;
-    brand?: string;
-    category?: string;
-    unit?: string;
-    price?: number | null;
-    photoUrl?: string;
-    notes?: string;
-  }) {
+  private ensureProductMasterForCargo(
+    input: {
+      description: string;
+      sku?: string;
+      barcode?: string;
+      brand?: string;
+      category?: string;
+      unit?: string;
+      price?: number | null;
+      photoUrl?: string;
+      notes?: string;
+    },
+    actor?: ServiceAuditActor
+  ) {
     const name = input.description?.trim();
     if (!name) throw new BadRequestException("Product description is required");
     const sku = input.sku?.trim() || undefined;
@@ -2394,7 +2530,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       createdAt: new Date().toISOString()
     };
     this.productMasters.push(product);
-    this.audit("products.auto_create", "ProductMaster", product.id, "Created from cargo/receiving");
+    this.audit("products.auto_create", "ProductMaster", product.id, "Created from cargo/receiving", {
+      ...(actor ? { actor } : {}),
+      after: { name: product.name, sku: product.sku, category: product.category, defaultPrice: product.defaultPrice }
+    });
     return product;
   }
 
@@ -2409,7 +2548,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return { found: Boolean(product), product: product ?? null };
   }
 
-  createProductMaster(input: { name: string; sku?: string; barcode?: string; brand?: string; category?: string; defaultUnit?: string; defaultPrice?: number | null; notes?: string; photoUrl?: string }) {
+  createProductMaster(input: { name: string; sku?: string; barcode?: string; brand?: string; category?: string; defaultUnit?: string; defaultPrice?: number | null; notes?: string; photoUrl?: string }, actorUserId?: string) {
     if (!input.name?.trim()) throw new BadRequestException("Product name is required");
     this.assertNoLocalPhotoReference(input.photoUrl, "Product photo");
     const sku = input.sku?.trim() || undefined;
@@ -2425,6 +2564,15 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         ? this.productMasters.find((entry) => entry.barcode === barcode && entry.status !== "Archived")
         : this.productMasters.find((entry) => this.normalizeProductName(entry.name) === normalizedName && entry.status !== "Archived");
     if (existing) {
+      const beforeProduct = {
+        name: existing.name,
+        sku: existing.sku,
+        barcode: existing.barcode,
+        brand: existing.brand,
+        category: existing.category,
+        defaultUnit: existing.defaultUnit,
+        defaultPrice: existing.defaultPrice
+      };
       existing.name = input.name.trim();
       existing.sku = sku || existing.sku || this.nextProductSku();
       existing.barcode = barcode || existing.barcode;
@@ -2434,7 +2582,20 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       existing.defaultPrice = defaultPrice ?? existing.defaultPrice ?? null;
       existing.notes = input.notes?.trim() || existing.notes;
       existing.photoUrl = input.photoUrl?.trim() || existing.photoUrl;
-      this.audit("products.update", "ProductMaster", existing.id, "Updated by barcode");
+      const { before: changedBefore, after: changedAfter } = diffSnapshots(beforeProduct, {
+        name: existing.name,
+        sku: existing.sku,
+        barcode: existing.barcode,
+        brand: existing.brand,
+        category: existing.category,
+        defaultUnit: existing.defaultUnit,
+        defaultPrice: existing.defaultPrice
+      });
+      this.audit("products.update", "ProductMaster", existing.id, "Updated by barcode", {
+        actor: this.auditActorForId(actorUserId),
+        before: changedBefore,
+        after: changedAfter
+      });
       this.saveData();
       return existing;
     }
@@ -2453,7 +2614,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       createdAt: new Date().toISOString()
     };
     this.productMasters.push(product);
-    this.audit("products.create", "ProductMaster", product.id);
+    this.audit("products.create", "ProductMaster", product.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      after: { name: product.name, sku: product.sku, barcode: product.barcode, category: product.category, defaultPrice: product.defaultPrice }
+    });
     this.saveData();
     return product;
   }
@@ -2542,7 +2706,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return this.messages.filter((message) => message.cargoPackageId === cargo.id);
   }
 
-  createMessage(input: { cargoPackageId: string; senderName: string; body: string }) {
+  createMessage(input: { cargoPackageId: string; senderName: string; body: string }, actorUserId?: string) {
     const cargo = this.findPackage(input.cargoPackageId);
     const message = {
       id: id("msg"),
@@ -2553,7 +2717,13 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     };
     this.messages.push(message);
     this.notify("Shipment message received", `${cargo.packageNumber}: ${input.body}`, "Normal");
-    this.audit("messages.create", "CargoPackage", cargo.id);
+    // The shipment-message door is not an authenticated staff session:
+    // with no acting user the entry records the ANONYMOUS marker and
+    // the self-declared sender name as data, never as an actor.
+    this.audit("messages.create", "CargoPackage", cargo.id, undefined, {
+      actor: actorUserId ? this.auditActorForId(actorUserId) : ANONYMOUS_AUDIT_ACTOR,
+      after: { senderName: input.senderName }
+    });
     this.saveData();
     return message;
   }
@@ -2583,7 +2753,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     });
     thread.updatedAt = new Date().toISOString();
     this.notify("New chat message", `${sender.name}: ${body}`, "Normal");
-    this.audit("chat.message.create", "OperationChat", thread.id);
+    this.audit("chat.message.create", "OperationChat", thread.id, undefined, { actor: this.auditActorForUser(user) });
     this.saveData();
     return thread;
   }
@@ -2603,6 +2773,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     );
     const note = input.note?.trim();
     if (existing) {
+      const previousProposedPrice = existing.proposedPrice;
       existing.proposedPrice = proposedPrice;
       existing.requestedByName = sender.name;
       existing.requestedByRole = sender.role;
@@ -2616,7 +2787,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         createdAt: now
       });
       this.notify("Price approval updated", `${cargo.packageNumber}: PHP ${proposedPrice.toLocaleString()}`, "High");
-      this.audit("chat.price_request.update", "CargoPackage", cargo.id, note);
+      this.audit("chat.price_request.update", "CargoPackage", cargo.id, note, {
+        actor: this.auditActorForUser(user),
+        before: { proposedPrice: previousProposedPrice },
+        after: { proposedPrice }
+      });
       this.saveData();
       return existing;
     }
@@ -2650,7 +2825,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     };
     this.operationChatThreads.push(thread);
     this.notify("Price approval needed", `${cargo.packageNumber}: PHP ${proposedPrice.toLocaleString()} requested`, "High");
-    this.audit("chat.price_request.create", "CargoPackage", cargo.id, note);
+    this.audit("chat.price_request.create", "CargoPackage", cargo.id, note, {
+      actor: this.auditActorForUser(user),
+      after: { proposedPrice, status: "Needs Approval" }
+    });
     this.saveData();
     return thread;
   }
@@ -2664,6 +2842,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     const now = new Date().toISOString();
     const note = input.note?.trim();
     if (input.decision === "Rejected") {
+      const statusBefore = thread.status;
       thread.status = "Rejected";
       thread.updatedAt = now;
       thread.messages.push({
@@ -2675,7 +2854,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         createdAt: now
       });
       this.notify("Price request rejected", `${thread.packageNumber ?? "Package"} price request was rejected`, "Normal");
-      this.audit("chat.price_request.reject", "OperationChat", thread.id, note);
+      this.audit("chat.price_request.reject", "OperationChat", thread.id, note, {
+        actor: this.auditActorForUser(user),
+        before: { status: statusBefore },
+        after: { status: "Rejected", proposedPrice: thread.proposedPrice }
+      });
       this.saveData();
       return thread;
     }
@@ -2685,6 +2868,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException("Valid approved price is required");
     }
     const cargo = this.findPackage(thread.cargoPackageId);
+    const priceBefore = { price: cargo.price, unitPrice: cargo.unitPrice, status: cargo.status };
     cargo.price = approvedPrice;
     cargo.unitPrice = approvedPrice;
     cargo.priceChangeReason = note || `Approved in chat by ${actor.name}`;
@@ -2701,12 +2885,16 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       createdAt: now
     });
     this.notify("Price approved", `${cargo.packageNumber}: PHP ${approvedPrice.toLocaleString()}`, "Normal");
-    this.audit("chat.price_request.approve", "CargoPackage", cargo.id, note);
+    this.audit("chat.price_request.approve", "CargoPackage", cargo.id, note, {
+      actor: this.auditActorForUser(user),
+      before: priceBefore,
+      after: { price: cargo.price, unitPrice: cargo.unitPrice, status: cargo.status }
+    });
     this.saveData();
     return thread;
   }
 
-  createCustomer(input: { businessName: string; tin?: string; companyPhone?: string; contactPerson?: string; contactRole?: string; contactEmail?: string; contactIsPrimary?: boolean; phone?: string; address?: string; billingAddress?: string; shippingAddress?: string; billingTerm?: string; billingTermDays?: number | null }) {
+  createCustomer(input: { businessName: string; tin?: string; companyPhone?: string; contactPerson?: string; contactRole?: string; contactEmail?: string; contactIsPrimary?: boolean; phone?: string; address?: string; billingAddress?: string; shippingAddress?: string; billingTerm?: string; billingTermDays?: number | null }, actorUserId?: string) {
     const customer: Customer = {
       id: id("cust"),
       businessName: input.businessName,
@@ -2723,12 +2911,15 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       billingTermDays: this.normalizeBillingTermDays(input.billingTermDays) ?? null
     };
     this.customers.push(customer);
-    this.audit("customers.create", "Customer", customer.id);
+    this.audit("customers.create", "Customer", customer.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      after: { businessName: customer.businessName, status: customer.status, billingTermDays: customer.billingTermDays }
+    });
     this.saveData();
     return customer;
   }
 
-  createPendingCustomer(input: { businessName: string; tin?: string; companyPhone?: string; contactPerson?: string; contactRole?: string; contactEmail?: string; contactIsPrimary?: boolean; phone?: string; address?: string; billingAddress?: string; shippingAddress?: string; reviewBranchName?: string; notes?: string }) {
+  createPendingCustomer(input: { businessName: string; tin?: string; companyPhone?: string; contactPerson?: string; contactRole?: string; contactEmail?: string; contactIsPrimary?: boolean; phone?: string; address?: string; billingAddress?: string; shippingAddress?: string; reviewBranchName?: string; notes?: string }, actorUserId?: string) {
     if (!input.businessName?.trim()) throw new BadRequestException("Customer name is required");
     const customer: Customer = {
       id: id("cust"),
@@ -2756,13 +2947,29 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       `${customer.businessName} needs full company details when staff or owner is available: TIN, contacts, billing/shipping address, and payment terms.`,
       "Normal"
     );
-    this.audit("customer.pending_created", "Customer", customer.id);
+    this.audit("customer.pending_created", "Customer", customer.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      after: { businessName: customer.businessName, status: customer.status }
+    });
     this.saveData();
     return customer;
   }
 
-  updateCustomer(customerId: string, input: { businessName?: string; tin?: string; companyPhone?: string; contactPerson?: string; phone?: string; address?: string; billingAddress?: string; shippingAddress?: string; billingTerm?: string; billingTermDays?: number | null; status?: Customer["status"] }) {
+  updateCustomer(customerId: string, input: { businessName?: string; tin?: string; companyPhone?: string; contactPerson?: string; phone?: string; address?: string; billingAddress?: string; shippingAddress?: string; billingTerm?: string; billingTermDays?: number | null; status?: Customer["status"] }, actorUserId?: string) {
     const customer = this.findCustomer(customerId);
+    const beforeCustomer = {
+      businessName: customer.businessName,
+      tin: customer.tin,
+      companyPhone: customer.companyPhone,
+      contactPerson: customer.contactPerson,
+      phone: customer.phone,
+      address: customer.address,
+      billingAddress: customer.billingAddress,
+      shippingAddress: customer.shippingAddress,
+      billingTerm: customer.billingTerm,
+      billingTermDays: customer.billingTermDays,
+      status: customer.status
+    };
     if (input.businessName !== undefined) customer.businessName = input.businessName.trim() || customer.businessName;
     if (input.tin !== undefined) customer.tin = input.tin.trim() || undefined;
     if (input.companyPhone !== undefined) customer.companyPhone = input.companyPhone.trim() || undefined;
@@ -2774,13 +2981,31 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     if (input.billingTerm !== undefined) customer.billingTerm = input.billingTerm.trim() || "Custom";
     if (input.billingTermDays !== undefined) customer.billingTermDays = this.normalizeBillingTermDays(input.billingTermDays) ?? null;
     if (input.status !== undefined) customer.status = input.status;
-    this.audit("customers.update", "Customer", customer.id);
+    const { before: changedBefore, after: changedAfter } = diffSnapshots(beforeCustomer, {
+      businessName: customer.businessName,
+      tin: customer.tin,
+      companyPhone: customer.companyPhone,
+      contactPerson: customer.contactPerson,
+      phone: customer.phone,
+      address: customer.address,
+      billingAddress: customer.billingAddress,
+      shippingAddress: customer.shippingAddress,
+      billingTerm: customer.billingTerm,
+      billingTermDays: customer.billingTermDays,
+      status: customer.status
+    });
+    this.audit("customers.update", "Customer", customer.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      before: changedBefore,
+      after: changedAfter
+    });
     this.saveData();
     return customer;
   }
 
-  finalizeCustomer(customerId: string, input: { businessName?: string; contactPerson?: string; phone?: string; billingTerm?: string; billingTermDays?: number | null }) {
+  finalizeCustomer(customerId: string, input: { businessName?: string; contactPerson?: string; phone?: string; billingTerm?: string; billingTermDays?: number | null }, actorUserId?: string) {
     const customer = this.findCustomer(customerId);
+    const beforeCustomer = { businessName: customer.businessName, contactPerson: customer.contactPerson, phone: customer.phone, billingTerm: customer.billingTerm, billingTermDays: customer.billingTermDays, status: customer.status };
     customer.businessName = input.businessName?.trim() || customer.businessName;
     customer.contactPerson = input.contactPerson?.trim() || customer.contactPerson;
     customer.phone = input.phone?.trim() || customer.phone;
@@ -2790,12 +3015,24 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     customer.status = "Active";
     customer.finalizedAt = new Date().toISOString();
     customer.finalizedBy = "owner";
-    this.audit("customer.finalized", "Customer", customer.id);
+    const { before: changedBefore, after: changedAfter } = diffSnapshots(beforeCustomer, {
+      businessName: customer.businessName,
+      contactPerson: customer.contactPerson,
+      phone: customer.phone,
+      billingTerm: customer.billingTerm,
+      billingTermDays: customer.billingTermDays,
+      status: customer.status
+    });
+    this.audit("customer.finalized", "Customer", customer.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      before: changedBefore,
+      after: changedAfter
+    });
     this.saveData();
     return customer;
   }
 
-  addCustomerContact(customerId: string, input: { name: string; role?: string; phone?: string; email?: string; address?: string; billingAddress?: string; shippingAddress?: string; isPrimary?: boolean; notes?: string }) {
+  addCustomerContact(customerId: string, input: { name: string; role?: string; phone?: string; email?: string; address?: string; billingAddress?: string; shippingAddress?: string; isPrimary?: boolean; notes?: string }, actorUserId?: string) {
     if (!input.name?.trim()) throw new BadRequestException("Contact name is required");
     const customer = this.findCustomer(customerId);
     const contact: CustomerContact = {
@@ -2820,7 +3057,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       customer.phone = contact.phone;
     }
     customer.contacts.push(contact);
-    this.audit("customer.contact_added", "Customer", customer.id, contact.name);
+    this.audit("customer.contact_added", "Customer", customer.id, contact.name, {
+      actor: this.auditActorForId(actorUserId),
+      after: { contactName: contact.name, contactRole: contact.role, isPrimary: contact.isPrimary }
+    });
     this.saveData();
     return customer;
   }
@@ -2848,7 +3088,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       `${branchName}: ${customer.businessName} has PHP ${outstanding.toLocaleString()} outstanding balance.${oldestDueNote}`,
       outstanding > 0 ? "High" : "Normal"
     );
-    this.audit("billing.reminder", "Customer", customer.id, `Balance PHP ${outstanding.toLocaleString()}`);
+    this.audit("billing.reminder", "Customer", customer.id, `Balance PHP ${outstanding.toLocaleString()}`, {
+      actor: this.auditActorForUser(user),
+      after: { outstanding, channel: "in-app" }
+    });
     this.saveData();
     return {
       ok: true,
@@ -3021,7 +3264,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         submission,
         createdAt: now
       });
-      this.audit("receiving.intake_duplicate", "ReceivingIntakeTask", duplicate.id, `Duplicate attempt ${duplicate.duplicateCount}`);
+      this.audit("receiving.intake_duplicate", "ReceivingIntakeTask", duplicate.id, `Duplicate attempt ${duplicate.duplicateCount}`, {
+        actor: ANONYMOUS_AUDIT_ACTOR,
+        after: { duplicateCount: duplicate.duplicateCount }
+      });
       this.saveData();
       return { task: duplicate, duplicate: true, message: "This DR was already submitted. Receiving staff will review it shortly." };
     }
@@ -3065,7 +3311,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     };
     this.receivingIntakeTasks.push(task);
     this.notify("Wall QR intake", `${task.intakeNumber}: ${customerName}`, "Normal");
-    this.audit("receiving.intake_created", "ReceivingIntakeTask", task.id);
+    this.audit("receiving.intake_created", "ReceivingIntakeTask", task.id, undefined, {
+      actor: ANONYMOUS_AUDIT_ACTOR,
+      after: { intakeNumber: task.intakeNumber, customerName: task.customerNameTyped, destinationBranch: task.destinationBranch, source: task.source }
+    });
     this.saveData();
     return { task, duplicate: false, message: "Submitted. Please wait for receiving staff to review." };
   }
@@ -3110,30 +3359,40 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       if (touched) {
         resolvedCount += 1;
         task.updatedAt = new Date().toISOString();
-        this.audit("receiving.intake_photo_resolved", "ReceivingIntakeTask", task.id, task.intakeNumber);
+        this.audit("receiving.intake_photo_resolved", "ReceivingIntakeTask", task.id, task.intakeNumber, { actor: ANONYMOUS_AUDIT_ACTOR });
       }
     }
     if (resolvedCount) this.saveData();
     return { resolvedCount };
   }
 
-  markReceivingIntakeConverted(taskId: string, input: { receivingId: string }) {
+  markReceivingIntakeConverted(taskId: string, input: { receivingId: string }, actorUserId?: string) {
     const task = this.receivingIntakeTasks.find((entry) => entry.id === taskId);
     if (!task) throw new NotFoundException("Receiving intake task not found");
+    const statusBefore = task.status;
     task.status = "Converted";
     task.convertedReceivingId = input.receivingId;
     task.updatedAt = new Date().toISOString();
-    this.audit("receiving.intake_converted", "ReceivingIntakeTask", task.id, input.receivingId);
+    this.audit("receiving.intake_converted", "ReceivingIntakeTask", task.id, input.receivingId, {
+      actor: this.auditActorForId(actorUserId),
+      before: { status: statusBefore },
+      after: { status: task.status, receivingId: input.receivingId }
+    });
     this.saveData();
     return task;
   }
 
-  cancelReceivingIntake(taskId: string, input: { reason?: string }) {
+  cancelReceivingIntake(taskId: string, input: { reason?: string }, actorUserId?: string) {
     const task = this.receivingIntakeTasks.find((entry) => entry.id === taskId);
     if (!task) throw new NotFoundException("Receiving intake task not found");
+    const statusBefore = task.status;
     task.status = "Cancelled";
     task.updatedAt = new Date().toISOString();
-    this.audit("receiving.intake_cancelled", "ReceivingIntakeTask", task.id, input.reason);
+    this.audit("receiving.intake_cancelled", "ReceivingIntakeTask", task.id, input.reason, {
+      actor: this.auditActorForId(actorUserId),
+      before: { status: statusBefore },
+      after: { status: task.status }
+    });
     this.saveData();
     return task;
   }
@@ -3146,11 +3405,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     formState: Record<string, unknown>;
     productLines: Array<Record<string, unknown>>;
     idempotencyKey?: string;
-  }) {
-    return this.runIdempotent("POST /receiving/drafts", input.idempotencyKey, () => this.createReceivingDraftOnce(input));
+  }, actorUserId?: string) {
+    return this.runIdempotent("POST /receiving/drafts", input.idempotencyKey, () => this.createReceivingDraftOnce(input, actorUserId));
   }
 
-  private createReceivingDraftOnce(input: Parameters<LogisticsService["createReceivingDraft"]>[0]) {
+  private createReceivingDraftOnce(input: Parameters<LogisticsService["createReceivingDraft"]>[0], actorUserId?: string) {
     this.assertNoLocalPhotoReference(input.drPhotoUrl, "DR photo");
     const now = new Date().toISOString();
     const customer = input.customerId ? this.customers.find((entry) => entry.id === input.customerId) : undefined;
@@ -3172,7 +3431,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       updatedAt: now
     };
     this.receivingDrafts.push(draft);
-    this.audit("receiving.draft_created", "ReceivingDraft", draft.id);
+    this.audit("receiving.draft_created", "ReceivingDraft", draft.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      after: { draftNumber: draft.draftNumber, customerName: draft.customerNameSnapshot, destination: draft.destination }
+    });
     this.saveData();
     return draft;
   }
@@ -3181,19 +3443,25 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     draftId: string,
     input: Partial<Pick<ReceivingDraft, "customerId" | "customerDrNumber" | "destination" | "drPhotoUrl" | "formState" | "productLines">> & {
       idempotencyKey?: string;
-    }
+    },
+    actorUserId?: string
   ) {
     // Phase 4 PR 3: draft updates are queueable offline (queueablePatch) and
     // replay with the queue record's id as the key, like every other
     // queueable write — a replay after a lost response returns the original
     // result instead of re-applying the update.
-    return this.runIdempotent("PATCH /receiving/drafts/:id", input.idempotencyKey, () => this.updateReceivingDraftOnce(draftId, input));
+    return this.runIdempotent("PATCH /receiving/drafts/:id", input.idempotencyKey, () => this.updateReceivingDraftOnce(draftId, input, actorUserId));
   }
 
-  private updateReceivingDraftOnce(draftId: string, input: Partial<Pick<ReceivingDraft, "customerId" | "customerDrNumber" | "destination" | "drPhotoUrl" | "formState" | "productLines">>) {
+  private updateReceivingDraftOnce(draftId: string, input: Partial<Pick<ReceivingDraft, "customerId" | "customerDrNumber" | "destination" | "drPhotoUrl" | "formState" | "productLines">>, actorUserId?: string) {
     this.assertNoLocalPhotoReference(input.drPhotoUrl, "DR photo");
     const draft = this.findReceivingDraft(draftId);
     if (draft.status !== "Draft") throw new BadRequestException("Only draft records can be updated");
+    // Round 1 PR-6 (C-M7): the scalar header fields carry a before/after
+    // delta; formState/productLines are whole replacement blobs whose
+    // content is the draft record itself, so they are not duplicated
+    // into the audit entry.
+    const beforeDraft = { customerDrNumber: draft.customerDrNumber, destination: draft.destination };
     const customer = input.customerId ? this.customers.find((entry) => entry.id === input.customerId) : undefined;
     draft.customerId = customer?.id ?? input.customerId ?? draft.customerId;
     draft.customerNameSnapshot = customer?.businessName ?? draft.customerNameSnapshot;
@@ -3205,30 +3473,42 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     draft.productLines = input.productLines ?? draft.productLines;
     draft.updatedBy = "Current User";
     draft.updatedAt = new Date().toISOString();
-    this.audit("receiving.draft_updated", "ReceivingDraft", draft.id);
+    const { before: changedBefore, after: changedAfter } = diffSnapshots(beforeDraft, {
+      customerDrNumber: draft.customerDrNumber,
+      destination: draft.destination
+    });
+    this.audit("receiving.draft_updated", "ReceivingDraft", draft.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      before: changedBefore,
+      after: changedAfter
+    });
     this.saveData();
     return draft;
   }
 
-  cancelReceivingDraft(draftId: string) {
+  cancelReceivingDraft(draftId: string, actorUserId?: string) {
     const draft = this.findReceivingDraft(draftId);
     if (draft.status !== "Draft") throw new BadRequestException("Only draft records can be cancelled");
     draft.status = "Cancelled";
     draft.updatedAt = new Date().toISOString();
-    this.audit("receiving.draft_cancelled", "ReceivingDraft", draft.id);
+    this.audit("receiving.draft_cancelled", "ReceivingDraft", draft.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      before: { status: "Draft" },
+      after: { status: "Cancelled" }
+    });
     this.saveData();
     return draft;
   }
 
-  finalizeReceivingDraft(draftId: string, input: Parameters<LogisticsService["createReceiving"]>[0]) {
+  finalizeReceivingDraft(draftId: string, input: Parameters<LogisticsService["createReceiving"]>[0], actorUserId?: string) {
     // The idempotency scope names the draft itself, so a key can never be
     // mistaken for a different draft's finalize.
     return this.runIdempotent(`POST /receiving/drafts/${draftId}/finalize`, input.idempotencyKey, () =>
-      this.finalizeReceivingDraftOnce(draftId, input)
+      this.finalizeReceivingDraftOnce(draftId, input, actorUserId)
     );
   }
 
-  private finalizeReceivingDraftOnce(draftId: string, input: Parameters<LogisticsService["createReceiving"]>[0]) {
+  private finalizeReceivingDraftOnce(draftId: string, input: Parameters<LogisticsService["createReceiving"]>[0], actorUserId?: string) {
     const draft = this.findReceivingDraft(draftId);
     // B4 replay safety: an offline finalize queued on one device may replay
     // after the same draft was already finalized online (staff re-did the
@@ -3243,17 +3523,21 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       if (existing) return { draft, receiving: existing };
     }
     if (draft.status !== "Draft") throw new BadRequestException("Only draft records can be finalized");
-    const receiving = this.createReceivingOnce(input);
+    const receiving = this.createReceivingOnce(input, actorUserId);
     draft.status = "Finalized";
     draft.finalizedReceivingId = receiving.id;
     draft.updatedAt = new Date().toISOString();
-    this.audit("receiving.draft_finalized", "ReceivingDraft", draft.id);
+    this.audit("receiving.draft_finalized", "ReceivingDraft", draft.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      before: { status: "Draft" },
+      after: { status: "Finalized", receivingId: receiving.id }
+    });
     this.saveData();
     return { draft, receiving };
   }
 
-  createReceiving(input: Parameters<LogisticsService["createReceivingOnce"]>[0]) {
-    return this.runIdempotent("POST /receiving", input.idempotencyKey, () => this.createReceivingOnce(input));
+  createReceiving(input: Parameters<LogisticsService["createReceivingOnce"]>[0], actorUserId?: string) {
+    return this.runIdempotent("POST /receiving", input.idempotencyKey, () => this.createReceivingOnce(input, actorUserId));
   }
 
   private createReceivingOnce(input: {
@@ -3315,7 +3599,8 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       dimensionUnit?: string;
       photoUrls?: string[];
     }>;
-  }) {
+  }, actorUserId?: string) {
+    const actor = this.auditActorForId(actorUserId);
     const customer = this.customers.find((entry) => entry.id === input.customerId);
     if (!customer) throw new NotFoundException("Customer not found");
     if (!input.packages.length) throw new BadRequestException("At least one package is required");
@@ -3371,7 +3656,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         unit: pkg.unit,
         price: pkg.price,
         photoUrl: pkg.photoUrls?.[0]
-      });
+      }, actor);
       const cargo: CargoPackage = {
         id: id("pkg"),
         packageNumber,
@@ -3434,8 +3719,16 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         summary.withoutPrice ? "High" : "Normal"
       );
     }
-    this.audit("receiving.create", "ReceivingRecord", receiving.id);
-    if (input.collectPayment) this.applyReceivingCollectPayment(receiving, input.collectPayment);
+    this.audit("receiving.create", "ReceivingRecord", receiving.id, undefined, {
+      actor,
+      after: {
+        recordNumber: receiving.recordNumber,
+        customerName: receiving.customerName,
+        destination: receiving.destination,
+        packageNumbers: receiving.packages.map((pkg) => pkg.packageNumber)
+      }
+    });
+    if (input.collectPayment) this.applyReceivingCollectPayment(receiving, input.collectPayment, actor);
     this.saveData();
     return receiving;
   }
@@ -3456,7 +3749,8 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
    */
   private applyReceivingCollectPayment(
     receiving: ReceivingRecord,
-    collectPayment: NonNullable<Parameters<LogisticsService["createReceivingOnce"]>[0]["collectPayment"]>
+    collectPayment: NonNullable<Parameters<LogisticsService["createReceivingOnce"]>[0]["collectPayment"]>,
+    actor?: ServiceAuditActor
   ) {
     const paymentStatus = collectPayment.paymentStatus ?? "";
     if (paymentStatus === "Unpaid") return;
@@ -3495,25 +3789,28 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
             .filter(Boolean)
             .join(" | ") || undefined,
         idempotencyKey: `receiving-payment:${receiving.id}:${pkg.id}`
-      });
+      }, actor);
       if (remaining <= 0 && paymentStatus !== "Advance Payment") return;
     });
   }
 
-  attachReceivingDrPhoto(receivingRecordId: string, input: { drPhotoUrl: string; reason?: string; idempotencyKey?: string }) {
+  attachReceivingDrPhoto(receivingRecordId: string, input: { drPhotoUrl: string; reason?: string; idempotencyKey?: string }, actorUserId?: string) {
     return this.runIdempotent("POST /receiving/:id/dr-photo", input.idempotencyKey, () =>
-      this.attachReceivingDrPhotoOnce(receivingRecordId, input)
+      this.attachReceivingDrPhotoOnce(receivingRecordId, input, actorUserId)
     );
   }
 
-  private attachReceivingDrPhotoOnce(receivingRecordId: string, input: Parameters<LogisticsService["attachReceivingDrPhoto"]>[1]) {
+  private attachReceivingDrPhotoOnce(receivingRecordId: string, input: Parameters<LogisticsService["attachReceivingDrPhoto"]>[1], actorUserId?: string) {
     if (!input.drPhotoUrl?.trim()) throw new BadRequestException("DR photo URL is required");
     this.assertNoLocalPhotoReference(input.drPhotoUrl, "DR photo");
     const receiving = this.findReceivingRecord(receivingRecordId);
     receiving.drPhotoUrl = input.drPhotoUrl.trim();
     receiving.drPhotoAttachedAt = new Date().toISOString();
     receiving.drPhotoAttachReason = input.reason?.trim() || "Late DR attachment";
-    this.audit("receiving.dr_photo_attached", "ReceivingRecord", receiving.id, receiving.drPhotoAttachReason);
+    this.audit("receiving.dr_photo_attached", "ReceivingRecord", receiving.id, receiving.drPhotoAttachReason, {
+      actor: this.auditActorForId(actorUserId),
+      after: { drPhotoAttachedAt: receiving.drPhotoAttachedAt }
+    });
     this.saveData();
     return receiving;
   }
@@ -3542,16 +3839,21 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       condition?: PackageCondition;
       conditionNotes?: string;
     }>;
-  }) {
+  }, actorUserId?: string) {
     const receiving = this.findReceivingRecord(receivingRecordId);
     const reason = input.reason?.trim();
     if (!reason) throw new BadRequestException("Edit reason is required");
     const changes: string[] = [];
+    // Round 1 PR-6 (C-M7): the same deltas the reason string narrates,
+    // kept structurally — keyed by the change label (record field, or
+    // "<packageNumber>.<field>") so before/after survive as data.
+    const structuredChanges: Record<string, { from: unknown; to: unknown }> = {};
     const updateField = <K extends keyof ReceivingRecord>(field: K, value: ReceivingRecord[K] | undefined) => {
       if (value === undefined) return;
       const normalized = typeof value === "string" ? value.trim() : value;
       if (receiving[field] !== normalized) {
         changes.push(`${String(field)}: ${String(receiving[field] ?? "")} -> ${String(normalized ?? "")}`);
+        structuredChanges[String(field)] = { from: receiving[field] ?? null, to: normalized ?? null };
         receiving[field] = normalized as ReceivingRecord[K];
       }
     };
@@ -3571,6 +3873,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         const normalized = typeof value === "string" ? value.trim() : value;
         if (cargo[field] !== normalized) {
           changes.push(`${cargo.packageNumber}.${String(field)}: ${String(cargo[field] ?? "")} -> ${String(normalized ?? "")}`);
+          structuredChanges[`${cargo.packageNumber}.${String(field)}`] = { from: cargo[field] ?? null, to: normalized ?? null };
           for (const target of targets) target[field] = normalized as CargoPackage[K];
         }
       };
@@ -3581,9 +3884,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
           price: pkgInput.price ?? cargo.price,
           photoUrl: cargo.photoUrls[0],
           notes: `Created/updated from edited cargo ${cargo.packageNumber}.`
-        });
+        }, this.auditActorForId(actorUserId));
         if (cargo.productId !== product.id) {
           changes.push(`${cargo.packageNumber}.product: ${cargo.productId} -> ${product.id}`);
+          structuredChanges[`${cargo.packageNumber}.product`] = { from: cargo.productId ?? null, to: product.id };
           for (const target of targets) {
             target.productId = product.id;
             target.productBarcode = product.barcode;
@@ -3612,10 +3916,14 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (!changes.length) {
-      this.audit("receiving.edit_no_change", "ReceivingRecord", receiving.id, reason);
+      this.audit("receiving.edit_no_change", "ReceivingRecord", receiving.id, reason, { actor: this.auditActorForId(actorUserId) });
       return this.syncReceivingRecordPackages(receiving);
     }
-    this.audit("receiving.edit", "ReceivingRecord", receiving.id, `${reason} | ${changes.join("; ")}`);
+    this.audit("receiving.edit", "ReceivingRecord", receiving.id, `${reason} | ${changes.join("; ")}`, {
+      actor: this.auditActorForId(actorUserId),
+      before: Object.fromEntries(Object.entries(structuredChanges).map(([label, delta]) => [label, delta.from])),
+      after: Object.fromEntries(Object.entries(structuredChanges).map(([label, delta]) => [label, delta.to]))
+    });
     this.saveData();
     return this.syncReceivingRecordPackages(receiving);
   }
@@ -3635,15 +3943,23 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       .reverse();
   }
 
-  updatePackagePrice(packageId: string, input: { price: number; reason?: string }) {
+  updatePackagePrice(packageId: string, input: { price: number; reason?: string }, actorUserId?: string) {
     const cargo = this.findPackage(packageId);
     if (cargo.price != null && cargo.price !== input.price && !input.reason) {
       throw new BadRequestException("Reason is required when price differs from the previous price");
     }
+    // Round 1 PR-6 (C-M7): the before values are captured BEFORE the
+    // assignment — this entry is the finding's headline case (a price
+    // change must answer "who changed it, from what to what?").
+    const priceBefore = { price: cargo.price, status: cargo.status };
     cargo.price = input.price;
     cargo.priceChangeReason = input.reason;
     if (cargo.status === "Waiting for Price") cargo.status = "Waiting for Loading";
-    this.audit("pricing.update", "CargoPackage", cargo.id, input.reason);
+    this.audit("pricing.update", "CargoPackage", cargo.id, input.reason, {
+      actor: this.auditActorForId(actorUserId),
+      before: priceBefore,
+      after: { price: cargo.price, status: cargo.status }
+    });
     this.saveData();
     return cargo;
   }
@@ -3656,16 +3972,18 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     height?: number | null;
     dimensionUnit?: string;
     reason?: string;
-  }) {
+  }, actorUserId?: string) {
     const cargo = this.findPackage(packageId);
     const reason = input.reason?.trim();
     if (!reason) throw new BadRequestException("Measurement update reason is required");
     const changes: string[] = [];
+    const structuredChanges: Record<string, { from: unknown; to: unknown }> = {};
     const updateField = <K extends keyof CargoPackage>(field: K, value: CargoPackage[K] | undefined) => {
       if (value === undefined) return;
       const normalized = typeof value === "string" ? value.trim() : value;
       if (cargo[field] !== normalized) {
         changes.push(`${String(field)}: ${String(cargo[field] ?? "")} -> ${String(normalized ?? "")}`);
+        structuredChanges[String(field)] = { from: cargo[field] ?? null, to: normalized ?? null };
         cargo[field] = normalized as CargoPackage[K];
       }
     };
@@ -3687,12 +4005,16 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         dimensionUnit: cargo.dimensionUnit
       });
     }
-    this.audit(changes.length ? "cargo.measurements.update" : "cargo.measurements.no_change", "CargoPackage", cargo.id, `${reason}${changes.length ? ` | ${changes.join("; ")}` : ""}`);
+    this.audit(changes.length ? "cargo.measurements.update" : "cargo.measurements.no_change", "CargoPackage", cargo.id, `${reason}${changes.length ? ` | ${changes.join("; ")}` : ""}`, {
+      actor: this.auditActorForId(actorUserId),
+      before: Object.fromEntries(Object.entries(structuredChanges).map(([label, delta]) => [label, delta.from])),
+      after: Object.fromEntries(Object.entries(structuredChanges).map(([label, delta]) => [label, delta.to]))
+    });
     this.saveData();
     return cargo;
   }
 
-  softDeletePackage(packageId: string, input: { reason: string }) {
+  softDeletePackage(packageId: string, input: { reason: string }, actorUserId?: string) {
     if (!input.reason?.trim()) {
       throw new BadRequestException("Deletion reason is required");
     }
@@ -3700,14 +4022,19 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     if (cargo.status === "Delivered") {
       throw new BadRequestException("Delivered packages cannot be deleted. Archive the record after review instead.");
     }
+    const statusBefore = cargo.status;
     cargo.status = "Cancelled";
-    this.audit("records.softDelete", "CargoPackage", cargo.id, input.reason);
+    this.audit("records.softDelete", "CargoPackage", cargo.id, input.reason, {
+      actor: this.auditActorForId(actorUserId),
+      before: { status: statusBefore },
+      after: { status: cargo.status }
+    });
     this.notify("Package soft deleted", `${cargo.packageNumber}: ${input.reason}`, "High");
     this.saveData();
     return cargo;
   }
 
-  restorePackage(packageId: string, input: { reason: string }) {
+  restorePackage(packageId: string, input: { reason: string }, actorUserId?: string) {
     if (!input.reason?.trim()) {
       throw new BadRequestException("Restore reason is required");
     }
@@ -3716,7 +4043,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException("Only cancelled or soft-deleted packages can be restored");
     }
     cargo.status = cargo.price == null ? "Waiting for Price" : "Waiting for Loading";
-    this.audit("records.restore", "CargoPackage", cargo.id, input.reason);
+    this.audit("records.restore", "CargoPackage", cargo.id, input.reason, {
+      actor: this.auditActorForId(actorUserId),
+      before: { status: "Cancelled" },
+      after: { status: cargo.status }
+    });
     this.notify("Package restored", `${cargo.packageNumber}: ${input.reason}`, "Normal");
     this.saveData();
     return cargo;
@@ -3733,7 +4064,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     truckOwnerName?: string;
     saveTruckDetails?: boolean;
     cargoPackageIds?: string[];
-  }) {
+  }, actorUserId?: string) {
     const now = new Date();
     const selectedTruck = input.truckId ? this.trucks.find((truck) => truck.id === input.truckId) : undefined;
     const plateNumber = input.plateNumber?.trim().toUpperCase() || selectedTruck?.plateNumber;
@@ -3752,7 +4083,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       }
     }
     const savedTruck = input.saveTruckDetails && plateNumber
-      ? this.saveTruck({ plateNumber, driverName, contactNumber: driverContactNumber, ownerName: truckOwnerName })
+      ? this.saveTruck({ plateNumber, driverName, contactNumber: driverContactNumber, ownerName: truckOwnerName }, actorUserId)
       : selectedTruck;
     const trip: Trip = {
       id: id("trip"),
@@ -3773,9 +4104,16 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     };
     this.trips.push(trip);
     for (const cargoPackageId of input.cargoPackageIds ?? []) {
-      this.loadCargo(trip.id, { cargoPackageId });
+      // An id-only context keeps loadCargoOnce's branch rule exactly as
+      // it is for a context-free internal call (unrestricted — see
+      // accessibleBranchNames) while still attributing the load's
+      // audit entries to the trip's creator.
+      this.loadCargo(trip.id, { cargoPackageId }, actorUserId ? { id: actorUserId } : undefined);
     }
-    this.audit("trips.create", "Trip", trip.id);
+    this.audit("trips.create", "Trip", trip.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      after: { tripNumber: trip.tripNumber, origin: trip.origin, destination: trip.destination, plateNumber: trip.plateNumber, driverName: trip.driverName }
+    });
     this.saveData();
     return trip;
   }
@@ -3816,13 +4154,14 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       );
     }
     const customer = this.findCustomer(cargo.customerId);
+    const loadActor = this.auditActorForUser(user);
     if (customer.status === "Pending") {
       this.notify("Pending customer loaded", `${cargo.packageNumber} loaded for ${customer.businessName}. Customer is still pending branch owner review.`, "Normal");
-      this.audit("loading.pending_customer_notice", "CargoPackage", cargo.id);
+      this.audit("loading.pending_customer_notice", "CargoPackage", cargo.id, undefined, { actor: loadActor });
     }
     if (cargo.price == null) {
       this.notify("Loading blocked", `${cargo.packageNumber} has no price. Owner approval/pricing is required before loading.`, "High");
-      this.audit("loading.blocked_missing_price", "CargoPackage", cargo.id);
+      this.audit("loading.blocked_missing_price", "CargoPackage", cargo.id, undefined, { actor: loadActor });
       throw new BadRequestException("This package has no price yet. Owner approval/pricing is required before loading.");
     }
     if (cargo.status === "Delivered") throw new BadRequestException("Delivered cargo cannot be loaded.");
@@ -3835,21 +4174,27 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       trip.mixedTripApprovalStatus = "Notified";
       trip.mixedTripApprovalNotes = input.overrideReason?.trim() || `${cargo.packageNumber} is for ${cargo.handlingBranchName} but trip is for ${trip.destination}.`;
       this.notify("Mixed trip owner notice", `${cargo.packageNumber} is for ${cargo.handlingBranchName} but trip is for ${trip.destination}. Branch owners must review.`, "High");
-      this.audit("mixed_trip.owner_notified", "Trip", trip.id, trip.mixedTripApprovalNotes);
+      this.audit("mixed_trip.owner_notified", "Trip", trip.id, trip.mixedTripApprovalNotes, {
+        actor: loadActor,
+        after: { isMixedTrip: true, mixedTripApprovalStatus: trip.mixedTripApprovalStatus }
+      });
     }
     if (!trip.cargoPackageIds.includes(cargo.id)) trip.cargoPackageIds.push(cargo.id);
     trip.status = "Loading";
     cargo.status = "Loaded";
-    this.audit("loading.scan", "CargoPackage", cargo.id, input.overrideReason);
+    this.audit("loading.scan", "CargoPackage", cargo.id, input.overrideReason, {
+      actor: loadActor,
+      after: { tripId: trip.id, tripNumber: trip.tripNumber, status: cargo.status }
+    });
     this.saveData();
     return { trip, cargo };
   }
 
-  unloadCargo(tripId: string, input: { cargoPackageId: string; reason?: string; idempotencyKey?: string }) {
-    return this.runIdempotent(`POST /trips/${tripId}/unload`, input.idempotencyKey, () => this.unloadCargoOnce(tripId, input));
+  unloadCargo(tripId: string, input: { cargoPackageId: string; reason?: string; idempotencyKey?: string }, actorUserId?: string) {
+    return this.runIdempotent(`POST /trips/${tripId}/unload`, input.idempotencyKey, () => this.unloadCargoOnce(tripId, input, actorUserId));
   }
 
-  private unloadCargoOnce(tripId: string, input: Parameters<LogisticsService["unloadCargo"]>[1]) {
+  private unloadCargoOnce(tripId: string, input: Parameters<LogisticsService["unloadCargo"]>[1], actorUserId?: string) {
     const trip = this.findTrip(tripId);
     if (!["Planned", "Loading"].includes(trip.status)) {
       throw new BadRequestException("Cargo can only be removed before the trip departs.");
@@ -3867,19 +4212,23 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       return loadedCargo.handlingBranchName !== trip.destination;
     });
     if (!trip.cargoPackageIds.length) trip.status = "Planned";
-    this.audit("loading.remove", "CargoPackage", cargo.id, reason);
+    this.audit("loading.remove", "CargoPackage", cargo.id, reason, {
+      actor: this.auditActorForId(actorUserId),
+      before: { status: "Loaded" },
+      after: { status: cargo.status, tripNumber: trip.tripNumber }
+    });
     this.notify("Cargo removed from trip", `${cargo.packageNumber} removed from ${trip.tripNumber}: ${reason}`, "Normal");
     this.saveData();
     return { trip, cargo };
   }
 
-  attachTripLoadingPhoto(tripId: string, input: { photoUrl: string; idempotencyKey?: string }) {
+  attachTripLoadingPhoto(tripId: string, input: { photoUrl: string; idempotencyKey?: string }, actorUserId?: string) {
     return this.runIdempotent("POST /trips/:id/loading-photo", input.idempotencyKey, () =>
-      this.attachTripLoadingPhotoOnce(tripId, input)
+      this.attachTripLoadingPhotoOnce(tripId, input, actorUserId)
     );
   }
 
-  private attachTripLoadingPhotoOnce(tripId: string, input: Parameters<LogisticsService["attachTripLoadingPhoto"]>[1]) {
+  private attachTripLoadingPhotoOnce(tripId: string, input: Parameters<LogisticsService["attachTripLoadingPhoto"]>[1], actorUserId?: string) {
     const trip = this.findTrip(tripId);
     if (!input.photoUrl) throw new BadRequestException("Loading photo is required.");
     this.assertNoLocalPhotoReference(input.photoUrl, "Loading photo");
@@ -3888,24 +4237,32 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     }
     trip.loadingPhotoUrl = input.photoUrl;
     trip.loadingPhotoAttachedAt = new Date().toISOString();
-    this.audit("trips.loading_photo.attach", "Trip", trip.id);
+    this.audit("trips.loading_photo.attach", "Trip", trip.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      after: { loadingPhotoAttachedAt: trip.loadingPhotoAttachedAt }
+    });
     this.notify("Loading photo attached", `${trip.tripNumber} loading photo was attached.`, "Normal");
     this.saveData();
     return trip;
   }
 
-  reviewMixedTrip(tripId: string, input: { approved: boolean; notes?: string }) {
+  reviewMixedTrip(tripId: string, input: { approved: boolean; notes?: string }, actorUserId?: string) {
     const trip = this.findTrip(tripId);
     if (!trip.isMixedTrip) throw new BadRequestException("This trip is not marked as mixed.");
+    const approvalStatusBefore = trip.mixedTripApprovalStatus;
     trip.mixedTripApprovalStatus = input.approved ? "Approved" : "Rejected";
     trip.mixedTripApprovalNotes = input.notes?.trim() || trip.mixedTripApprovalNotes;
-    this.audit(input.approved ? "mixed_trip.approved" : "mixed_trip.rejected", "Trip", trip.id, trip.mixedTripApprovalNotes);
+    this.audit(input.approved ? "mixed_trip.approved" : "mixed_trip.rejected", "Trip", trip.id, trip.mixedTripApprovalNotes, {
+      actor: this.auditActorForId(actorUserId),
+      before: { mixedTripApprovalStatus: approvalStatusBefore },
+      after: { mixedTripApprovalStatus: trip.mixedTripApprovalStatus }
+    });
     this.notify(input.approved ? "Mixed trip approved" : "Mixed trip rejected", `${trip.tripNumber}: ${trip.mixedTripApprovalNotes ?? "No note"}`, input.approved ? "Normal" : "High");
     this.saveData();
     return trip;
   }
 
-  departTrip(tripId: string) {
+  departTrip(tripId: string, actorUserId?: string) {
     const trip = this.findTrip(tripId);
     // B3-style transition guard (Round 1 C-M5): the web screen flow only
     // enables departure for a Planned/Loading trip with cargo aboard
@@ -3917,14 +4274,19 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     if (!trip.cargoPackageIds.length) {
       throw new BadRequestException("This trip has no cargo loaded. Load cargo before departing.");
     }
+    const statusBefore = trip.status;
     trip.status = "Departed";
     for (const packageId of trip.cargoPackageIds) this.findPackage(packageId).status = "In Transit";
-    this.audit("trips.depart", "Trip", trip.id);
+    this.audit("trips.depart", "Trip", trip.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      before: { status: statusBefore },
+      after: { status: trip.status }
+    });
     this.saveData();
     return trip;
   }
 
-  arriveTrip(tripId: string) {
+  arriveTrip(tripId: string, actorUserId?: string) {
     const trip = this.findTrip(tripId);
     // B3-style transition guard (Round 1 C-M5): arrival is only meaningful
     // after departure — a trip that never departed (or has already
@@ -3934,12 +4296,16 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     }
     trip.status = "Arrived";
     for (const packageId of trip.cargoPackageIds) this.findPackage(packageId).status = "Arrived";
-    this.audit("arrival.mark", "Trip", trip.id);
+    this.audit("arrival.mark", "Trip", trip.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      before: { status: "Departed" },
+      after: { status: trip.status }
+    });
     this.saveData();
     return trip;
   }
 
-  completeTrip(tripId: string) {
+  completeTrip(tripId: string, actorUserId?: string) {
     const trip = this.findTrip(tripId);
     if (trip.status !== "Arrived") {
       throw new BadRequestException("Only arrived trips can be completed.");
@@ -3953,18 +4319,23 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException(`${openCargo.length} cargo item(s) still need delivery, failed delivery, return, or exception status before completing this trip.`);
     }
     trip.status = "Completed";
-    this.audit("trips.complete", "Trip", trip.id, `${cargo.length} cargo item(s) closed`);
+    this.audit("trips.complete", "Trip", trip.id, `${cargo.length} cargo item(s) closed`, {
+      actor: this.auditActorForId(actorUserId),
+      before: { status: "Arrived" },
+      after: { status: trip.status }
+    });
     this.notify("Trip completed", `${trip.tripNumber} has been completed.`, "Normal");
     this.saveData();
     return trip;
   }
 
-  verifyArrivedCargo(packageId: string, input: { condition?: string; notes?: string; photoUrl?: string; issueStatus?: "Ready for Delivery" | "Damaged" | "Missing" | "For Checking" }) {
+  verifyArrivedCargo(packageId: string, input: { condition?: string; notes?: string; photoUrl?: string; issueStatus?: "Ready for Delivery" | "Damaged" | "Missing" | "For Checking" }, actorUserId?: string) {
     const cargo = this.findPackage(packageId);
     const nextStatus = input.issueStatus ?? "Ready for Delivery";
     if (!["Arrived", "Ready for Delivery", "Exception"].includes(cargo.status)) {
       throw new BadRequestException("Only arrived cargo can be verified at the branch");
     }
+    const statusBefore = cargo.status;
     cargo.status = nextStatus === "Ready for Delivery" ? "Ready for Delivery" : "Exception";
     if (input.condition?.trim()) {
       const allowedConditions: PackageCondition[] = ["Good", "Damaged", "Wet", "Incomplete", "For Checking", "Other"];
@@ -3973,7 +4344,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     if (nextStatus !== "Ready for Delivery") {
       this.notify("Cargo verification issue", `${cargo.packageNumber}: ${nextStatus}${input.notes ? ` - ${input.notes}` : ""}`, "High");
     }
-    this.audit("delivery.verify_arrival", "CargoPackage", cargo.id, [nextStatus, input.notes, input.photoUrl ? "photo attached" : ""].filter(Boolean).join(" | "));
+    this.audit("delivery.verify_arrival", "CargoPackage", cargo.id, [nextStatus, input.notes, input.photoUrl ? "photo attached" : ""].filter(Boolean).join(" | "), {
+      actor: this.auditActorForId(actorUserId),
+      before: { status: statusBefore },
+      after: { status: cargo.status, condition: cargo.condition }
+    });
     this.saveData();
     return cargo;
   }
@@ -3985,11 +4360,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     notes?: string;
     photoUrl?: string;
     idempotencyKey?: string;
-  }) {
-    return this.runIdempotent("POST /returns", input.idempotencyKey, () => this.createReturnRecordOnce(input));
+  }, actorUserId?: string) {
+    return this.runIdempotent("POST /returns", input.idempotencyKey, () => this.createReturnRecordOnce(input, actorUserId));
   }
 
-  private createReturnRecordOnce(input: Parameters<LogisticsService["createReturnRecord"]>[0]) {
+  private createReturnRecordOnce(input: Parameters<LogisticsService["createReturnRecord"]>[0], actorUserId?: string) {
     const cargo = this.findPackage(input.cargoPackageId);
     // B3 transition guard: a package can have only one open return request.
     // A repeat submission (queued replay under a different key, double-tap)
@@ -4014,7 +4389,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     cargo.deliveryType = "Return cargo";
     this.returnRecords.push(record);
     this.notify("Return requested", `${cargo.packageNumber}: ${record.reason} / ${record.nextAction}`, "High");
-    this.audit("returns.create", "ReturnRecord", record.id, `${cargo.packageNumber} | ${record.reason} | ${record.nextAction}`);
+    this.audit("returns.create", "ReturnRecord", record.id, `${cargo.packageNumber} | ${record.reason} | ${record.nextAction}`, {
+      actor: this.auditActorForId(actorUserId),
+      after: { cargoPackageId: cargo.id, packageNumber: cargo.packageNumber, reason: record.reason, nextAction: record.nextAction, status: record.status }
+    });
     this.saveData();
     return record;
   }
@@ -4027,11 +4405,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     notes?: string;
     customerAcceptedDamage?: boolean;
     idempotencyKey?: string;
-  }) {
-    return this.runIdempotent("POST /deliveries/complete", input.idempotencyKey, () => this.completeDeliveryOnce(input));
+  }, actorUserId?: string) {
+    return this.runIdempotent("POST /deliveries/complete", input.idempotencyKey, () => this.completeDeliveryOnce(input, actorUserId));
   }
 
-  private completeDeliveryOnce(input: Parameters<LogisticsService["completeDelivery"]>[0]) {
+  private completeDeliveryOnce(input: Parameters<LogisticsService["completeDelivery"]>[0], actorUserId?: string) {
     const cargo = this.findPackage(input.cargoPackageId);
     // B3 transition guard (audit direction): completing an already-Delivered
     // package returns the existing delivery instead of appending a second
@@ -4074,18 +4452,23 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       notes: input.notes,
       createdAt: new Date().toISOString()
     };
+    const statusBefore = cargo.status;
     cargo.status = "Delivered";
     this.deliveries.push(delivery);
-    this.audit("delivery.complete", "DeliveryRecord", delivery.id);
+    this.audit("delivery.complete", "DeliveryRecord", delivery.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      before: { status: statusBefore },
+      after: { status: cargo.status, cargoPackageId: cargo.id, packageNumber: cargo.packageNumber, deliveredTo: delivery.deliveredTo }
+    });
     this.saveData();
     return delivery;
   }
 
-  failDelivery(input: { cargoPackageId: string; failedReason: string; notes?: string; nextAction: string; idempotencyKey?: string }) {
-    return this.runIdempotent("POST /deliveries/fail", input.idempotencyKey, () => this.failDeliveryOnce(input));
+  failDelivery(input: { cargoPackageId: string; failedReason: string; notes?: string; nextAction: string; idempotencyKey?: string }, actorUserId?: string) {
+    return this.runIdempotent("POST /deliveries/fail", input.idempotencyKey, () => this.failDeliveryOnce(input, actorUserId));
   }
 
-  private failDeliveryOnce(input: Parameters<LogisticsService["failDelivery"]>[0]) {
+  private failDeliveryOnce(input: Parameters<LogisticsService["failDelivery"]>[0], actorUserId?: string) {
     const cargo = this.findPackage(input.cargoPackageId);
     // B3 transition guards, mirroring completeDelivery: a delivered package
     // is terminal — a late failure report against it is a conflict, not a
@@ -4109,10 +4492,15 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       nextAction: input.nextAction,
       createdAt: new Date().toISOString()
     };
+    const statusBefore = cargo.status;
     cargo.status = "Failed Delivery";
     this.deliveries.push(delivery);
     this.notify("Failed delivery", `${cargo.packageNumber}: ${input.failedReason}`, "High");
-    this.audit("delivery.fail", "DeliveryRecord", delivery.id, input.failedReason);
+    this.audit("delivery.fail", "DeliveryRecord", delivery.id, input.failedReason, {
+      actor: this.auditActorForId(actorUserId),
+      before: { status: statusBefore },
+      after: { status: cargo.status, cargoPackageId: cargo.id, packageNumber: cargo.packageNumber, failedReason: input.failedReason }
+    });
     this.saveData();
     return delivery;
   }
@@ -4131,8 +4519,8 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     proofUrl?: string;
     notes?: string;
     idempotencyKey?: string;
-  }) {
-    return this.runIdempotent("POST /payments", input.idempotencyKey, () => this.recordPaymentOnce(input, false));
+  }, actorUserId?: string) {
+    return this.runIdempotent("POST /payments", input.idempotencyKey, () => this.recordPaymentOnce(input, false, this.auditActorForId(actorUserId)));
   }
 
   /**
@@ -4146,11 +4534,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
    * capped. The amount-must-be-positive check applies here too (the
    * distribution never passes a non-positive amount).
    */
-  private recordReceivingPayment(input: Parameters<LogisticsService["recordPayment"]>[0]) {
-    return this.runIdempotent("POST /payments", input.idempotencyKey, () => this.recordPaymentOnce(input, true));
+  private recordReceivingPayment(input: Parameters<LogisticsService["recordPayment"]>[0], actor?: ServiceAuditActor) {
+    return this.runIdempotent("POST /payments", input.idempotencyKey, () => this.recordPaymentOnce(input, true, actor));
   }
 
-  private recordPaymentOnce(input: Parameters<LogisticsService["recordPayment"]>[0], allowAdvanceExcess: boolean) {
+  private recordPaymentOnce(input: Parameters<LogisticsService["recordPayment"]>[0], allowAdvanceExcess: boolean, actor?: ServiceAuditActor) {
     const cargo = this.findPackage(input.cargoPackageId);
     this.assertNoLocalPhotoReference(input.proofUrl, "Payment proof");
     // C-M1: a payment must be a real, positive amount. Zero and negative
@@ -4219,16 +4607,27 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       createdAt: new Date().toISOString()
     };
     this.payments.push(payment);
-    this.audit("payments.record", "Payment", payment.id);
+    this.audit("payments.record", "Payment", payment.id, undefined, {
+      ...(actor ? { actor } : {}),
+      after: {
+        amountPaid: payment.amountPaid,
+        amountDue: payment.amountDue,
+        cargoPackageId: payment.cargoPackageId,
+        packageNumber: cargo.packageNumber,
+        method: payment.method,
+        collectionPoint: payment.collectionPoint,
+        status: payment.status
+      }
+    });
     this.saveData();
     return payment;
   }
 
-  createExpense(input: { tripId?: string; category: string; amount: number; description?: string; receiptUrl?: string; idempotencyKey?: string }) {
-    return this.runIdempotent("POST /expenses", input.idempotencyKey, () => this.createExpenseOnce(input));
+  createExpense(input: { tripId?: string; category: string; amount: number; description?: string; receiptUrl?: string; idempotencyKey?: string }, actorUserId?: string) {
+    return this.runIdempotent("POST /expenses", input.idempotencyKey, () => this.createExpenseOnce(input, actorUserId));
   }
 
-  private createExpenseOnce(input: Parameters<LogisticsService["createExpense"]>[0]) {
+  private createExpenseOnce(input: Parameters<LogisticsService["createExpense"]>[0], actorUserId?: string) {
     // C-M2 / C-M3: the body is validated BEFORE anything is recorded.
     // Zero and negative expense amounts were stored verbatim (L6-F2 /
     // E3b — a −₱500 expense sits in Submitted and ADDS profit in the
@@ -4283,7 +4682,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     const notificationMessage = `${input.category}: PHP ${input.amount.toLocaleString()}`;
     this.expenses.push(expense);
     this.notify("Expense submitted", notificationMessage, "Normal");
-    this.audit("expenses.create", "Expense", expense.id);
+    this.audit("expenses.create", "Expense", expense.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      after: { category: expense.category, amount: expense.amount, tripId: expense.tripId, status: expense.status }
+    });
     this.saveData();
     return expense;
   }
@@ -4328,7 +4730,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return [...this.deliveries].reverse().find((entry) => entry.cargoPackageId === packageId && entry.status === "Delivered")?.createdAt;
   }
 
-  createBillingInvoice(input: { customerId: string; packageIds?: string[]; dueRule?: string; billingTermDays?: number | null }) {
+  createBillingInvoice(input: { customerId: string; packageIds?: string[]; dueRule?: string; billingTermDays?: number | null }, actorUserId?: string) {
     const customer = this.findCustomer(input.customerId);
     const termDaysInput = this.normalizeBillingTermDays(input.billingTermDays);
     const effectiveTermDays = termDaysInput !== undefined ? termDaysInput : customer.billingTermDays ?? null;
@@ -4410,7 +4812,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       updatedAt: now.toISOString()
     };
     this.billingInvoices.push(invoice);
-    this.audit("billing.invoice.create", "BillingInvoice", invoice.id, invoice.invoiceNumber);
+    this.audit("billing.invoice.create", "BillingInvoice", invoice.id, invoice.invoiceNumber, {
+      actor: this.auditActorForId(actorUserId),
+      after: { invoiceNumber: invoice.invoiceNumber, customerId: invoice.customerId, customerName: invoice.customerName, amountDue: invoice.amountDue, packageIds: invoice.packageIds }
+    });
     this.saveData();
     return this.deriveBillingInvoice(invoice);
   }
@@ -4423,18 +4828,28 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     // Voiding an already-Void invoice is a no-op success — the desired
     // end state is already true.
     if (invoice.status === "Void") return this.deriveBillingInvoice(invoice);
+    const statusBefore = invoice.status;
     invoice.status = "Void";
     invoice.updatedAt = new Date().toISOString();
-    this.audit("billing.invoice.void", "BillingInvoice", invoice.id, input.reason?.trim() || invoice.invoiceNumber);
+    this.audit("billing.invoice.void", "BillingInvoice", invoice.id, input.reason?.trim() || invoice.invoiceNumber, {
+      actor: this.auditActorForUser(user),
+      before: { status: statusBefore },
+      after: { status: invoice.status, invoiceNumber: invoice.invoiceNumber }
+    });
     this.saveData();
     return this.deriveBillingInvoice(invoice);
   }
 
-  approveExpense(expenseId: string) {
+  approveExpense(expenseId: string, actorUserId?: string) {
     const expense = this.expenses.find((entry) => entry.id === expenseId);
     if (!expense) throw new NotFoundException("Expense not found");
+    const statusBefore = expense.status;
     expense.status = "Approved";
-    this.audit("expenses.approve", "Expense", expense.id);
+    this.audit("expenses.approve", "Expense", expense.id, undefined, {
+      actor: this.auditActorForId(actorUserId),
+      before: { status: statusBefore },
+      after: { status: expense.status, category: expense.category, amount: expense.amount }
+    });
     this.saveData();
     return expense;
   }
@@ -4766,7 +5181,11 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       failed ? "document.printFailed" : log.action === "Printed" ? "document.printed" : "document.reprinted",
       input.relatedEntityType,
       input.relatedEntityId,
-      log.reason
+      log.reason,
+      {
+        actor: this.auditActorForUser(user),
+        after: { documentType: log.documentType, documentNumber: log.documentNumber, copyNumber: log.copyNumber, outcome: log.outcome }
+      }
     );
     this.saveData();
     return log;
@@ -4779,7 +5198,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
    * self-attested. Other hardware results keep their existing manual flow
    * and default to "Not Tested" for a diagnostic-only record.
    */
-  recordPrinterDiagnostic(input: PrinterDiagnosticInput) {
+  recordPrinterDiagnostic(input: PrinterDiagnosticInput, actorUserId?: string) {
     const summary = summarizePrinterDiagnostic(input.checks ?? []);
     return this.createHardwareTest({
       deviceName: input.deviceName,
@@ -4789,7 +5208,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       signatureResult: input.signatureResult ?? "Not Tested",
       pwaResult: input.pwaResult ?? "Not Tested",
       notes: summary.notes
-    });
+    }, actorUserId);
   }
 
   private assertPrintableEntity(relatedEntityType: string, relatedEntityId: string) {
@@ -4966,8 +5385,53 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     return trimmed.startsWith("local-photo://") ? trimmed.slice("local-photo://".length) : trimmed;
   }
 
-  private audit(action: string, entityType: string, entityId: string, reason?: string) {
-    this.auditLogs.push({ id: id("aud"), action, entityType, entityId, reason, createdAt: new Date().toISOString() });
+  /**
+   * Round 1 PR-6 (C-M7): every entry now carries its actor and, for
+   * mutations, structured before/after values. Call sites pass the
+   * acting user (resolved through auditActorForUser / auditActorForId);
+   * a site that passes no actor is by construction an internal/system
+   * action and is stamped with the SYSTEM marker — never left blank
+   * and never attributed to a fabricated user. Empty before/after
+   * objects are dropped so a no-delta update stores neither.
+   */
+  private audit(
+    action: string,
+    entityType: string,
+    entityId: string,
+    reason?: string,
+    extra?: { actor?: ServiceAuditActor; before?: Record<string, unknown>; after?: Record<string, unknown> }
+  ) {
+    this.auditLogs.push({
+      id: id("aud"),
+      action,
+      entityType,
+      entityId,
+      reason,
+      actor: extra?.actor ?? SYSTEM_AUDIT_ACTOR,
+      ...(extra?.before && Object.keys(extra.before).length ? { before: extra.before } : {}),
+      ...(extra?.after && Object.keys(extra.after).length ? { after: extra.after } : {}),
+      createdAt: new Date().toISOString()
+    });
+  }
+
+  /** The audit actor for a caller context the guard authenticated (chatUser resolves id → record for name/role). */
+  private auditActorForUser(user?: AuthContext): ServiceAuditActor {
+    if (!user?.id) return SYSTEM_AUDIT_ACTOR;
+    const resolved = this.chatUser(user);
+    return { id: String(resolved.id ?? user.id), role: resolved.role || user.role || "Unknown Role", name: resolved.name };
+  }
+
+  /** The audit actor for an acting user's id (the PR-5 controller threading pattern). Unknown ids keep the id with an honest role label. */
+  private auditActorForId(userId?: string): ServiceAuditActor {
+    if (!userId) return SYSTEM_AUDIT_ACTOR;
+    const record = this.getAllUsers().find((entry) => entry.id === userId);
+    if (!record) return { id: userId, role: "Unknown Role" };
+    return { id: record.id, role: record.role, name: record.name };
+  }
+
+  /** The audit actor snapshot of a known user record (auth events, where the record itself is the actor). */
+  private auditActorForRecord(record: StaffUserRecord): ServiceAuditActor {
+    return { id: record.id, role: record.role, name: record.name };
   }
 
   private reconcileProductsFromCargo() {

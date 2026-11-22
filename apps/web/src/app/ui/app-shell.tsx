@@ -3224,6 +3224,41 @@ function OwnerSettings({
   );
 }
 
+/**
+ * Round 1 PR-6 (C-M7): the audit trail's actor + change lines. Entries
+ * written before the audit-content fix have neither and render exactly
+ * as they always did.
+ */
+function formatAuditValue(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function AuditLogMeta({ log }: { log: AuditLog }) {
+  const keys = [...new Set([...Object.keys(log.before ?? {}), ...Object.keys(log.after ?? {})])];
+  return (
+    <>
+      {log.actor && (
+        <p className="muted">By {log.actor.name ?? log.actor.id} · {log.actor.role}</p>
+      )}
+      {keys.length > 0 && (
+        <p className="muted">
+          {keys
+            .map((key) => {
+              const from = log.before?.[key];
+              const to = log.after?.[key];
+              return from !== undefined && to !== undefined && from !== to
+                ? `${key}: ${formatAuditValue(from)} → ${formatAuditValue(to)}`
+                : `${key}: ${formatAuditValue(to ?? from)}`;
+            })
+            .join(" · ")}
+        </p>
+      )}
+    </>
+  );
+}
+
 function AdminAudit({
   packages,
   auditLogs,
@@ -3289,6 +3324,7 @@ function AdminAudit({
                 <strong>{log.action}</strong>
                 <p>{log.entityType}: {log.entityId}</p>
                 {log.reason && <p className="muted">Reason: {log.reason}</p>}
+                <AuditLogMeta log={log} />
               </div>
               <span className="badge">{new Date(log.createdAt).toLocaleString()}</span>
             </div>
@@ -7363,6 +7399,7 @@ function Receiving({
                       <strong>{log.action}</strong>
                       <p>{log.entityType}: {log.entityId}</p>
                       {log.reason && <p className="muted">{log.reason}</p>}
+                      <AuditLogMeta log={log} />
                     </div>
                     <span className="badge">{new Date(log.createdAt).toLocaleString()}</span>
                   </div>
