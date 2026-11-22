@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
-import { statusBadgeClass, statusTone, toneBadgeClass } from "../../apps/web/src/app/ui/status-tone";
+import { statusBadgeClass, statusTone, toneBadgeClass, toneTextClass } from "../../apps/web/src/app/ui/status-tone";
 
 /**
  * Round 1 fix loop PR-12 — semantic status tones + pill contrast,
@@ -147,6 +147,25 @@ describe("pill contrast, recomputed from styles.css (PR-12, C-M15)", () => {
     expect({ background: warning![1], color: warning![2] }).toEqual(attention);
   });
 
+  test("text-tone helper carries the tone, not the badge chrome", () => {
+    expect(toneTextClass("problem")).toBe("toneText tone-problem");
+    expect(toneTextClass("success")).toBe("toneText tone-success");
+    expect(toneTextClass("neutral")).toBe("toneText tone-neutral");
+  });
+
+  test.each(["success", "progress", "attention", "problem", "neutral"])(
+    "the overlay text tone-%s is exactly the badge tone's foreground and clears AA on the white panel (R2-11)",
+    (tone) => {
+      const match = css.match(new RegExp(`\\.searchRecordMeta span\\.toneText\\.tone-${tone}\\s*\\{\\s*color:\\s*(#[0-9a-fA-F]{6});`));
+      expect(match, `toneText tone-${tone} rule`).not.toBeNull();
+      // Same foreground as the badge tone — one colour system, two
+      // treatments (pill vs text).
+      expect(match![1]).toBe(tonePair(tone).color);
+      // The overlay panel is --panel, #ffffff.
+      expect(contrastRatio(match![1]!, "#ffffff")).toBeGreaterThanOrEqual(4.5);
+    }
+  );
+
   test("the base badge pair clears AA 4.5:1 under every role theme", () => {
     const rootSoft = cssVar(/:root\s*\{[^}]*\}/, "--role-soft");
     const rootText = cssVar(/:root\s*\{[^}]*\}/, "--badge-text");
@@ -157,5 +176,19 @@ describe("pill contrast, recomputed from styles.css (PR-12, C-M15)", () => {
       const text = cssVar(block, "--badge-text");
       expect(contrastRatio(text, soft), `role-${role}: ${text} on ${soft}`).toBeGreaterThanOrEqual(4.5);
     }
+  });
+});
+
+describe("search overlay status text wiring (R2-11)", () => {
+  const shell = readFileSync(new URL("../../apps/web/src/app/ui/app-shell.tsx", import.meta.url), "utf8");
+  const overlay = readFileSync(new URL("../../apps/web/src/app/ui/search-overlay.ts", import.meta.url), "utf8");
+
+  test("the overlay derivation routes every status through the tone map", () => {
+    expect(overlay).toContain('from "./status-tone"');
+    expect(overlay.match(/statusTone: toneOfStatus\(/g)?.length).toBe(7);
+  });
+
+  test("the shell paints the result status with its carried tone", () => {
+    expect(shell).toContain("toneTextClass(item.statusTone)");
   });
 });

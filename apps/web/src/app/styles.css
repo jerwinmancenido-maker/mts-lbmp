@@ -1048,6 +1048,35 @@ nav,
   color: #334155;
 }
 
+/* Round 2 R2-11: text-only tones — the same foreground colours as
+   the badge tones above, for surfaces that render a status as text
+   rather than a pill. The search overlay's result rows were the one
+   surface bypassing the tone map (every status took the role accent
+   via .searchRecordMeta span:first-child). Scoped under
+   .searchRecordMeta so the rules outrank that default; on the
+   overlay's white panel these foregrounds measure higher contrast
+   than the 4.5:1 they hold on their tinted badge backgrounds
+   (pinned by tests/web/status-tone.test.ts). */
+.searchRecordMeta span.toneText.tone-success {
+  color: #14532d;
+}
+
+.searchRecordMeta span.toneText.tone-progress {
+  color: #1e3a8a;
+}
+
+.searchRecordMeta span.toneText.tone-attention {
+  color: #92400e;
+}
+
+.searchRecordMeta span.toneText.tone-problem {
+  color: #991b1b;
+}
+
+.searchRecordMeta span.toneText.tone-neutral {
+  color: #334155;
+}
+
 /* Round 1 PR-12 (C-M16 via R1): the Profitability Report's totals
    are the screen's headline figures — first in the results, largest
    type on the panel, full-contrast — instead of a small muted line

@@ -40,7 +40,8 @@ import { fuzzyRankSearchResult, rankSearchResult, tieredSearchScores } from "./s
 import { buildSearchOverlayResults, formatSearchDate, isSearchPermissionError, searchOverlayPanelState, type SearchOverlayCollections, type SearchOverlayLoadStatus, type SearchResultItem } from "./search-overlay";
 import { dashboardScopeLabel, dashboardTiles } from "./dashboard-tiles";
 import type { DashboardMetricKey } from "./dashboard-tiles";
-import { statusBadgeClass, toneBadgeClass } from "./status-tone";
+import { statusBadgeClass, toneBadgeClass, toneTextClass } from "./status-tone";
+import { deriveSyncHeader, type SyncState } from "./sync-label";
 import { receivingBranchCounts, withResolvedLineBranches } from "./receiving-review";
 import { parsePhilippineAddress, readDeliveryReceiptPhoto, type DrOcrConfidence, type DrOcrProgress, type DrOcrResult } from "./dr-ocr";
 import { setPhotoAuditUser, setPhotoUploadContext, takeNativeCameraPhoto, uploadCompressedImage, uploadPathForPhotoType } from "./media";
@@ -84,7 +85,6 @@ type ModuleCacheData = {
   customerBalances?: CustomerBalance[];
 };
 
-type SyncState = "Online" | "Refreshing" | "Cached" | "Offline" | "Pending sync" | "Sync failed" | "Syncing";
 type QueueablePost = <T>(type: OfflineQueueRecord["type"], path: string, body?: unknown) => Promise<{ queued: true } | { queued: false; result: T }>;
 type QueueablePatch = <T>(type: OfflineQueueRecord["type"], path: string, body?: unknown) => Promise<{ queued: true } | { queued: false; result: T }>;
 type PhotoUploadResult = Awaited<ReturnType<typeof uploadCompressedImage>>;
@@ -861,6 +861,11 @@ export function AppShell() {
   const [lastCachedAt, setLastCachedAt] = useState("");
   const [syncState, setSyncState] = useState<SyncState>("Online");
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  // R2-07: how many load flows (shell refresh, module load, queue
+  // drain) are running right now. Each flow counts only itself, so one
+  // flow finishing can no longer erase another flow's in-flight state
+  // from the header's view — see sync-label.ts.
+  const [syncLoadsInFlight, setSyncLoadsInFlight] = useState(0);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const visibleTabs = useMemo(() => visibleTabsForRole(activeUser.role), [activeUser.role]);
   const [globalIssue, setGlobalIssue] = useState<UserIssue | null>(null);
@@ -1000,7 +1005,15 @@ export function AppShell() {
     });
   }, [activeUser.id, activeUser.name, activeUser.role]);
 
-  const refresh = useCallback(async () => {
+  function beginSyncActivity() {
+    setSyncLoadsInFlight((count) => count + 1);
+  }
+
+  function endSyncActivity() {
+    setSyncLoadsInFlight((count) => Math.max(0, count - 1));
+  }
+
+  const loadShellData = useCallback(async () => {
     const cacheKey = shellCacheKey(activeUser.id);
     const cached = await readCachedRecord<ShellCacheData>(cacheKey);
     if (cached) {
@@ -1035,6 +1048,18 @@ export function AppShell() {
       throw error;
     }
   }, [activeBranchContext, activeUser.id]);
+
+  // R2-07: the shell refresh counts itself in flight for its whole
+  // run, so the header cannot claim "Synced" while it (or any other
+  // counted flow) is still running — see sync-label.ts.
+  const refresh = useCallback(async () => {
+    beginSyncActivity();
+    try {
+      await loadShellData();
+    } finally {
+      endSyncActivity();
+    }
+  }, [loadShellData]);
 
   useEffect(() => {
     // Phase 5 P5-2: no data loads before sign-in (there is no default
@@ -1276,7 +1301,10 @@ export function AppShell() {
     const queue = waiting.filter(shouldAutoRetryQueueRecord);
     if (!queue.length) {
       await refreshPendingSyncCount();
-      if (waiting.length) setSyncState("Sync failed");
+      // A photo-only drain above set "Syncing" (processQueuedPhotos)
+      // and no queue path runs from here to clear it — land on the
+      // terminal state instead of leaving "Syncing" stuck (R2-07).
+      setSyncState(waiting.length ? "Sync failed" : "Online");
       return;
     }
     setSyncState("Syncing");
@@ -1494,7 +1522,7 @@ export function AppShell() {
     }
   }
 
-  async function refreshCurrentTabData(tab = activeTab) {
+  async function loadCurrentTabData(tab = activeTab) {
     const branch = branchScope;
     const params = { limit: MODULE_FETCH_LIMIT, branch };
     const cacheKey = moduleCacheKey(tab, activeUser.id, branch);
@@ -1664,6 +1692,20 @@ export function AppShell() {
     }
   }
 
+  // R2-07: a module load counts itself in flight for its whole run —
+  // its completion sets syncState "Online", which must not be read as
+  // "everything is synced" while the shell refresh (or a drain) is
+  // still running, nor may the shell refresh's completion hide this
+  // load. The count is the header's shared truth — see sync-label.ts.
+  async function refreshCurrentTabData(tab = activeTab) {
+    beginSyncActivity();
+    try {
+      await loadCurrentTabData(tab);
+    } finally {
+      endSyncActivity();
+    }
+  }
+
   useEffect(() => {
     if (!bootstrap || homeOpen || accountOpen) return;
     refreshCurrentTabData(activeTab).catch((error: unknown) => {
@@ -1700,19 +1742,24 @@ export function AppShell() {
       setSyncState(pendingSyncCount > 0 ? "Pending sync" : "Offline");
       return;
     }
-    processOfflineQueue().catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : "Unable to sync tablet actions.";
-      setSyncState("Sync failed");
-      setStatus(message);
-      showGlobalIssue({
-        level: "error",
-        title: "Sync failed",
-        message,
-        source: "sync",
-        details: error,
-        module: activeTab
-      });
-    });
+    // R2-07: the drain counts itself in flight — while it runs the
+    // header reads "Syncing", never "Synced" (see sync-label.ts).
+    beginSyncActivity();
+    processOfflineQueue()
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : "Unable to sync tablet actions.";
+        setSyncState("Sync failed");
+        setStatus(message);
+        showGlobalIssue({
+          level: "error",
+          title: "Sync failed",
+          message,
+          source: "sync",
+          details: error,
+          module: activeTab
+        });
+      })
+      .finally(endSyncActivity);
   }, [activeTab, isOnline, pendingSyncCount, showGlobalIssue]);
 
   useEffect(() => {
@@ -1974,25 +2021,16 @@ export function AppShell() {
     }
   }, [activeTab, visibleTabs]);
 
-  const syncLabel = pendingSyncCount > 0
-    ? `Needs Sync: ${pendingSyncCount}`
-    : syncState === "Refreshing"
-      ? "Syncing"
-      : syncState === "Cached"
-        ? `Cached${lastCachedAt ? ` ${lastCachedAt}` : ""}`
-        : syncState === "Offline"
-          ? "Offline"
-          : syncState === "Sync failed"
-            ? "Sync failed"
-            : lastSyncedAt
-              ? `Synced ${lastSyncedAt}`
-              : "Online";
-  const syncToneClass =
-    pendingSyncCount > 0 ? "pending" :
-    syncState === "Offline" || syncState === "Sync failed" ? "offline" :
-    syncState === "Cached" ? "cached" :
-    syncState === "Refreshing" || syncState === "Syncing" ? "syncing" :
-    "";
+  // R2-07: the header's label and tone come from the one derivation
+  // in sync-label.ts, fed by the in-flight count — it cannot claim
+  // "Synced" while any load flow is running or the queue is non-empty.
+  const { label: syncLabel, toneClass: syncToneClass } = deriveSyncHeader({
+    pendingSyncCount,
+    syncState,
+    loadsInFlight: syncLoadsInFlight,
+    lastSyncedAt,
+    lastCachedAt
+  });
 
   // Phase 5 P5-2: the login screen is the only entry, and a flagged
   // account sees the forced password-change screen before anything else.
@@ -2074,7 +2112,7 @@ export function AppShell() {
                     </div>
                     <p>{item.details}</p>
                     <div className="searchRecordMeta">
-                      <span>{item.status}</span>
+                      <span className={toneTextClass(item.statusTone)}>{item.status}</span>
                       {item.amount && <span>{item.amount}</span>}
                     </div>
                   </button>
