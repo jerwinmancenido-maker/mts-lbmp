@@ -36,6 +36,8 @@ import { OFFLINE_QUEUE_MAX_AUTO_ATTEMPTS, attemptQueueRecordSync, queueItemView,
 import { cacheReceivingFormStore, clearReceivingFormSnapshot, loadReceivingFormSnapshot, receivingFormHasContent, saveReceivingFormSnapshot, type ReceivingFormSnapshot } from "./receiving-form-persistence";
 import { paymentSearchDetails, remainingBalanceForPackage } from "./payment-display";
 import { fuzzyRankSearchResult, rankSearchResult, tieredSearchScores } from "./search-ranking";
+import { dashboardTiles } from "./dashboard-tiles";
+import type { DashboardMetricKey } from "./dashboard-tiles";
 import { parsePhilippineAddress, readDeliveryReceiptPhoto, type DrOcrConfidence, type DrOcrProgress, type DrOcrResult } from "./dr-ocr";
 import { setPhotoAuditUser, setPhotoUploadContext, takeNativeCameraPhoto, uploadCompressedImage, uploadPathForPhotoType } from "./media";
 import type { PrinterDiagnosticCheck } from "@mts-lbmp/printing";
@@ -1403,12 +1405,32 @@ export function AppShell() {
       setStatus("Cached / Syncing");
     }
 
-    // Dashboard renders from shell state; Reports fetches its own
-    // date-ranged data inside the component (P6-5). Neither uses the
-    // per-module cache fetch below.
-    if (tab === "dashboard" || tab === "reports") return;
+    // Reports fetches its own date-ranged data inside the component
+    // (P6-5) and does not use the per-module cache fetch below.
+    if (tab === "reports") return;
 
     setSyncState("Refreshing");
+
+    if (tab === "dashboard") {
+      // Round 1 PR-11 (C-M13): the dashboard's count tiles read the
+      // shell's API dashboard payload (see refresh()), never these
+      // lists. The lists are loaded so the tile drill-down rows and
+      // the two role-scoped tiles (Collected Here / Need Collection,
+      // computed from payments + packages) are populated on a direct
+      // login → Dashboard landing instead of staying empty until the
+      // user visits another tab first. Same fetch shape and limit as
+      // the packages tab, plus payments (the delivery tab's pairing).
+      const [cargo, tripList, paymentList] = await Promise.all([
+        apiGet<CargoPackage[]>(apiQuery("/packages", params)),
+        apiGet<Trip[]>(apiQuery("/trips", params)),
+        apiGet<PaymentRecord[]>(apiQuery("/payments", params))
+      ]);
+      const data = { packages: cargo, trips: tripList, payments: paymentList };
+      applyModuleData(data);
+      await writeCachedValue(cacheKey, data, { source: "server", userId: activeUser.id, branch, module: tab });
+      setSyncState("Online");
+      return;
+    }
 
     if (tab === "receiving") {
       const [productList, cargo] = await Promise.all([
@@ -3487,8 +3509,7 @@ function Dashboard({
   activeUser: OperatorUser;
   language: "English" | "Tagalog";
 }) {
-  type MetricKey = "waiting" | "withoutPrice" | "pendingCustomers" | "activeTrips" | "delivered" | "failedDelivery" | "collected" | "unpaid" | "payments" | "expenses" | "profit";
-  const [selectedMetric, setSelectedMetric] = useState<MetricKey>("waiting");
+  const [selectedMetric, setSelectedMetric] = useState<DashboardMetricKey>("waiting");
   // Phase 6 P6-6: financial tiles + charts key on the reports.view
   // PERMISSION (resolved server-side into the session user's
   // permission list), not on owner role names — the same permission
@@ -3496,36 +3517,13 @@ function Dashboard({
   // the dashboard payload at all, so the two can never disagree.
   const canViewFinancialSummary = userHasPermission(activeUser, "reports.view");
   const collectedTotal = payments.reduce((sum, payment) => sum + payment.amountPaid, 0);
-  const visibleCargoWaiting = packages.filter((pkg) => ["Waiting for Loading", "Received"].includes(pkg.status)).length;
-  const visibleCargoWithoutPrice = packages.filter((pkg) => pkg.price == null).length;
-  const visibleActiveTrips = trips.filter((trip) => !["Completed", "Cancelled"].includes(trip.status)).length;
-  const visibleDelivered = packages.filter((pkg) => pkg.status === "Delivered").length;
-  const visibleFailedDeliveries = packages.filter((pkg) => pkg.status === "Failed Delivery").length;
+  // Round 1 PR-11 (C-M13): every count tile reads the API dashboard
+  // payload — the derivation lives in ./dashboard-tiles. The cargo /
+  // trip lists this component also receives are used ONLY for the
+  // drill-down rows below the tiles, never for the tile figures.
   const cards = useMemo(
-    () =>
-      [
-        { key: "waiting", label: "Cargo Waiting", value: visibleCargoWaiting },
-        { key: "withoutPrice", label: "Without Price", value: visibleCargoWithoutPrice },
-        { key: "pendingCustomers", label: "Customer Pending", value: dashboard?.pendingCustomers ?? 0 },
-        { key: "activeTrips", label: "Active Trips", value: visibleActiveTrips },
-        { key: "delivered", label: "Delivered", value: visibleDelivered },
-        { key: "failedDelivery", label: "Failed Delivery", value: visibleFailedDeliveries },
-        ...(canViewFinancialSummary
-          ? [
-              { key: "payments" as MetricKey, label: "Payments", value: `PHP ${(dashboard?.paymentsCollected ?? 0).toLocaleString()}` },
-              { key: "expenses" as MetricKey, label: "Expenses Review", value: dashboard?.expensesAwaitingApproval ?? 0 },
-              // Phase 6 P6-5: the tile reads the period-scoped figure
-              // and its label says what it is. (The all-time
-              // estimatedProfit it replaced was removed from the API
-              // in P6-6 after its one deprecated release.)
-              { key: "profit" as MetricKey, label: "Profit This Month", value: `PHP ${(dashboard?.profitThisMonth ?? 0).toLocaleString()}` }
-            ]
-          : [
-              { key: "collected" as MetricKey, label: "Collected Here", value: `PHP ${collectedTotal.toLocaleString()}` },
-              { key: "unpaid" as MetricKey, label: "Need Collection", value: unpaidPackages.length }
-            ])
-      ] satisfies Array<{ key: MetricKey; label: string; value: string | number }>,
-    [canViewFinancialSummary, collectedTotal, dashboard, unpaidPackages.length, visibleActiveTrips, visibleCargoWaiting, visibleCargoWithoutPrice, visibleDelivered, visibleFailedDeliveries]
+    () => dashboardTiles(dashboard, { canViewFinancialSummary, collectedTotal, unpaidCount: unpaidPackages.length }),
+    [canViewFinancialSummary, collectedTotal, dashboard, unpaidPackages.length]
   );
 
   useEffect(() => {
