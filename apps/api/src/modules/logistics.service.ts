@@ -5043,8 +5043,15 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     const delivery = [...this.deliveries].reverse().find((entry) => entry.cargoPackageId === cargo.id && entry.status === "Delivered");
     if (!delivery) throw new BadRequestException("Package has no completed delivery receipt yet");
     const latestPayment = [...this.payments].reverse().find((entry) => entry.cargoPackageId === cargo.id);
+    // Round 1 PR-8 (C-M9): ONE document number for the delivery receipt,
+    // computed once here — the number printed on the paper the recipient
+    // signs is the number the print metadata carries and the print log
+    // registers at hand-off. The render used to print a "DR-PREVIEW-…"
+    // placeholder in the text while the metadata carried the real
+    // "DR-…", so the signed paper could never be matched to the log.
+    const documentNumber = `DR-${cargo.packageNumber}`;
     const text = renderDeliveryReceipt({
-      documentNumber: `DR-PREVIEW-${cargo.packageNumber}`,
+      documentNumber,
       packageNumber: cargo.packageNumber,
       customerName: cargo.customerName,
       description: cargo.description,
@@ -5058,7 +5065,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       text,
       print: {
         documentType: "Delivery Receipt",
-        documentNumber: `DR-${cargo.packageNumber}`,
+        documentNumber,
         relatedEntityType: "CargoPackage",
         relatedEntityId: cargo.id,
         layout: "80mm"

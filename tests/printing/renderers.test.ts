@@ -138,13 +138,57 @@ describe("renderReceivingDocument", () => {
     expect(text).toContain("2: 1 pcs Cement bag / Daet / NP");
   });
 
-  test("truncates item descriptions longer than 22 chars with an ellipsis", () => {
+  test("truncates item descriptions to fit the 42-col line, cutting at a word boundary (L4-F3)", () => {
     const text = renderReceivingDocument({
       ...documentInput,
       packages: [{ quantity: 3, unit: "pcs", description: "Steel pipes 6m schedule 40", handlingBranchName: "Naga", destination: "Naga", price: 750 }]
     });
-    expect(text).toContain("1: 3 pcs Steel pipes 6m schedu... / Naga / P750");
+    // The old fixed 22-char cap produced "Steel pipes 6m schedu..."
+    // on a 45-char line — over the render width and cut mid-word.
+    // The description now gets only the width the composed line
+    // leaves, and the ellipsis replaces a whole word.
+    expect(text).toContain("1: 3 pcs Steel pipes 6m... / Naga / P750");
     expect(text).toContain("Total: PHP 750.00");
+    expectWithinRenderWidth(text);
+  });
+
+  test("prints centavo prices exactly, so the item lines sum to the printed total (C-M10)", () => {
+    const text = renderReceivingDocument({
+      ...documentInput,
+      packages: [
+        { quantity: 2, unit: "box", description: "Alpha sewing machines", handlingBranchName: "Daet", destination: "Daet", price: 1500 },
+        { quantity: 3, unit: "roll", description: "Bravo textile rolls", handlingBranchName: "Daet", destination: "Daet", price: 2750.5 },
+        { quantity: 1, unit: "pcs", description: "Needle pack", handlingBranchName: "Daet", destination: "Daet", price: 1075.25 }
+      ]
+    });
+    // The L4 evidence case: 2750.50 used to print as "P2751" and the
+    // lines summed ₱0.50 above the document's own total.
+    expect(text).toContain("/ P1500");
+    expect(text).toContain("/ P2750.50");
+    expect(text).toContain("/ P1075.25");
+    expect(text).not.toContain("P2751");
+    expect(text).toContain("Total: PHP 5325.75");
+    const itemCentavos = text
+      .split("\n")
+      .filter((line) => /^\d+: /.test(line))
+      .map((line) => Math.round(Number(line.match(/P([\d.]+)$/)?.[1] ?? "0") * 100));
+    expect(itemCentavos).toEqual([150000, 275050, 107525]);
+    expect(itemCentavos.reduce((sum, value) => sum + value, 0)).toBe(532575);
+  });
+
+  test("keeps long-description item lines inside the width without mid-word cuts (L4-F3)", () => {
+    const text = renderReceivingDocument({
+      ...documentInput,
+      packages: [
+        { quantity: 2, unit: "box", description: "L4 Alpha sewing machines", handlingBranchName: "Daet", destination: "Daet", price: 1500 },
+        { quantity: 3, unit: "roll", description: "L4 Bravo textile rolls", handlingBranchName: "Daet", destination: "Daet", price: 2750.5 }
+      ]
+    });
+    // The exact L4 evidence shape: these lines rendered at 48/47
+    // chars with "sewing machi..." cut mid-word.
+    expect(text).toContain("1: 2 box L4 Alpha sewing... / Daet / P1500");
+    expect(text).not.toContain("machi");
+    expectWithinRenderWidth(text);
   });
 });
 
@@ -214,7 +258,11 @@ describe("renderLoadingManifest", () => {
 });
 
 const deliveryReceiptInput = {
-  documentNumber: "DR-PREVIEW-PKG-2026-11-000001",
+  // Round 1 PR-8 (C-M9): the service passes the REGISTERED document
+  // number — the same value the print metadata/log carries — so the
+  // golden shows what the signed paper now carries. The fixture used
+  // to enshrine the "DR-PREVIEW-…" placeholder the service hardcoded.
+  documentNumber: "DR-PKG-2026-11-000001",
   packageNumber: "PKG-2026-11-000001",
   customerName: "Fixture Customer",
   description: "Angle bar",
@@ -244,5 +292,11 @@ describe("renderDeliveryReceipt", () => {
     expect(text).toContain("Price: PHP 3600.00");
     expect(text).toContain("Payment: Paid");
     expect(text).toContain(QR_LINE);
+  });
+
+  test("prints the given document number as the receipt's number line (C-M9)", () => {
+    const text = renderDeliveryReceipt(deliveryReceiptInput);
+    expect(text.split("\n")[2]).toBe("DR-PKG-2026-11-000001");
+    expect(text).not.toContain("PREVIEW");
   });
 });
