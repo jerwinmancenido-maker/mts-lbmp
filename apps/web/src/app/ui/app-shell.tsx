@@ -3729,6 +3729,34 @@ function apiErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
+/** Round 1 PR-9 (C-M11): one likely-duplicate candidate from a refused customer create. */
+interface PossibleCustomerDuplicate {
+  id: string;
+  businessName: string;
+  status: string;
+  phone?: string;
+  companyPhone?: string;
+  contactPerson?: string;
+  matchedOn: string;
+}
+
+/**
+ * Extracts the duplicate candidates from a customer-create 409 body.
+ * Returns an empty list for any other error, so callers can branch on
+ * "was this the duplicate warning?" without caring about the shape.
+ */
+function parsePossibleCustomerDuplicates(error: unknown): PossibleCustomerDuplicate[] {
+  if (error instanceof Error) {
+    try {
+      const parsed = JSON.parse(error.message) as { possibleDuplicates?: PossibleCustomerDuplicate[] };
+      if (Array.isArray(parsed.possibleDuplicates)) return parsed.possibleDuplicates;
+    } catch {
+      // Not a JSON error body — not a duplicate warning.
+    }
+  }
+  return [];
+}
+
 /**
  * Phase 5 P5-2 — the login screen, now the ONLY entry to the shell.
  * Two doors, both real: email + password, and staff code (for shared
@@ -4528,6 +4556,8 @@ function Receiving({
   const [pendingShippingSameAsBilling, setPendingShippingSameAsBilling] = useState(false);
   const [showPendingAddressDetails, setShowPendingAddressDetails] = useState(false);
   const [showPendingCustomerForm, setShowPendingCustomerForm] = useState(false);
+  /** Round 1 PR-9 (C-M11): candidates from a refused duplicate create, shown in the pending form. */
+  const [pendingDuplicateCandidates, setPendingDuplicateCandidates] = useState<PossibleCustomerDuplicate[]>([]);
   const [customerDrNumber, setCustomerDrNumber] = useState("");
   const [senderName, setSenderName] = useState("");
   const [senderPhone, setSenderPhone] = useState("");
@@ -6112,6 +6142,65 @@ function Receiving({
     setReceiveMessage("Sender copied to receiver/consignee details.");
   }
 
+  /**
+   * Round 1 PR-9 (C-M11): the pending-customer form's submit. A 409
+   * duplicate warning is not an action failure — it fills the inline
+   * warning in the form so the operator can pick the existing record
+   * or explicitly create anyway (confirmDuplicate). Any other error
+   * rethrows into onAction's banner as before. Nothing is created
+   * server-side until the operator chooses.
+   */
+  async function submitPendingCustomerForm(confirmDuplicate: boolean) {
+    try {
+      const customer = await apiPost<BootstrapData["customers"][number]>("/customers/pending", {
+        businessName: pendingCustomerName,
+        contactPerson: pendingContactPerson,
+        phone: pendingCustomerPhone,
+        address: pendingCustomerAddress,
+        billingAddress: pendingShippingSameAsBilling ? pendingCustomerAddress : pendingBillingAddress,
+        shippingAddress: pendingShippingSameAsBilling ? pendingCustomerAddress : pendingShippingAddress,
+        reviewBranchName: handlingBranchName,
+        notes: `Created during receiving for ${handlingBranchName} review`,
+        ...(confirmDuplicate ? { confirmDuplicate: true } : {})
+      });
+      setPendingDuplicateCandidates([]);
+      setSelectedCustomerId(customer.id);
+      setCustomerQuery(customer.businessName);
+      setPendingCustomerName("");
+      setPendingContactPerson("");
+      setPendingCustomerPhone("");
+      setPendingCustomerAddress("");
+      setPendingBillingAddress("");
+      setPendingShippingAddress("");
+      setPendingShippingSameAsBilling(false);
+      setShowPendingAddressDetails(false);
+      setShowPendingCustomerForm(false);
+      setReceiveMessage(`${customer.businessName} created for ${handlingBranchName} owner review. Operations may continue.`);
+    } catch (error) {
+      const duplicates = parsePossibleCustomerDuplicates(error);
+      if (duplicates.length === 0) throw error;
+      setPendingDuplicateCandidates(duplicates);
+      setReceiveMessage(apiErrorMessage(error, "Possible duplicate customer. Review the matches below before creating."));
+    }
+  }
+
+  /** Round 1 PR-9 (C-M11): the warning's "use existing" choice — select the matched record, create nothing. */
+  function useExistingPendingCustomer(candidate: PossibleCustomerDuplicate) {
+    setPendingDuplicateCandidates([]);
+    setSelectedCustomerId(candidate.id);
+    setCustomerQuery(candidate.businessName);
+    setPendingCustomerName("");
+    setPendingContactPerson("");
+    setPendingCustomerPhone("");
+    setPendingCustomerAddress("");
+    setPendingBillingAddress("");
+    setPendingShippingAddress("");
+    setPendingShippingSameAsBilling(false);
+    setShowPendingAddressDetails(false);
+    setShowPendingCustomerForm(false);
+    setReceiveMessage(`${candidate.businessName} selected — the existing record will be used.`);
+  }
+
   async function createPendingCompany(source: string) {
     const shippingAddress = pendingShippingSameAsBilling ? pendingBillingAddress : pendingShippingAddress;
     const customer = await apiPost<BootstrapData["customers"][number]>("/customers/pending", {
@@ -6127,6 +6216,14 @@ function Receiving({
       billingAddress: pendingBillingAddress,
       shippingAddress,
       notes: source
+      // Round 1 PR-9 (C-M11): a duplicate warning surfaces readably and
+      // creates nothing — the operator picks the existing record instead,
+      // or uses the Create Customer for Review form's explicit override.
+    }).catch((error: unknown) => {
+      if (parsePossibleCustomerDuplicates(error).length > 0) {
+        throw new Error(apiErrorMessage(error, "Possible duplicate customer — nothing was created."));
+      }
+      throw error;
     });
     setSelectedCustomerId(customer.id);
     setCustomerQuery(customer.businessName);
@@ -6445,6 +6542,14 @@ function Receiving({
       shippingAddress: shippingAddress || pendingCustomerAddress || deliverySummary || addressLine,
       reviewBranchName: handlingBranchName,
       notes: `Created during receiving for ${handlingBranchName} review`
+      // Round 1 PR-9 (C-M11): if the typed name turns out to be a likely
+      // duplicate, the create is refused and the warning surfaces — the
+      // operator then selects the existing record from the picker above.
+    }).catch((error: unknown) => {
+      if (parsePossibleCustomerDuplicates(error).length > 0) {
+        throw new Error(apiErrorMessage(error, "Possible duplicate customer — nothing was created."));
+      }
+      throw error;
     });
     setSelectedCustomerId(customer.id);
     setCustomerQuery(customer.businessName);
@@ -7750,12 +7855,12 @@ function Receiving({
                 <h4>Customer for Review</h4>
                 <p className="muted">Use only when the customer is not yet in the list. Operations may continue while the selected branch owner reviews it.</p>
               </div>
-              <button className="smallButton" onClick={() => setShowPendingCustomerForm(false)}>Cancel</button>
+              <button className="smallButton" onClick={() => { setShowPendingCustomerForm(false); setPendingDuplicateCandidates([]); }}>Cancel</button>
             </div>
             <div className="formGrid">
-              <label>Customer Name<input value={pendingCustomerName} onChange={(event) => setPendingCustomerName(event.target.value)} placeholder="Business or customer name" /></label>
+              <label>Customer Name<input value={pendingCustomerName} onChange={(event) => { setPendingCustomerName(event.target.value); setPendingDuplicateCandidates([]); }} placeholder="Business or customer name" /></label>
               <label>Contact Person<input value={pendingContactPerson} onChange={(event) => setPendingContactPerson(event.target.value)} placeholder="Person in charge" /></label>
-              <label>Phone<input value={pendingCustomerPhone} onChange={(event) => setPendingCustomerPhone(event.target.value)} placeholder="" /></label>
+              <label>Phone<input value={pendingCustomerPhone} onChange={(event) => { setPendingCustomerPhone(event.target.value); setPendingDuplicateCandidates([]); }} placeholder="" /></label>
               <LongTextField label="Company Address" value={pendingCustomerAddress} onChange={(value) => {
                 setPendingCustomerAddress(value);
                 if (pendingShippingSameAsBilling) {
@@ -7794,34 +7899,39 @@ function Receiving({
                   setReceiveMessage("Select the branch first so the correct branch owner is notified.");
                   return;
                 }
-                onAction("Create pending customer", async () => {
-                  const customer = await apiPost<BootstrapData["customers"][number]>("/customers/pending", {
-                    businessName: pendingCustomerName,
-                    contactPerson: pendingContactPerson,
-                    phone: pendingCustomerPhone,
-                    address: pendingCustomerAddress,
-                    billingAddress: pendingShippingSameAsBilling ? pendingCustomerAddress : pendingBillingAddress,
-                    shippingAddress: pendingShippingSameAsBilling ? pendingCustomerAddress : pendingShippingAddress,
-                    reviewBranchName: handlingBranchName,
-                    notes: `Created during receiving for ${handlingBranchName} review`
-                  });
-                  setSelectedCustomerId(customer.id);
-                  setCustomerQuery(customer.businessName);
-                  setPendingCustomerName("");
-                  setPendingContactPerson("");
-                  setPendingCustomerPhone("");
-                  setPendingCustomerAddress("");
-                  setPendingBillingAddress("");
-                  setPendingShippingAddress("");
-                  setPendingShippingSameAsBilling(false);
-                  setShowPendingAddressDetails(false);
-                  setShowPendingCustomerForm(false);
-                  setReceiveMessage(`${customer.businessName} created for ${handlingBranchName} owner review. Operations may continue.`);
-                });
+                onAction("Create pending customer", () => submitPendingCustomerForm(false));
               }}
             >
               <PackagePlus /> Save Customer for Review
             </button>
+            {pendingDuplicateCandidates.length > 0 && (
+              <div className="deliveryAreaBox needsAttention">
+                <h4>Possible duplicate customer</h4>
+                <p className="muted">Nothing was created. A customer like this is already on file — use the existing record, or create anyway only if it is a different customer.</p>
+                <div className="list">
+                  {pendingDuplicateCandidates.map((candidate) => (
+                    <div className="row" key={candidate.id}>
+                      <div>
+                        <strong>{candidate.businessName}</strong>
+                        <p>
+                          {candidate.status}
+                          {candidate.contactPerson ? ` · ${candidate.contactPerson}` : ""}
+                          {candidate.phone || candidate.companyPhone ? ` · ${candidate.phone || candidate.companyPhone}` : ""}
+                          {` · matched: ${candidate.matchedOn}`}
+                        </p>
+                      </div>
+                      <button className="smallButton" onClick={() => useExistingPendingCustomer(candidate)}>Use Existing</button>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  className="dangerButton"
+                  onClick={() => onAction("Create pending customer", () => submitPendingCustomerForm(true))}
+                >
+                  Create Anyway — Different Customer
+                </button>
+              </div>
+            )}
           </div>
         )}
         <div className={`deliveryAreaBox ${receiveWarning?.target === "address" ? "needsAttention" : ""}`}>
