@@ -93,7 +93,17 @@ export interface StateStore {
    * answering success for a record that was never persisted — hence the
    * `void` arm of the return type. A genuinely asynchronous implementation
    * (the Prisma store) returns a promise; LogisticsService tracks that
-   * promise and fails closed on the next mutation if it rejects.
+   * promise, the HTTP boundary awaits it before answering the mutation
+   * (FU-1 route (a) — LogisticsService.flushPersistence), and the service
+   * fails closed on the next mutation if it rejects.
+   *
+   * The state passed in is a frozen snapshot — a deep copy taken at the
+   * moment of the call, detached from the service's live state. An
+   * asynchronous implementation may serialize it whenever its save queue
+   * reaches it; later mutations never leak into an earlier save.
+   * Implementations must serialize their saves (a save queued behind a
+   * failed one must not run), so the durable state is always a prefix of
+   * the mutation sequence.
    */
   save(state: ServiceState): Promise<void> | void;
   close?(): Promise<void>;

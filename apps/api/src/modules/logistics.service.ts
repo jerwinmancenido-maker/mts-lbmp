@@ -541,6 +541,18 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
    * recovered store clears it.
    */
   private persistenceFailure: Error | undefined;
+  /**
+   * FU-1 route (a) — awaited saves: how many asynchronous saves saveData
+   * has queued, and the promise of the most recent one. The HTTP boundary
+   * (PersistenceFlushInterceptor) snapshots persistenceCheckpoint() before
+   * a mutating handler runs and passes it to flushPersistence() after the
+   * handler returns, which awaits exactly the saves that handler queued —
+   * so a success response is only sent once the state it reports is
+   * durable. Synchronous stores never move the generation: their saves
+   * settle inside saveData itself, so there is nothing to await.
+   */
+  private saveGeneration = 0;
+  private lastSavePromise: Promise<void> | undefined;
   private companyProfile: CompanyProfile = {
     companyName: "Mancenido Trucking Services",
     address: "Configured by owner",
@@ -6157,6 +6169,19 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
    *   the rollback target; on failure the error is logged AND the service
    *   fails closed — the next mutation rolls back and is refused — rather
    *   than continuing to answer successes against a dead store.
+   * - FU-1 route (a): tracking alone still let the failing mutation itself
+   *   answer 201 before its save rejected (proven in FU1-DISCHARGE.md —
+   *   the acknowledged write then vanished at restart). The HTTP boundary
+   *   now awaits the tracked promise before answering — see
+   *   flushPersistence — and the state handed to the store is a frozen
+   *   snapshot (a deep copy taken here), never the live arrays: a queued
+   *   save that runs late must carry exactly the state this saveData call
+   *   produced, not whatever later mutations added in the meantime.
+   *   Together with the stores' serialized save queues (a save queued
+   *   behind a failed one never runs), that makes the durable state a
+   *   strict prefix of the mutation sequence: a mutation is durable if
+   *   and only if its save is in the successful prefix, which is exactly
+   *   what flushPersistence awaits.
    */
   private saveData() {
     if (this.persistenceFailure) {
@@ -6171,7 +6196,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     const stateJson = JSON.stringify(state);
     let pending: Promise<void> | void;
     try {
-      pending = this.store.save(state);
+      pending = this.store.save(JSON.parse(stateJson) as ServiceState);
     } catch (error) {
       this.restoreLastDurableState();
       throw new InternalServerErrorException("Failed to persist logistics state; the change was rolled back and not saved.", {
@@ -6183,6 +6208,8 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       this.lastDurableStateJson = stateJson;
       return;
     }
+    this.saveGeneration += 1;
+    this.lastSavePromise = pending;
     pending.then(
       () => {
         this.lastDurableStateJson = stateJson;
@@ -6192,6 +6219,49 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         console.error("Failed to persist logistics state", error);
       }
     );
+  }
+
+  /**
+   * FU-1 route (a): the HTTP boundary's persistence checkpoint. The
+   * PersistenceFlushInterceptor takes one before a mutating handler runs
+   * and hands it back to flushPersistence() when the handler returns.
+   */
+  persistenceCheckpoint(): number {
+    return this.saveGeneration;
+  }
+
+  /**
+   * FU-1 route (a): await every asynchronous save queued since the given
+   * checkpoint — which, because the stores serialize their saves, means
+   * every save up to and including the one carrying the just-finished
+   * handler's final state — before the handler's result is answered.
+   *
+   * - Nothing saved since the checkpoint (a read-only handler, an
+   *   idempotent replay answered from its stored result, or a synchronous
+   *   store, whose saves settle inside saveData): returns immediately.
+   * - A save rejected: the in-memory state is rolled back to the last
+   *   durable snapshot NOW — the failed change must not stay readable as
+   *   a phantom until the next mutation trips the latch (that readability
+   *   was half of the FU-1 evidence) — and the request fails with the
+   *   same "rolled back and not saved" refusal the synchronous path
+   *   throws. The latch saveData's rejection handler sets stays in force
+   *   for later mutations, exactly as designed.
+   *
+   * Reads never call this: a GET is served from memory without waiting
+   * for any in-flight save.
+   */
+  async flushPersistence(checkpoint: number): Promise<void> {
+    if (checkpoint === this.saveGeneration) return;
+    const pending = this.lastSavePromise;
+    if (!pending) return;
+    try {
+      await pending;
+    } catch (error) {
+      this.restoreLastDurableState();
+      throw new InternalServerErrorException("Failed to persist logistics state; the change was rolled back and not saved.", {
+        cause: error instanceof Error ? error : new Error(String(error))
+      });
+    }
   }
 
   /**

@@ -1,10 +1,11 @@
 import { Module } from "@nestjs/common";
-import { APP_GUARD } from "@nestjs/core";
+import { APP_GUARD, APP_INTERCEPTOR } from "@nestjs/core";
 import { JwtModule } from "@nestjs/jwt";
 import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import { AuthGuard } from "./auth.guard.js";
 import { LogisticsController } from "./logistics.controller.js";
 import { LogisticsService } from "./logistics.service.js";
+import { PersistenceFlushInterceptor } from "./persistence-flush.interceptor.js";
 import { getAuthSecret } from "./security.js";
 
 @Module({
@@ -23,6 +24,12 @@ import { getAuthSecret } from "./security.js";
   controllers: [LogisticsController],
   providers: [
     LogisticsService,
+    {
+      // FU-1 route (a): a mutating response is held until the saves it
+      // queued are durable (see persistence-flush.interceptor.ts).
+      provide: APP_INTERCEPTOR,
+      useClass: PersistenceFlushInterceptor
+    },
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard
