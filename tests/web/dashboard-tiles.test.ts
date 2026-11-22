@@ -83,9 +83,17 @@ describe("dashboardTiles — count tiles read the API dashboard payload (C-M13)"
 
   test("financial tiles read the payload's money figures, PHP-formatted", () => {
     const tiles = byKey(dashboardTiles(verifierPayload, { canViewFinancialSummary: true, collectedTotal: 0, unpaidCount: 0 }));
-    expect(tiles.get("payments")?.value).toBe("PHP 1,400");
+    expect(tiles.get("payments")?.value).toBe("PHP 1,400.00");
     expect(tiles.get("expenses")?.value).toBe(4);
-    expect(tiles.get("profit")?.value).toBe("PHP 4,450");
+    expect(tiles.get("profit")?.value).toBe("PHP 4,450.00");
+  });
+
+  test("money tiles are flagged for the one-line treatment; count tiles are not (R2-05)", () => {
+    const tiles = byKey(dashboardTiles(verifierPayload, { canViewFinancialSummary: true, collectedTotal: 0, unpaidCount: 0 }));
+    expect(tiles.get("payments")?.money).toBe(true);
+    expect(tiles.get("profit")?.money).toBe(true);
+    expect(tiles.get("waiting")?.money).toBeUndefined();
+    expect(tiles.get("expenses")?.money).toBeUndefined();
   });
 
   test("a null payload (pre-load) reads 0 on every count tile, never a list figure", () => {
@@ -93,8 +101,8 @@ describe("dashboardTiles — count tiles read the API dashboard payload (C-M13)"
     for (const key of ["waiting", "withoutPrice", "pendingCustomers", "activeTrips", "delivered", "failedDelivery", "expenses"] as const) {
       expect(tiles.get(key)?.value).toBe(0);
     }
-    expect(tiles.get("payments")?.value).toBe("PHP 0");
-    expect(tiles.get("profit")?.value).toBe("PHP 0");
+    expect(tiles.get("payments")?.value).toBe("PHP 0.00");
+    expect(tiles.get("profit")?.value).toBe("PHP 0.00");
   });
 });
 
@@ -127,7 +135,8 @@ describe("dashboardTiles — the non-financial (no reports.view) tile set", () =
     ]);
     expect(byKeyStaff.get("waiting")?.value).toBe(5);
     expect(byKeyStaff.get("delivered")?.value).toBe(7);
-    expect(byKeyStaff.get("collected")?.value).toBe("PHP 2,750.5");
+    expect(byKeyStaff.get("collected")?.value).toBe("PHP 2,750.50");
+    expect(byKeyStaff.get("collected")?.money).toBe(true);
     expect(byKeyStaff.get("unpaid")?.value).toBe(9);
     expect(byKeyStaff.has("payments")).toBe(false);
     expect(byKeyStaff.has("profit")).toBe(false);

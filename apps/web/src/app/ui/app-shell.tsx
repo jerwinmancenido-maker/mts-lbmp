@@ -34,6 +34,7 @@ import { isSessionExpiredError, SESSION_EXPIRED_MESSAGE } from "./session-expiry
 import { appendDiagnosticLog, clearCachedRecords, clearDiagnosticLogs, deleteOfflineQueueRecord, deleteQueuedPhoto, enqueueOfflineAction, getOfflineStorageSummary, listDiagnosticLogs, listOfflineQueue, listQueuedPhotos, newOfflineQueueRecordId, pruneOfflineQueue, readCachedRecord, readCachedValue, replaceQueuedPhotoReferences, requestPersistentStorage, updateOfflineQueueRecord, updateQueuedPhoto, writeCachedValue, type DiagnosticLogRecord, type OfflineQueueRecord, type OfflineStorageSummary, type QueuedPhotoRecord } from "./cache";
 import { OFFLINE_QUEUE_MAX_AUTO_ATTEMPTS, attemptQueueRecordSync, queueItemView, shouldAutoRetryQueueRecord, sortQueueItemViews, type QueueItemView } from "./queue-view";
 import { cacheReceivingFormStore, clearReceivingFormSnapshot, loadReceivingFormSnapshot, receivingFormHasContent, saveReceivingFormSnapshot, type ReceivingFormSnapshot } from "./receiving-form-persistence";
+import { formatMoney, formatMoneyAmount } from "./money-format";
 import { paymentSearchDetails, remainingBalanceForPackage } from "./payment-display";
 import { fuzzyRankSearchResult, rankSearchResult, tieredSearchScores } from "./search-ranking";
 import { buildSearchOverlayResults, formatSearchDate, isSearchPermissionError, searchOverlayPanelState, type SearchOverlayCollections, type SearchOverlayLoadStatus, type SearchResultItem } from "./search-overlay";
@@ -3575,7 +3576,7 @@ function Dashboard({
             onClick={() => setSelectedMetric(card.key)}
           >
             <span>{card.label}</span>
-            <strong>{card.value}</strong>
+            <strong className={card.money ? "metricMoney" : undefined}>{card.value}</strong>
           </button>
         ))}
       </div>
@@ -3591,7 +3592,7 @@ function Dashboard({
                 <p className="muted">{pkg.receivingRecordNumber} - {pkg.customerName}</p>
               </div>
               <span className={statusBadgeClass(pkg.status)}>{pkg.status}</span>
-              <span className={pkg.price == null ? toneBadgeClass("attention") : "badge"}>{pkg.price == null ? "No Price" : `PHP ${pkg.price}`}</span>
+              <span className={pkg.price == null ? toneBadgeClass("attention") : "badge"}>{pkg.price == null ? "No Price" : formatMoney(pkg.price)}</span>
             </div>
           ))}
           {visibleTrips.map((trip) => (
@@ -3620,7 +3621,7 @@ function Dashboard({
             <div className="row" key={payment.id}>
               <CreditCard size={22} />
               <div>
-                <strong>PHP {payment.amountPaid.toLocaleString()} - {payment.method}</strong>
+                <strong>{formatMoney(payment.amountPaid)} - {payment.method}</strong>
                 <p>{payment.collectedByName ?? activeUser.name} - {payment.collectionPoint ?? "Collection"}</p>
                 <p className="muted">{new Date(payment.createdAt).toLocaleString()}</p>
               </div>
@@ -3649,7 +3650,7 @@ function Dashboard({
                 title={chartText.collections}
                 days={series.days}
                 metric="collections"
-                formatValue={(value) => `PHP ${value.toLocaleString()}`}
+                formatValue={(value) => formatMoney(value)}
                 emptyLabel={chartText.emptyCollections}
                 tone="collections"
               />
@@ -5170,7 +5171,10 @@ function Receiving({
     if (value === undefined || value === null || value === "") return "";
     const numericValue = Number(value);
     if (!Number.isFinite(numericValue)) return String(value);
-    return numericValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // The receiving screens were the one surface already rendering
+    // the canonical form; the format itself now lives in the shared
+    // money-format module (Round 2 R2-02/R2-03) so it cannot drift.
+    return formatMoneyAmount(numericValue);
   }
 
   function productSearchValues(product: ProductMaster) {
@@ -7053,7 +7057,7 @@ function Receiving({
                     <strong>{pkg.description}</strong>
                     <p>{pkg.packageNumber} - {pkg.quantity ?? 1} {pkg.unit ?? "pcs"} - {pkg.handlingBranchName ?? pkg.destination}</p>
                   </div>
-                  <span className={pkg.price == null ? toneBadgeClass("attention") : "badge"}>{pkg.price == null ? "No Price" : `PHP ${pkg.price}`}</span>
+                  <span className={pkg.price == null ? toneBadgeClass("attention") : "badge"}>{pkg.price == null ? "No Price" : formatMoney(pkg.price)}</span>
                 </div>
               ))}
             </div>
@@ -7314,7 +7318,7 @@ function Receiving({
                   <div>
                     <strong>{product.name}</strong>
                     <p>{[product.brand, product.sku ? `SKU ${product.sku}` : "", product.barcode ? `Code ${product.barcode}` : ""].filter(Boolean).join(" - ") || "No brand/code yet"}</p>
-                    <p className="muted">{[product.category, product.defaultUnit, product.defaultPrice == null ? "" : `PHP ${product.defaultPrice}`].filter(Boolean).join(" / ")}</p>
+                    <p className="muted">{[product.category, product.defaultUnit, product.defaultPrice == null ? "" : formatMoney(product.defaultPrice)].filter(Boolean).join(" / ")}</p>
                   </div>
                 </div>
               ))}
@@ -8352,7 +8356,7 @@ function Receiving({
             <p className="muted">Operational collection only. Default is unpaid.</p>
           </div>
           <div className="headerActionGroup">
-            <span className="badge">Due PHP {formatReceivingMoney(receivingAmountDue)}</span>
+            <span className="badge noWrap">Due PHP {formatReceivingMoney(receivingAmountDue)}</span>
             {receiveCollapseButton("payment", receivingPaymentStatus, ["payment"])}
           </div>
         </div>
@@ -8675,7 +8679,7 @@ function Packages({
               </div>
               <div className="compactRowMeta cargoListMeta">
                 <span className={statusBadgeClass(pkg.status)}>{pkg.status}</span>
-                <span className={pkg.price == null ? toneBadgeClass("attention") : "badge"}>{pkg.price == null ? "No Price" : `PHP ${pkg.price}`}</span>
+                <span className={pkg.price == null ? toneBadgeClass("attention") : "badge"}>{pkg.price == null ? "No Price" : formatMoney(pkg.price)}</span>
               </div>
             </button>
           ))}
@@ -8709,7 +8713,7 @@ function Packages({
               </div>
               <div className="sectionHeader">
                 <div>
-                  <h4>{selectedCargo.price == null ? "Price needed before loading" : `Price: PHP ${selectedCargo.price.toLocaleString()}`}</h4>
+                  <h4>{selectedCargo.price == null ? "Price needed before loading" : `Price: ${formatMoney(selectedCargo.price)}`}</h4>
                   <p className="muted">Update only if price changed or was missing.</p>
                 </div>
                 <button className="smallButton" onClick={() => setPriceEditorOpen((current) => !current)}>{priceEditorOpen ? "Hide" : "Edit Price"}</button>
@@ -9437,7 +9441,7 @@ function Trips({
                     minChars={1}
                     noResultsText="No loadable cargo found."
                     getLabel={(pkg) => `${pkg.packageNumber} - ${pkg.description}`}
-                    getMeta={(pkg) => `${pkg.customerName} / ${pkg.handlingBranchName ?? pkg.destination} / ${pkg.price == null ? "No price" : `PHP ${pkg.price}`}`}
+                    getMeta={(pkg) => `${pkg.customerName} / ${pkg.handlingBranchName ?? pkg.destination} / ${pkg.price == null ? "No price" : formatMoney(pkg.price)}`}
                     getSearchValues={(pkg) => [pkg.packageNumber, pkg.qrValue, pkg.description, pkg.customerName, pkg.handlingBranchName, pkg.destination, pkg.status]}
                     getExactValues={(pkg) => [pkg.packageNumber, pkg.qrValue]}
                     onChange={(value) => {
@@ -9466,7 +9470,7 @@ function Trips({
                         <div>
                           <strong>{pkg.description}</strong>
                           <p>{pkg.packageNumber} - {branchName}</p>
-                          <p className="muted">{pkg.customerName} / {pkg.status} / {pkg.price == null ? "No price" : `PHP ${pkg.price}`} / {packageWeightKg(pkg) ? `${formatNumber(packageWeightKg(pkg))} kg` : "No weight"}</p>
+                          <p className="muted">{pkg.customerName} / {pkg.status} / {pkg.price == null ? "No price" : formatMoney(pkg.price)} / {packageWeightKg(pkg) ? `${formatNumber(packageWeightKg(pkg))} kg` : "No weight"}</p>
                         </div>
                         <div className="rowActions">
                           {noPrice && <span className={toneBadgeClass("attention")}>No Price</span>}
@@ -9484,7 +9488,7 @@ function Trips({
                     <div><span>Selected</span><strong>{selectedCargo.description}</strong></div>
                     <div><span>Package</span><strong>{selectedCargo.packageNumber}</strong></div>
                     <div><span>Branch</span><strong>{selectedCargo.handlingBranchName ?? selectedCargo.destination}</strong></div>
-                    <div><span>Price</span><strong>{selectedCargo.price == null ? "No price" : `PHP ${selectedCargo.price}`}</strong></div>
+                    <div><span>Price</span><strong>{selectedCargo.price == null ? "No price" : formatMoney(selectedCargo.price)}</strong></div>
                     <div><span>Actual Weight</span><strong>{packageWeightKg(selectedCargo) ? `${formatNumber(packageWeightKg(selectedCargo))} kg` : "Missing"}</strong></div>
                     <div><span>Dimensions</span><strong>{packageVolumeCbm(selectedCargo) ? `${selectedCargo.length ?? "?"} x ${selectedCargo.width ?? "?"} x ${selectedCargo.height ?? "?"} ${selectedCargo.dimensionUnit ?? "cm"}` : "Missing"}</strong></div>
                     <div><span>Condition</span><strong>{selectedCargo.condition}</strong></div>
@@ -9514,7 +9518,7 @@ function Trips({
                     <div>
                       <strong>{pkg.description}</strong>
                       <p>{pkg.packageNumber} - {pkg.handlingBranchName ?? pkg.destination}</p>
-                      <p className="muted">{pkg.customerName} / {pkg.status} / {pkg.price == null ? "No price" : `PHP ${pkg.price}`} / {packageWeightKg(pkg) ? `${formatNumber(packageWeightKg(pkg))} kg` : "No weight"} / {packageVolumeCbm(pkg) ? `${formatNumber(packageVolumeCbm(pkg), 4)} cbm` : "No volume"}</p>
+                      <p className="muted">{pkg.customerName} / {pkg.status} / {pkg.price == null ? "No price" : formatMoney(pkg.price)} / {packageWeightKg(pkg) ? `${formatNumber(packageWeightKg(pkg))} kg` : "No weight"} / {packageVolumeCbm(pkg) ? `${formatNumber(packageVolumeCbm(pkg), 4)} cbm` : "No volume"}</p>
                     </div>
                     {queuedUnloadPackageIds.has(pkg.id) && (
                       <span className={toneBadgeClass("attention")} title="Unload queued on this tablet — the package stays on the trip until the unload syncs.">
@@ -9765,7 +9769,7 @@ function Delivery({
     setPaymentProofUrl("");
     setIssuePhotoUrl("");
     setSignature("");
-    setDeliveryStatus(`Selected ${pkg.packageNumber}. ${balance ? `Balance PHP ${balance.toLocaleString()}.` : "No balance to collect."}`);
+    setDeliveryStatus(`Selected ${pkg.packageNumber}. ${balance ? `Balance ${formatMoney(balance)}.` : "No balance to collect."}`);
   }
 
   async function verifyPackage(issueStatus: "Ready for Delivery" | "Damaged" | "Missing" | "For Checking" = "Ready for Delivery") {
@@ -9852,7 +9856,7 @@ function Delivery({
             minChars={1}
             noResultsText="No package found for this section."
             getLabel={(pkg) => `${pkg.packageNumber} - ${pkg.description}`}
-            getMeta={(pkg) => `${pkg.customerName} / ${pkg.consigneeName ?? "No receiver"} / Balance PHP ${packageBalance(pkg).toLocaleString()}`}
+            getMeta={(pkg) => `${pkg.customerName} / ${pkg.consigneeName ?? "No receiver"} / Balance ${formatMoney(packageBalance(pkg))}`}
             getSearchValues={(pkg) => [pkg.packageNumber, pkg.qrValue, pkg.receivingRecordNumber, pkg.customerName, pkg.description, pkg.consigneeName, pkg.destination, pkg.city, pkg.deliveryPhone, pkg.status]}
             getExactValues={(pkg) => [pkg.packageNumber, pkg.qrValue, pkg.receivingRecordNumber]}
             onChange={(value) => {
@@ -9875,7 +9879,7 @@ function Delivery({
               <div>
                 <strong>{pkg.description}</strong>
                 <p>{pkg.packageNumber} - {pkg.customerName}</p>
-                <p className="muted">{pkg.destination} / {pkg.consigneeName ?? "No receiver"} / {paymentStatusForPackage(pkg)} / Balance PHP {packageBalance(pkg).toLocaleString()} / {deliveryNextAction(pkg)}</p>
+                <p className="muted">{pkg.destination} / {pkg.consigneeName ?? "No receiver"} / {paymentStatusForPackage(pkg)} / Balance {formatMoney(packageBalance(pkg))} / {deliveryNextAction(pkg)}</p>
               </div>
               <div className="rowActions">
                 <span className={statusBadgeClass(pkg.status)}>{pkg.status}</span>
@@ -9895,7 +9899,7 @@ function Delivery({
             <div><span>Customer</span><strong>{selectedCargo.customerName}</strong></div>
             <div><span>Receiver</span><strong>{selectedCargo.consigneeName ?? recipient}</strong></div>
             <div><span>Address</span><strong>{[selectedCargo.addressLine, selectedCargo.barangay, selectedCargo.city, selectedCargo.province].filter(Boolean).join(", ") || selectedCargo.destination}</strong></div>
-            <div><span>Balance</span><strong>PHP {packageBalance(selectedCargo).toLocaleString()}</strong></div>
+            <div><span>Balance</span><strong>{formatMoney(packageBalance(selectedCargo))}</strong></div>
             <div><span>Status</span><strong>{selectedCargo.status}</strong></div>
             <div><span>Next Action</span><strong>{deliveryNextAction(selectedCargo)}</strong></div>
           </div>
@@ -10084,11 +10088,11 @@ function InvoiceListAndDetail({
             <div>
               <strong>{invoice.invoiceNumber}</strong>
               <p>{invoice.customerName}</p>
-              <p className="muted invoiceMetaLine">Due {formatDueDate(invoice)} / Balance PHP {invoice.balance.toLocaleString()}</p>
+              <p className="muted invoiceMetaLine">Due {formatDueDate(invoice)} / Balance ${formatMoney(invoice.balance)}</p>
             </div>
             <div className="compactRowMeta">
               <span className={statusBadgeClass(invoice.status)}>{invoice.status}</span>
-              <span className="badge">PHP {invoice.amountDue.toLocaleString()}</span>
+              <span className="badge">{formatMoney(invoice.amountDue)}</span>
             </div>
           </button>
         ))}
@@ -10106,9 +10110,9 @@ function InvoiceListAndDetail({
           <div className="detailGrid compactDetailGrid paymentSummaryGrid">
             <div><span>Status</span><strong>{selectedInvoice.status}</strong></div>
             <div><span>Due Date</span><strong>{formatDueDate(selectedInvoice)}</strong></div>
-            <div><span>Amount Due</span><strong>PHP {selectedInvoice.amountDue.toLocaleString()}</strong></div>
-            <div><span>Amount Paid</span><strong>PHP {selectedInvoice.amountPaid.toLocaleString()}</strong></div>
-            <div><span>Balance</span><strong>PHP {selectedInvoice.balance.toLocaleString()}</strong></div>
+            <div><span>Amount Due</span><strong>{formatMoney(selectedInvoice.amountDue)}</strong></div>
+            <div><span>Amount Paid</span><strong>{formatMoney(selectedInvoice.amountPaid)}</strong></div>
+            <div><span>Balance</span><strong>{formatMoney(selectedInvoice.balance)}</strong></div>
             <div><span>Packages</span><strong>{selectedInvoice.packageIds.length}</strong></div>
           </div>
           <div className="list compactList">
@@ -10121,7 +10125,7 @@ function InvoiceListAndDetail({
                   <div>
                     <strong>{pkg?.packageNumber ?? packageId}</strong>
                     <p>{pkg?.description ?? "Package"}</p>
-                    <p className="muted">Due PHP {due.toLocaleString()} / Paid PHP {paid.toLocaleString()} / Balance PHP {Math.max(due - paid, 0).toLocaleString()}</p>
+                    <p className="muted">Due {formatMoney(due)} / Paid {formatMoney(paid)} / Balance {formatMoney(Math.max(due - paid, 0))}</p>
                   </div>
                   <span className={statusBadgeClass(pkg?.status)}>{pkg?.status ?? "Unknown"}</span>
                 </div>
@@ -10212,7 +10216,7 @@ function DueWorklist({
             <div>
               <strong>{row.invoiceNumber}</strong>
               <p>{row.customerName}</p>
-              <p className="muted">Due {row.dueDate} / Balance PHP {row.balance.toLocaleString()}</p>
+              <p className="muted">Due {row.dueDate} / Balance ${formatMoney(row.balance)}</p>
             </div>
             <div className="rowActions">
               <span className={toneBadgeClass(row.state === "Overdue" ? "problem" : "attention")}>
@@ -10292,7 +10296,6 @@ function Reports() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [period.from, period.to, groupBy, periodReady, refreshTick]);
 
-  const money = (value: number) => `PHP ${value.toLocaleString()}`;
   const groupByOptions: Array<{ key: ProfitabilityGroupBy; label: string }> = [
     { key: "trip", label: "Trip" },
     { key: "route", label: "Route" },
@@ -10354,24 +10357,24 @@ function Reports() {
             <div className="reportTotals" aria-label="Report totals">
               <div>
                 <span>Billed</span>
-                <strong>{money(report.totals.billed)}</strong>
+                <strong>{formatMoney(report.totals.billed)}</strong>
               </div>
               <div>
                 <span>Collected</span>
-                <strong>{money(report.totals.collected)}</strong>
+                <strong>{formatMoney(report.totals.collected)}</strong>
               </div>
               <div>
                 <span>Outstanding</span>
-                <strong>{money(report.totals.outstanding)}</strong>
+                <strong>{formatMoney(report.totals.outstanding)}</strong>
               </div>
               <div>
                 <span>Approved expenses</span>
-                <strong>{money(report.totals.approvedExpenses)}</strong>
+                <strong>{formatMoney(report.totals.approvedExpenses)}</strong>
               </div>
               {report.totals.margin !== null && (
                 <div>
                   <span>Margin</span>
-                  <strong>{money(report.totals.margin)}</strong>
+                  <strong>{formatMoney(report.totals.margin)}</strong>
                 </div>
               )}
             </div>
@@ -10388,11 +10391,11 @@ function Reports() {
                     <strong>{group.tripNumber ?? group.label}</strong>
                     <p className="muted">
                       {group.tripNumber ? `${group.origin} → ${group.destination} · ` : ""}
-                      {group.packageCount} delivered · Billed {money(group.billed)} · Collected {money(group.collected)} · Outstanding {money(group.outstanding)}
+                      {group.packageCount} delivered · Billed {formatMoney(group.billed)} · Collected {formatMoney(group.collected)} · Outstanding {formatMoney(group.outstanding)}
                     </p>
                     {group.linkedExpensesByCategory.length > 0 && (
                       <p className="muted">
-                        Expenses {money(group.linkedExpenses)}: {group.linkedExpensesByCategory.map((entry) => `${entry.category} ${money(entry.amount)}`).join(" · ")}
+                        Expenses {formatMoney(group.linkedExpenses)}: {group.linkedExpensesByCategory.map((entry) => `${entry.category} ${formatMoney(entry.amount)}`).join(" · ")}
                       </p>
                     )}
                   </div>
@@ -10400,7 +10403,7 @@ function Reports() {
                     {/* flexShrink 0: a money figure must never ellipsize
                         inside the meta flex row on narrow screens. */}
                     {group.margin !== null ? (
-                      <span className={toneBadgeClass(group.margin < 0 ? "problem" : "success")} style={{ flexShrink: 0, maxWidth: "none" }}>Margin {money(group.margin)}</span>
+                      <span className={toneBadgeClass(group.margin < 0 ? "problem" : "success")} style={{ flexShrink: 0, maxWidth: "none" }}>Margin {formatMoney(group.margin)}</span>
                     ) : (
                       <span className={toneBadgeClass("neutral")} style={{ flexShrink: 0, maxWidth: "none" }}>Revenue only</span>
                     )}
@@ -10415,11 +10418,11 @@ function Reports() {
                   <h4>Unallocated Expenses</h4>
                   <p className="muted">Approved expenses in this period with no trip link. They are shown here once — never spread across the rows above.</p>
                 </div>
-                <span className={toneBadgeClass("attention")}>{money(report.unallocatedExpenses.total)}</span>
+                <span className={toneBadgeClass("attention")}>{formatMoney(report.unallocatedExpenses.total)}</span>
               </div>
               {report.unallocatedExpenses.byCategory.length > 0 ? (
                 <p className="muted">
-                  {report.unallocatedExpenses.byCategory.map((entry) => `${entry.category} ${money(entry.amount)}`).join(" · ")} ({report.unallocatedExpenses.count} record
+                  {report.unallocatedExpenses.byCategory.map((entry) => `${entry.category} ${formatMoney(entry.amount)}`).join(" · ")} ({report.unallocatedExpenses.count} record
                   {report.unallocatedExpenses.count === 1 ? "" : "s"})
                 </p>
               ) : (
@@ -10427,7 +10430,7 @@ function Reports() {
               )}
               {groupBy === "customer" && report.tripLinkedExpenses.total > 0 && (
                 <p className="muted">
-                  Trip-linked expenses in this period: {money(report.tripLinkedExpenses.total)} — attributed per trip in the Trip view, never allocated to customers.
+                  Trip-linked expenses in this period: {formatMoney(report.tripLinkedExpenses.total)} — attributed per trip in the Trip view, never allocated to customers.
                 </p>
               )}
             </section>
@@ -10509,7 +10512,7 @@ function Payments({
     setPackageSearch(`${pkg.customerName} - ${pkg.packageNumber}`);
     setAmount(balance ? String(balance) : "");
     setProofUrl("");
-    setPaymentStatus(`Selected ${pkg.packageNumber}. Balance PHP ${balance.toLocaleString()}.`);
+    setPaymentStatus(`Selected ${pkg.packageNumber}. Balance ${formatMoney(balance)}.`);
   }
   useEffect(() => {
     if (selectedPackage) return;
@@ -10560,7 +10563,7 @@ function Payments({
           <div className="grid accountInfoGrid">
             <div className="settingTile">
               <span>Collected by You</span>
-              <strong>PHP {collectedTotal.toLocaleString()}</strong>
+              <strong>{formatMoney(collectedTotal)}</strong>
             </div>
             <div className="settingTile">
               <span>Unpaid / Partial</span>
@@ -10578,7 +10581,7 @@ function Payments({
             minChars={1}
             noResultsText="No package found."
             getLabel={(pkg) => `${pkg.customerName} - ${pkg.packageNumber}`}
-            getMeta={(pkg) => `${pkg.description} / ${packagePaymentStatus(pkg)} / Balance PHP ${packageBalance(pkg).toLocaleString()}`}
+            getMeta={(pkg) => `${pkg.description} / ${packagePaymentStatus(pkg)} / Balance ${formatMoney(packageBalance(pkg))}`}
             getSearchValues={(pkg) => [pkg.customerName, pkg.packageNumber, pkg.qrValue, pkg.receivingRecordNumber, pkg.description, pkg.consigneeName, pkg.status, pkg.price, packagePaymentStatus(pkg)]}
             getExactValues={(pkg) => [pkg.packageNumber, pkg.qrValue, pkg.receivingRecordNumber]}
             onChange={(value) => {
@@ -10599,8 +10602,8 @@ function Payments({
           <div className="detailGrid compactDetailGrid paymentSummaryGrid">
             <div><span>Customer</span><strong>{selectedCargo.customerName}</strong></div>
             <div><span>Item</span><strong>{selectedCargo.description}</strong></div>
-            <div><span>Amount Due</span><strong>PHP {Number(selectedCargo.price ?? 0).toLocaleString()}</strong></div>
-            <div><span>Balance</span><strong>PHP {packageBalance(selectedCargo).toLocaleString()}</strong></div>
+            <div><span>Amount Due</span><strong>{formatMoney(Number(selectedCargo.price ?? 0))}</strong></div>
+            <div><span>Balance</span><strong>{formatMoney(packageBalance(selectedCargo))}</strong></div>
           </div>
         )}
         <div className="paymentEntryGrid">
@@ -10674,7 +10677,7 @@ function Payments({
               </div>
               <div className="compactRowMeta">
                 <span className={statusBadgeClass("Unpaid")}>Unpaid</span>
-                <span className={pkg.price == null ? toneBadgeClass("attention") : "badge"}>{pkg.price == null ? "No price" : `PHP ${pkg.price.toLocaleString()}`}</span>
+                <span className={pkg.price == null ? toneBadgeClass("attention") : "badge"}>{pkg.price == null ? "No price" : formatMoney(pkg.price)}</span>
               </div>
             </button>
           ))}
@@ -10706,8 +10709,8 @@ function Payments({
             return (
             <div className="row compactDataRow" key={payment.id}>
               <div>
-                <strong>PHP {payment.amountPaid.toLocaleString()} - {payment.method}</strong>
-                <p>{isOwner ? `Balance: PHP ${displayBalance.toLocaleString()}` : `${payment.collectionPoint ?? collectionPoint} - ${payment.collectedByName ?? activeUser.name}`}</p>
+                <strong>{formatMoney(payment.amountPaid)} - {payment.method}</strong>
+                <p>{isOwner ? `Balance: ${formatMoney(displayBalance)}` : `${payment.collectionPoint ?? collectionPoint} - ${payment.collectedByName ?? activeUser.name}`}</p>
               </div>
               <div className="compactRowMeta">
                 <span className={statusBadgeClass(payment.status)}>{payment.status}</span>
@@ -11057,7 +11060,7 @@ function Expenses({
           {displayedExpenses.map((expense) => (
             <div className="row compactDataRow" key={expense.id}>
               <div>
-                <strong>{categoryDisplay(expense.category)} - PHP {expense.amount.toLocaleString()}</strong>
+                <strong>{categoryDisplay(expense.category)} - {formatMoney(expense.amount)}</strong>
                 <p className="muted">{expenseTripNumber(expense)} / {formatSearchDate(expense.createdAt)}{expense.receiptUrl ? " / Receipt attached" : ""}</p>
               </div>
               <div className="compactRowMeta">
@@ -11087,7 +11090,7 @@ function Expenses({
             {expenses.filter((expense) => expense.status === "Submitted").map((expense) => (
               <div className="row compactDataRow" key={expense.id}>
                 <div>
-                  <strong>{categoryDisplay(expense.category)} - PHP {expense.amount.toLocaleString()}</strong>
+                  <strong>{categoryDisplay(expense.category)} - {formatMoney(expense.amount)}</strong>
                   <p className="muted">{expenseTripNumber(expense)} / {formatSearchDate(expense.createdAt)}{expense.receiptUrl ? " / Receipt attached" : ""}</p>
                 </div>
                 <div className="compactRowMeta">
@@ -11297,7 +11300,7 @@ function OperationsChat({
                 <div>
                   <strong>{pkg.description}</strong>
                   <p>{pkg.packageNumber} - {pkg.customerName}</p>
-                  <p className="muted">{pkg.receivingRecordNumber} / {pkg.handlingBranchName ?? pkg.destination} / {pkg.price == null ? "No price" : `PHP ${pkg.price.toLocaleString()}`}</p>
+                  <p className="muted">{pkg.receivingRecordNumber} / {pkg.handlingBranchName ?? pkg.destination} / {pkg.price == null ? "No price" : formatMoney(pkg.price)}</p>
                 </div>
                 <span className={pkg.price == null ? toneBadgeClass("attention") : statusBadgeClass(pkg.status)}>{pkg.status}</span>
               </button>
@@ -11732,14 +11735,14 @@ function CustomerPortal({
         <label>Search Customer<input value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} placeholder="Company, contact, phone, address" /></label>
         {balances.length > 0 && totalOutstandingAll > 0 && (
           <div className="detailGrid compactDetailGrid paymentSummaryGrid">
-            <div><span>Outstanding (server)</span><strong>PHP {totalOutstandingAll.toLocaleString()}</strong></div>
-            {agingTotals.current > 0 && <div><span>Current</span><strong>PHP {agingTotals.current.toLocaleString()}</strong></div>}
-            {agingTotals.overdue1To30 > 0 && <div><span>1–30 days overdue</span><strong>PHP {agingTotals.overdue1To30.toLocaleString()}</strong></div>}
-            {agingTotals.overdue31To60 > 0 && <div><span>31–60 days overdue</span><strong>PHP {agingTotals.overdue31To60.toLocaleString()}</strong></div>}
-            {agingTotals.overdue61To90 > 0 && <div><span>61–90 days overdue</span><strong>PHP {agingTotals.overdue61To90.toLocaleString()}</strong></div>}
-            {agingTotals.overdue90Plus > 0 && <div><span>90+ days overdue</span><strong>PHP {agingTotals.overdue90Plus.toLocaleString()}</strong></div>}
-            {agingTotals.termsNotSet > 0 && <div><span>Terms not set</span><strong>PHP {agingTotals.termsNotSet.toLocaleString()}</strong></div>}
-            {agingTotals.notDelivered > 0 && <div><span>Not yet delivered</span><strong>PHP {agingTotals.notDelivered.toLocaleString()}</strong></div>}
+            <div><span>Outstanding (server)</span><strong>{formatMoney(totalOutstandingAll)}</strong></div>
+            {agingTotals.current > 0 && <div><span>Current</span><strong>{formatMoney(agingTotals.current)}</strong></div>}
+            {agingTotals.overdue1To30 > 0 && <div><span>1–30 days overdue</span><strong>{formatMoney(agingTotals.overdue1To30)}</strong></div>}
+            {agingTotals.overdue31To60 > 0 && <div><span>31–60 days overdue</span><strong>{formatMoney(agingTotals.overdue31To60)}</strong></div>}
+            {agingTotals.overdue61To90 > 0 && <div><span>61–90 days overdue</span><strong>{formatMoney(agingTotals.overdue61To90)}</strong></div>}
+            {agingTotals.overdue90Plus > 0 && <div><span>90+ days overdue</span><strong>{formatMoney(agingTotals.overdue90Plus)}</strong></div>}
+            {agingTotals.termsNotSet > 0 && <div><span>Terms not set</span><strong>{formatMoney(agingTotals.termsNotSet)}</strong></div>}
+            {agingTotals.notDelivered > 0 && <div><span>Not yet delivered</span><strong>{formatMoney(agingTotals.notDelivered)}</strong></div>}
           </div>
         )}
         <div className="list compactList">
@@ -11764,7 +11767,7 @@ function CustomerPortal({
                   <div className="compactRowMeta">
                     <span className={statusBadgeClass(customer.status)}>{customer.status}</span>
                     {customerOngoing > 0 && <span className="badge">{customerOngoing} ongoing</span>}
-                    {serverCustomerBalance && serverCustomerBalance.outstanding > 0 && <span className={toneBadgeClass("attention")}>PHP {serverCustomerBalance.outstanding.toLocaleString()}</span>}
+                    {serverCustomerBalance && serverCustomerBalance.outstanding > 0 && <span className={toneBadgeClass("attention")}>{formatMoney(serverCustomerBalance.outstanding)}</span>}
                     {serverCustomerBalance?.oldestDueDate && <span className="badge">Oldest due {serverCustomerBalance.oldestDueDate}</span>}
                   </div>
                 </button>
@@ -11831,10 +11834,10 @@ function CustomerPortal({
               <div className="detailGrid compactDetailGrid paymentSummaryGrid">
                 <div><span>Terms</span><strong>{customerTermOption ? customerTermOption.label : selectedCustomer.billingTerm ?? "Not set"}</strong></div>
                 <div><span>Due Date Rule</span><strong>{customerDueDateLabel}</strong></div>
-                <div><span>Open Balance</span><strong>{serverBalance ? `PHP ${serverBalance.outstanding.toLocaleString()}` : "—"}</strong></div>
+                <div><span>Open Balance</span><strong>{serverBalance ? formatMoney(serverBalance.outstanding) : "—"}</strong></div>
                 <div><span>Status</span><strong>{customerPaymentStatus}</strong></div>
-                <div><span>Amount Due</span><strong>{serverBalance ? `PHP ${serverBalance.totalDue.toLocaleString()}` : "—"}</strong></div>
-                <div><span>Amount Paid</span><strong>{serverBalance ? `PHP ${serverBalance.totalCollected.toLocaleString()}` : "—"}</strong></div>
+                <div><span>Amount Due</span><strong>{serverBalance ? formatMoney(serverBalance.totalDue) : "—"}</strong></div>
+                <div><span>Amount Paid</span><strong>{serverBalance ? formatMoney(serverBalance.totalCollected) : "—"}</strong></div>
               </div>
               {serverBalanceUnavailable && (
                 <p className="muted">Server balance is not available for your role (it needs reports.view or customers.manage). No local estimate is shown instead.</p>
@@ -11846,12 +11849,12 @@ function CustomerPortal({
                       <div>
                         <strong>{row.packageNumber}</strong>
                         <p className="muted">
-                          Due PHP {row.price.toLocaleString()} / Paid PHP {row.amountPaid.toLocaleString()}
+                          Due {formatMoney(row.price)} / Paid {formatMoney(row.amountPaid)}
                           {row.dueDate ? ` / Due ${row.dueDate}` : row.deliveredDate ? ` / Delivered ${row.deliveredDate}` : " / Not yet delivered"}
                         </p>
                       </div>
                       <div className="compactRowMeta">
-                        <span className={toneBadgeClass("attention")}>PHP {row.outstanding.toLocaleString()}</span>
+                        <span className={toneBadgeClass("attention")}>{formatMoney(row.outstanding)}</span>
                         <span className="badge">{agingBucketLabel(row.agingBucket)}</span>
                       </div>
                     </div>
@@ -11957,7 +11960,7 @@ function CustomerPortal({
                         {pkg.destination} / {formatSearchDate(pkg.createdAt)}
                         {pkg.price == null
                           ? " / No price"
-                          : ` / Due PHP ${Number(pkg.price ?? 0).toLocaleString()} / Paid PHP ${(paymentTotalsByPackage[pkg.id] ?? 0).toLocaleString()} / Balance PHP ${Math.max(Number(pkg.price ?? 0) - (paymentTotalsByPackage[pkg.id] ?? 0), 0).toLocaleString()}`}
+                          : ` / Due ${formatMoney(Number(pkg.price ?? 0))} / Paid ${formatMoney(paymentTotalsByPackage[pkg.id] ?? 0)} / Balance ${formatMoney(Math.max(Number(pkg.price ?? 0) - (paymentTotalsByPackage[pkg.id] ?? 0), 0))}`}
                       </p>
                     </div>
                     <div className="compactRowMeta">

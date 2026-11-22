@@ -72,6 +72,60 @@ describe("Add Product dialog photo button (OBS-L17-V2-1)", () => {
   });
 });
 
+describe("one shared money format across the web UI (R2-02/R2-03)", () => {
+  const moneyModule = readFileSync(new URL("../../apps/web/src/app/ui/money-format.ts", import.meta.url), "utf8");
+  const tiles = readFileSync(new URL("../../apps/web/src/app/ui/dashboard-tiles.ts", import.meta.url), "utf8");
+  const paymentDisplay = readFileSync(new URL("../../apps/web/src/app/ui/payment-display.ts", import.meta.url), "utf8");
+  const overlay = readFileSync(new URL("../../apps/web/src/app/ui/search-overlay.ts", import.meta.url), "utf8");
+  const queueView = readFileSync(new URL("../../apps/web/src/app/ui/queue-view.ts", import.meta.url), "utf8");
+  const tracking = readFileSync(new URL("../../apps/web/src/app/tracking/[reference]/page.tsx", import.meta.url), "utf8");
+
+  test("the shared module pins grouped thousands and exactly two decimals", () => {
+    expect(moneyModule).toContain("minimumFractionDigits: 2");
+    expect(moneyModule).toContain("maximumFractionDigits: 2");
+    expect(moneyModule).toContain("export function formatMoney(");
+    expect(moneyModule).toContain("export function formatMoneyAmount(");
+  });
+
+  test("every in-scope render module routes through the shared formatter", () => {
+    expect(shell).toContain('from "./money-format"');
+    expect(tiles).toContain('from "./money-format"');
+    expect(paymentDisplay).toContain('from "./money-format"');
+    expect(overlay).toContain('from "./money-format"');
+    expect(queueView).toContain('from "./money-format"');
+    expect(tracking).toContain('from "../../ui/money-format"');
+  });
+
+  test("no screen keeps a local money format: no bare-locale money renders remain in the shell", () => {
+    // The Reports screen's local helper is gone.
+    expect(shell).not.toContain("const money = (value: number)");
+    // No money site formats with a bare toLocaleString any more
+    // (formatNumber's weight/volume rendering and date renders are
+    // not money and stay).
+    expect(shell).not.toMatch(/PHP[^`"\n]{0,40}toLocaleString/);
+    expect(shell).not.toContain("`PHP ${pkg.price}`");
+    expect(shell).not.toContain("`PHP ${value.toLocaleString()}`");
+    expect(tiles).not.toMatch(/PHP[^`"\n]{0,40}toLocaleString/);
+    expect(overlay).not.toMatch(/PHP[^`"\n]{0,40}toLocaleString/);
+  });
+
+  test("the receiving money helper delegates to the shared module", () => {
+    expect(shell).toMatch(/function formatReceivingMoney[\s\S]{0,600}formatMoneyAmount\(numericValue\)/);
+  });
+});
+
+describe("money figures stay on one line (R2-05)", () => {
+  test("money dashboard tiles never wrap and step down from the headline size", () => {
+    expect(css).toMatch(/\.metric strong\.metricMoney \{\s*white-space: nowrap;/);
+    expect(shell).toContain('card.money ? "metricMoney" : undefined');
+  });
+
+  test("the receiving Due badge carries the no-wrap treatment", () => {
+    expect(css).toMatch(/\.badge\.noWrap \{\s*white-space: nowrap;/);
+    expect(shell).toContain('<span className="badge noWrap">Due PHP {formatReceivingMoney(receivingAmountDue)}</span>');
+  });
+});
+
 describe("cargo detail previews close the detail modal first (OBS-L17-V2-2)", () => {
   test.each(["Load receiving slip", "Load QR label"])("%s clears the selection before opening the PrintPanel", (label) => {
     const handler = shell.match(new RegExp(`onAction\\("${label}", async \\(\\) => \\{([\\s\\S]*?)\\}\\)`));

@@ -56,18 +56,18 @@ describe("payment display helpers", () => {
 
   test("search details for the second instalment show the cumulative 300, not the stored per-call 700", () => {
     const details = paymentSearchDetails(secondPayment, pkg, payments);
-    expect(details).toBe("Cash - paid PHP 300 - balance PHP 300");
+    expect(details).toBe("Cash - paid PHP 300.00 - balance PHP 300.00");
     expect(details).not.toContain("700");
     // The first instalment shows the same cumulative remaining balance.
-    expect(paymentSearchDetails(firstPayment, pkg, payments)).toBe("Cash - paid PHP 400 - balance PHP 300");
+    expect(paymentSearchDetails(firstPayment, pkg, payments)).toBe("Cash - paid PHP 400.00 - balance PHP 300.00");
   });
 
-  test("a fully paid package shows balance PHP 0", () => {
+  test("a fully paid package shows balance PHP 0.00", () => {
     const finalPayment = makePayment({ id: "pay_display_3", amountPaid: 300, balance: 700 });
-    expect(paymentSearchDetails(finalPayment, pkg, [...payments, finalPayment])).toBe("Cash - paid PHP 300 - balance PHP 0");
+    expect(paymentSearchDetails(finalPayment, pkg, [...payments, finalPayment])).toBe("Cash - paid PHP 300.00 - balance PHP 0.00");
   });
 
   test("unknown package falls back to the stored per-call value (nothing honest to compute)", () => {
-    expect(paymentSearchDetails(secondPayment, undefined, payments)).toBe("Cash - paid PHP 300 - balance PHP 700");
+    expect(paymentSearchDetails(secondPayment, undefined, payments)).toBe("Cash - paid PHP 300.00 - balance PHP 700.00");
   });
 });

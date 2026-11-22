@@ -1,3 +1,4 @@
+import { formatMoney } from "./money-format";
 import type { CargoPackage, PaymentRecord } from "./types";
 
 /**
@@ -41,5 +42,5 @@ export function paymentSearchDetails(
   payments: PaymentRecord[]
 ): string {
   const balance = pkg ? remainingBalanceForPackage(pkg, payments) : payment.balance;
-  return `${payment.method} - paid PHP ${payment.amountPaid.toLocaleString()} - balance PHP ${balance.toLocaleString()}`;
+  return `${payment.method} - paid ${formatMoney(payment.amountPaid)} - balance ${formatMoney(balance)}`;
 }

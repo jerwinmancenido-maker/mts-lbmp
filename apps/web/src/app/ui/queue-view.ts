@@ -1,4 +1,5 @@
 import type { OfflineQueueRecord } from "./cache";
+import { formatMoney } from "./money-format";
 
 /**
  * Phase 4 A7: per-item view models for the offline action queue, plus the
@@ -79,9 +80,12 @@ export function describeQueueRecord(record: OfflineQueueRecord): { label: string
   if (tripNumber) detailParts.push(`Trip ${tripNumber}`);
   const amount = bodyField(record.body, "amountPaid") ?? bodyField(record.body, "amount");
   if (typeof amount === "number" && Number.isFinite(amount) && amount > 0) {
-    detailParts.push(`PHP ${amount.toLocaleString()}`);
+    detailParts.push(formatMoney(amount));
   } else if (typeof amount === "string" && amount.trim()) {
-    detailParts.push(`PHP ${amount.trim()}`);
+    // Queued bodies carry the amount as typed; a numeric string takes
+    // the shared money format, anything else stays verbatim.
+    const parsed = Number(amount.trim());
+    detailParts.push(Number.isFinite(parsed) ? formatMoney(parsed) : `PHP ${amount.trim()}`);
   }
   const category = bodyText(record.body, "category");
   if (category) detailParts.push(category);
