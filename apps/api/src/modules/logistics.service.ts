@@ -4110,6 +4110,24 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   }
 
   private createExpenseOnce(input: Parameters<LogisticsService["createExpense"]>[0]) {
+    // C-M2 / C-M3: the body is validated BEFORE anything is recorded.
+    // Zero and negative expense amounts were stored verbatim (L6-F2 /
+    // E3b — a −₱500 expense sits in Submitted and ADDS profit in the
+    // P6-5 reports), and an empty body sailed past every check, pushed
+    // its record, and only then threw while the notification text was
+    // being formatted — a 500 that still left a ghost expense behind
+    // (L6-F3 / E1c). Both checks live here, at the single choke point
+    // every expense creation funnels through (createExpense is the
+    // only expense write path), so a refusal creates no record.
+    // Mirrors the C-M1 payment validation in recordPaymentOnce.
+    if (typeof input.category !== "string" || !input.category.trim()) {
+      throw new BadRequestException("Expense category is required. Pick the category before saving.");
+    }
+    if (!Number.isFinite(input.amount) || input.amount <= 0) {
+      throw new BadRequestException(
+        `Expense amount must be greater than zero (received ${input.amount}). Refusing to record the expense.`
+      );
+    }
     this.assertNoLocalPhotoReference(input.receiptUrl, "Receipt");
     // Phase 6 P6-5 — expense trip discipline (settled owner answer,
     // audit §9 Q6): Fuel / Toll / Truck Rental are trip costs and MUST
@@ -4139,8 +4157,13 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       status: "Submitted",
       createdAt: new Date().toISOString()
     };
+    // C-M3 write ordering: the notification text is formatted BEFORE
+    // the record is pushed. Formatting is the one remaining evaluation
+    // that could throw, and nothing that can fail may run after the
+    // record lands — the E1c ghost was exactly a post-push throw.
+    const notificationMessage = `${input.category}: PHP ${input.amount.toLocaleString()}`;
     this.expenses.push(expense);
-    this.notify("Expense submitted", `${input.category}: PHP ${input.amount.toLocaleString()}`, "Normal");
+    this.notify("Expense submitted", notificationMessage, "Normal");
     this.audit("expenses.create", "Expense", expense.id);
     this.saveData();
     return expense;
