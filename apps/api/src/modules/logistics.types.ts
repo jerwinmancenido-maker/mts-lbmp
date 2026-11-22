@@ -793,11 +793,41 @@ export interface ServiceNotification {
   createdAt: string;
 }
 
+/**
+ * Round 1 PR-6 (C-M7): who performed an audited action. `id` is the
+ * acting user's id, or a reserved marker for entries no signed-in user
+ * performed: "system" (scheduler scans, load-time migrations, boot
+ * provisioning, internal reconciliation) or "anonymous" (the public
+ * wall-QR intake routes, failed sign-ins against unknown accounts).
+ * The markers are never a real user's id, so a system action can never
+ * be mistaken for a person's.
+ */
+export interface ServiceAuditActor {
+  id: string;
+  role: string;
+  name?: string;
+}
+
 export interface ServiceAuditLog {
   id: string;
   action: string;
   entityType: string;
   entityId: string;
   reason?: string;
+  /**
+   * Round 1 PR-6 (C-M7): the actor behind the action. Optional because
+   * entries written before this change have none — they must still
+   * load and display unchanged.
+   */
+  actor?: ServiceAuditActor;
+  /**
+   * Round 1 PR-6 (C-M7): structured values before / after the change
+   * for mutations where the delta is the point of the audit (price
+   * changes, payments, role/branch edits, approvals, status moves).
+   * For creations, `after` carries the created values. Optional for
+   * the same backward-compatibility reason as `actor`.
+   */
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
   createdAt: string;
 }

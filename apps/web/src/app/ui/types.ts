@@ -370,6 +370,11 @@ export interface AuditLog {
   entityType: string;
   entityId: string;
   reason?: string;
+  /** Round 1 PR-6 (C-M7): who performed the action — absent on entries written before the audit-content fix. */
+  actor?: { id: string; role: string; name?: string };
+  /** Round 1 PR-6 (C-M7): structured values before / after the change, when the action records them. */
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
   createdAt: string;
 }
 

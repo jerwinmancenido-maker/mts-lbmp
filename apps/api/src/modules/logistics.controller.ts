@@ -82,14 +82,14 @@ export class LogisticsController {
 
   @Post("hardware/tests")
   @RequirePermissions("settings.manage")
-  createHardwareTest(@Body() body: Parameters<LogisticsService["createHardwareTest"]>[0]) {
-    return this.logistics.createHardwareTest(body);
+  createHardwareTest(@Req() request: { user?: { id?: string } }, @Body() body: Parameters<LogisticsService["createHardwareTest"]>[0]) {
+    return this.logistics.createHardwareTest(body, request.user?.id);
   }
 
   @Post("hardware/printer-diagnostic")
   @RequirePermissions("settings.manage")
-  recordPrinterDiagnostic(@Body() body: Parameters<LogisticsService["recordPrinterDiagnostic"]>[0]) {
-    return this.logistics.recordPrinterDiagnostic(body);
+  recordPrinterDiagnostic(@Req() request: { user?: { id?: string } }, @Body() body: Parameters<LogisticsService["recordPrinterDiagnostic"]>[0]) {
+    return this.logistics.recordPrinterDiagnostic(body, request.user?.id);
   }
 
   @Get("settings")
@@ -100,20 +100,20 @@ export class LogisticsController {
 
   @Patch("settings/company")
   @RequirePermissions("settings.manage")
-  updateCompanyProfile(@Body() body: Parameters<LogisticsService["updateCompanyProfile"]>[0]) {
-    return this.logistics.updateCompanyProfile(body);
+  updateCompanyProfile(@Req() request: { user?: { id?: string } }, @Body() body: Parameters<LogisticsService["updateCompanyProfile"]>[0]) {
+    return this.logistics.updateCompanyProfile(body, request.user?.id);
   }
 
   @Post("settings/branches")
   @RequirePermissions("settings.manage")
-  createBranch(@Body() body: Parameters<LogisticsService["createBranch"]>[0]) {
-    return this.logistics.createBranch(body);
+  createBranch(@Req() request: { user?: { id?: string } }, @Body() body: Parameters<LogisticsService["createBranch"]>[0]) {
+    return this.logistics.createBranch(body, request.user?.id);
   }
 
   @Patch("settings/branches/:id")
   @RequirePermissions("settings.manage")
-  updateBranch(@Param("id") id: string, @Body() body: Parameters<LogisticsService["updateBranch"]>[1]) {
-    return this.logistics.updateBranch(id, body);
+  updateBranch(@Req() request: { user?: { id?: string } }, @Param("id") id: string, @Body() body: Parameters<LogisticsService["updateBranch"]>[1]) {
+    return this.logistics.updateBranch(id, body, request.user?.id);
   }
 
   // Phase 5 P5-2: user management moves from settings.manage to the
@@ -127,8 +127,8 @@ export class LogisticsController {
   // here instead of being deferred.)
   @Patch("settings/users/:id/branch-access")
   @RequirePermissions("users.manage")
-  updateUserBranchAccess(@Param("id") id: string, @Body() body: Parameters<LogisticsService["updateUserBranchAccess"]>[1]) {
-    return this.logistics.updateUserBranchAccess(id, body);
+  updateUserBranchAccess(@Req() request: { user?: { id?: string } }, @Param("id") id: string, @Body() body: Parameters<LogisticsService["updateUserBranchAccess"]>[1]) {
+    return this.logistics.updateUserBranchAccess(id, body, request.user?.id);
   }
 
   // Round 1 PR-5 (C-M6): the acting user's id rides along (the same
@@ -165,14 +165,14 @@ export class LogisticsController {
 
   @Patch("settings/payment-methods")
   @RequirePermissions("settings.manage")
-  updatePaymentMethods(@Body() body: { methods: string[] }) {
-    return this.logistics.updatePaymentMethods(body);
+  updatePaymentMethods(@Req() request: { user?: { id?: string } }, @Body() body: { methods: string[] }) {
+    return this.logistics.updatePaymentMethods(body, request.user?.id);
   }
 
   @Patch("settings/expense-categories")
   @RequirePermissions("settings.manage")
-  updateExpenseCategories(@Body() body: { categories: string[] }) {
-    return this.logistics.updateExpenseCategories(body);
+  updateExpenseCategories(@Req() request: { user?: { id?: string } }, @Body() body: { categories: string[] }) {
+    return this.logistics.updateExpenseCategories(body, request.user?.id);
   }
 
   @Get("receiving")
@@ -225,32 +225,32 @@ export class LogisticsController {
 
   @Post("customers")
   @RequirePermissions("customers.manage")
-  createCustomer(@Body() body: Parameters<LogisticsService["createCustomer"]>[0]) {
-    return this.logistics.createCustomer(body);
+  createCustomer(@Req() request: { user?: { id?: string } }, @Body() body: Parameters<LogisticsService["createCustomer"]>[0]) {
+    return this.logistics.createCustomer(body, request.user?.id);
   }
 
   @Post("customers/pending")
   @RequirePermissions("receiving.create")
-  createPendingCustomer(@Body() body: Parameters<LogisticsService["createPendingCustomer"]>[0]) {
-    return this.logistics.createPendingCustomer(body);
+  createPendingCustomer(@Req() request: { user?: { id?: string } }, @Body() body: Parameters<LogisticsService["createPendingCustomer"]>[0]) {
+    return this.logistics.createPendingCustomer(body, request.user?.id);
   }
 
   @Patch("customers/:id/finalize")
   @RequirePermissions("customers.manage")
-  finalizeCustomer(@Param("id") id: string, @Body() body: { businessName?: string; contactPerson?: string; phone?: string; billingTerm?: string; billingTermDays?: number | null }) {
-    return this.logistics.finalizeCustomer(id, body);
+  finalizeCustomer(@Req() request: { user?: { id?: string } }, @Param("id") id: string, @Body() body: { businessName?: string; contactPerson?: string; phone?: string; billingTerm?: string; billingTermDays?: number | null }) {
+    return this.logistics.finalizeCustomer(id, body, request.user?.id);
   }
 
   @Patch("customers/:id")
   @RequirePermissions("customers.manage")
-  updateCustomer(@Param("id") id: string, @Body() body: Parameters<LogisticsService["updateCustomer"]>[1]) {
-    return this.logistics.updateCustomer(id, body);
+  updateCustomer(@Req() request: { user?: { id?: string } }, @Param("id") id: string, @Body() body: Parameters<LogisticsService["updateCustomer"]>[1]) {
+    return this.logistics.updateCustomer(id, body, request.user?.id);
   }
 
   @Post("customers/:id/contacts")
   @RequirePermissions("receiving.create")
-  addCustomerContact(@Param("id") id: string, @Body() body: Parameters<LogisticsService["addCustomerContact"]>[1]) {
-    return this.logistics.addCustomerContact(id, body);
+  addCustomerContact(@Req() request: { user?: { id?: string } }, @Param("id") id: string, @Body() body: Parameters<LogisticsService["addCustomerContact"]>[1]) {
+    return this.logistics.addCustomerContact(id, body, request.user?.id);
   }
 
   // Phase 6 P6-4: the reminder's amount is computed server-side from
@@ -281,26 +281,28 @@ export class LogisticsController {
   @Post("receiving")
   @RequirePermissions("receiving.create")
   createReceiving(
+    @Req() request: { user?: { id?: string } },
     @Body() body: Parameters<LogisticsService["createReceiving"]>[0],
     @Headers("idempotency-key") idempotencyKey?: string
   ) {
-    return this.logistics.createReceiving({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
+    return this.logistics.createReceiving({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey }, request.user?.id);
   }
 
   @Post("receiving/:id/dr-photo")
   @RequirePermissions("receiving.create")
   attachReceivingDrPhoto(
+    @Req() request: { user?: { id?: string } },
     @Param("id") id: string,
     @Body() body: Parameters<LogisticsService["attachReceivingDrPhoto"]>[1],
     @Headers("idempotency-key") idempotencyKey?: string
   ) {
-    return this.logistics.attachReceivingDrPhoto(id, { ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
+    return this.logistics.attachReceivingDrPhoto(id, { ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey }, request.user?.id);
   }
 
   @Patch("receiving/:id")
   @RequirePermissions("receiving.create")
-  updateReceivingRecord(@Param("id") id: string, @Body() body: Parameters<LogisticsService["updateReceivingRecord"]>[1]) {
-    return this.logistics.updateReceivingRecord(id, body);
+  updateReceivingRecord(@Req() request: { user?: { id?: string } }, @Param("id") id: string, @Body() body: Parameters<LogisticsService["updateReceivingRecord"]>[1]) {
+    return this.logistics.updateReceivingRecord(id, body, request.user?.id);
   }
 
   @Get("receiving/:id/audit")
@@ -312,48 +314,51 @@ export class LogisticsController {
   @Post("receiving/drafts")
   @RequirePermissions("receiving.create")
   createReceivingDraft(
+    @Req() request: { user?: { id?: string } },
     @Body() body: Parameters<LogisticsService["createReceivingDraft"]>[0],
     @Headers("idempotency-key") idempotencyKey?: string
   ) {
-    return this.logistics.createReceivingDraft({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
+    return this.logistics.createReceivingDraft({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey }, request.user?.id);
   }
 
   @Patch("receiving/drafts/:id")
   @RequirePermissions("receiving.create")
   updateReceivingDraft(
+    @Req() request: { user?: { id?: string } },
     @Param("id") id: string,
     @Body() body: Parameters<LogisticsService["updateReceivingDraft"]>[1],
     @Headers("idempotency-key") idempotencyKey?: string
   ) {
-    return this.logistics.updateReceivingDraft(id, { ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
+    return this.logistics.updateReceivingDraft(id, { ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey }, request.user?.id);
   }
 
   @Post("receiving/drafts/:id/finalize")
   @RequirePermissions("receiving.create")
   finalizeReceivingDraft(
+    @Req() request: { user?: { id?: string } },
     @Param("id") id: string,
     @Body() body: Parameters<LogisticsService["finalizeReceivingDraft"]>[1],
     @Headers("idempotency-key") idempotencyKey?: string
   ) {
-    return this.logistics.finalizeReceivingDraft(id, { ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
+    return this.logistics.finalizeReceivingDraft(id, { ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey }, request.user?.id);
   }
 
   @Post("receiving/drafts/:id/cancel")
   @RequirePermissions("receiving.create")
-  cancelReceivingDraft(@Param("id") id: string) {
-    return this.logistics.cancelReceivingDraft(id);
+  cancelReceivingDraft(@Req() request: { user?: { id?: string } }, @Param("id") id: string) {
+    return this.logistics.cancelReceivingDraft(id, request.user?.id);
   }
 
   @Post("receiving/intake/:id/convert")
   @RequirePermissions("receiving.create")
-  convertReceivingIntake(@Param("id") id: string, @Body() body: Parameters<LogisticsService["markReceivingIntakeConverted"]>[1]) {
-    return this.logistics.markReceivingIntakeConverted(id, body);
+  convertReceivingIntake(@Req() request: { user?: { id?: string } }, @Param("id") id: string, @Body() body: Parameters<LogisticsService["markReceivingIntakeConverted"]>[1]) {
+    return this.logistics.markReceivingIntakeConverted(id, body, request.user?.id);
   }
 
   @Post("receiving/intake/:id/cancel")
   @RequirePermissions("receiving.create")
-  cancelReceivingIntake(@Param("id") id: string, @Body() body: Parameters<LogisticsService["cancelReceivingIntake"]>[1]) {
-    return this.logistics.cancelReceivingIntake(id, body);
+  cancelReceivingIntake(@Req() request: { user?: { id?: string } }, @Param("id") id: string, @Body() body: Parameters<LogisticsService["cancelReceivingIntake"]>[1]) {
+    return this.logistics.cancelReceivingIntake(id, body, request.user?.id);
   }
 
   /**
@@ -380,8 +385,8 @@ export class LogisticsController {
    * public intake page's DR photos use the scoped variant below.
    */
   @Post("uploads")
-  uploadFile(@Body() body: { dataUrl: string; fileName: string; type: string; entityId?: string }) {
-    return this.logistics.uploadFile(body);
+  uploadFile(@Req() request: { user?: { id?: string } }, @Body() body: { dataUrl: string; fileName: string; type: string; entityId?: string }) {
+    return this.logistics.uploadFileAsUser(body, request.user?.id);
   }
 
   /**
@@ -410,8 +415,8 @@ export class LogisticsController {
 
   @Post("barcodes/link")
   @RequirePermissions("receiving.create")
-  linkDescriptionBarcode(@Body() body: { customerId: string; barcode: string; description: string }) {
-    return this.logistics.linkDescriptionBarcode(body);
+  linkDescriptionBarcode(@Req() request: { user?: { id?: string } }, @Body() body: { customerId: string; barcode: string; description: string }) {
+    return this.logistics.linkDescriptionBarcode(body, request.user?.id);
   }
 
   @Get("products")
@@ -428,8 +433,8 @@ export class LogisticsController {
 
   @Post("products")
   @RequirePermissions("receiving.create")
-  createProductMaster(@Body() body: Parameters<LogisticsService["createProductMaster"]>[0]) {
-    return this.logistics.createProductMaster(body);
+  createProductMaster(@Req() request: { user?: { id?: string } }, @Body() body: Parameters<LogisticsService["createProductMaster"]>[0]) {
+    return this.logistics.createProductMaster(body, request.user?.id);
   }
 
   @Post("pricing/suggest")
@@ -446,8 +451,8 @@ export class LogisticsController {
 
   @Post("packages/:id/messages")
   @RequirePermissions("messages.reply")
-  createPackageMessage(@Param("id") id: string, @Body() body: { senderName: string; body: string }) {
-    return this.logistics.createMessage({ cargoPackageId: id, senderName: body.senderName, body: body.body });
+  createPackageMessage(@Req() request: { user?: { id?: string } }, @Param("id") id: string, @Body() body: { senderName: string; body: string }) {
+    return this.logistics.createMessage({ cargoPackageId: id, senderName: body.senderName, body: body.body }, request.user?.id);
   }
 
   @Get("operation-chats")
@@ -486,32 +491,32 @@ export class LogisticsController {
 
   @Patch("packages/:id/price")
   @RequirePermissions("pricing.edit")
-  updatePackagePrice(@Param("id") id: string, @Body() body: { price: number; reason?: string }) {
-    return this.logistics.updatePackagePrice(id, body);
+  updatePackagePrice(@Req() request: { user?: { id?: string } }, @Param("id") id: string, @Body() body: { price: number; reason?: string }) {
+    return this.logistics.updatePackagePrice(id, body, request.user?.id);
   }
 
   @Patch("packages/:id/measurements")
   @RequirePermissions("loading.scan")
-  updatePackageMeasurements(@Param("id") id: string, @Body() body: Parameters<LogisticsService["updatePackageMeasurements"]>[1]) {
-    return this.logistics.updatePackageMeasurements(id, body);
+  updatePackageMeasurements(@Req() request: { user?: { id?: string } }, @Param("id") id: string, @Body() body: Parameters<LogisticsService["updatePackageMeasurements"]>[1]) {
+    return this.logistics.updatePackageMeasurements(id, body, request.user?.id);
   }
 
   @Post("packages/:id/verify-arrival")
   @RequirePermissions("delivery.complete")
-  verifyArrivedCargo(@Param("id") id: string, @Body() body: Parameters<LogisticsService["verifyArrivedCargo"]>[1]) {
-    return this.logistics.verifyArrivedCargo(id, body);
+  verifyArrivedCargo(@Req() request: { user?: { id?: string } }, @Param("id") id: string, @Body() body: Parameters<LogisticsService["verifyArrivedCargo"]>[1]) {
+    return this.logistics.verifyArrivedCargo(id, body, request.user?.id);
   }
 
   @Post("packages/:id/soft-delete")
   @RequirePermissions("records.softDelete")
-  softDeletePackage(@Param("id") id: string, @Body() body: { reason: string }) {
-    return this.logistics.softDeletePackage(id, body);
+  softDeletePackage(@Req() request: { user?: { id?: string } }, @Param("id") id: string, @Body() body: { reason: string }) {
+    return this.logistics.softDeletePackage(id, body, request.user?.id);
   }
 
   @Post("packages/:id/restore")
   @RequirePermissions("records.restore")
-  restorePackage(@Param("id") id: string, @Body() body: { reason: string }) {
-    return this.logistics.restorePackage(id, body);
+  restorePackage(@Req() request: { user?: { id?: string } }, @Param("id") id: string, @Body() body: { reason: string }) {
+    return this.logistics.restorePackage(id, body, request.user?.id);
   }
 
   @Get("packages/:id/receiving-slip")
@@ -570,14 +575,14 @@ export class LogisticsController {
 
   @Post("trucks")
   @RequirePermissions("trips.create")
-  saveTruck(@Body() body: Parameters<LogisticsService["saveTruck"]>[0]) {
-    return this.logistics.saveTruck(body);
+  saveTruck(@Req() request: { user?: { id?: string } }, @Body() body: Parameters<LogisticsService["saveTruck"]>[0]) {
+    return this.logistics.saveTruck(body, request.user?.id);
   }
 
   @Post("trips")
   @RequirePermissions("trips.create")
-  createTrip(@Body() body: Parameters<LogisticsService["createTrip"]>[0]) {
-    return this.logistics.createTrip(body);
+  createTrip(@Req() request: { user?: { id?: string } }, @Body() body: Parameters<LogisticsService["createTrip"]>[0]) {
+    return this.logistics.createTrip(body, request.user?.id);
   }
 
   @Post("trips/:id/load")
@@ -594,45 +599,47 @@ export class LogisticsController {
   @Post("trips/:id/unload")
   @RequirePermissions("loading.scan")
   unloadCargo(
+    @Req() request: { user?: { id?: string } },
     @Param("id") id: string,
     @Body() body: { cargoPackageId: string; reason?: string; idempotencyKey?: string },
     @Headers("idempotency-key") idempotencyKey?: string
   ) {
-    return this.logistics.unloadCargo(id, { ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
+    return this.logistics.unloadCargo(id, { ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey }, request.user?.id);
   }
 
   @Post("trips/:id/loading-photo")
   @RequirePermissions("loading.scan")
   attachTripLoadingPhoto(
+    @Req() request: { user?: { id?: string } },
     @Param("id") id: string,
     @Body() body: { photoUrl: string; idempotencyKey?: string },
     @Headers("idempotency-key") idempotencyKey?: string
   ) {
-    return this.logistics.attachTripLoadingPhoto(id, { ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
+    return this.logistics.attachTripLoadingPhoto(id, { ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey }, request.user?.id);
   }
 
   @Post("trips/:id/mixed-approval")
   @RequirePermissions("trips.create")
-  reviewMixedTrip(@Param("id") id: string, @Body() body: Parameters<LogisticsService["reviewMixedTrip"]>[1]) {
-    return this.logistics.reviewMixedTrip(id, body);
+  reviewMixedTrip(@Req() request: { user?: { id?: string } }, @Param("id") id: string, @Body() body: Parameters<LogisticsService["reviewMixedTrip"]>[1]) {
+    return this.logistics.reviewMixedTrip(id, body, request.user?.id);
   }
 
   @Post("trips/:id/depart")
   @RequirePermissions("trips.edit")
-  departTrip(@Param("id") id: string) {
-    return this.logistics.departTrip(id);
+  departTrip(@Req() request: { user?: { id?: string } }, @Param("id") id: string) {
+    return this.logistics.departTrip(id, request.user?.id);
   }
 
   @Post("trips/:id/arrive")
   @RequirePermissions("arrival.scan")
-  arriveTrip(@Param("id") id: string) {
-    return this.logistics.arriveTrip(id);
+  arriveTrip(@Req() request: { user?: { id?: string } }, @Param("id") id: string) {
+    return this.logistics.arriveTrip(id, request.user?.id);
   }
 
   @Post("trips/:id/complete")
   @RequirePermissions("trips.edit")
-  completeTrip(@Param("id") id: string) {
-    return this.logistics.completeTrip(id);
+  completeTrip(@Req() request: { user?: { id?: string } }, @Param("id") id: string) {
+    return this.logistics.completeTrip(id, request.user?.id);
   }
 
   @Get("trips/:id/loading-manifest")
@@ -649,14 +656,14 @@ export class LogisticsController {
 
   @Post("deliveries/complete")
   @RequirePermissions("delivery.complete")
-  completeDelivery(@Body() body: Parameters<LogisticsService["completeDelivery"]>[0], @Headers("idempotency-key") idempotencyKey?: string) {
-    return this.logistics.completeDelivery({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
+  completeDelivery(@Req() request: { user?: { id?: string } }, @Body() body: Parameters<LogisticsService["completeDelivery"]>[0], @Headers("idempotency-key") idempotencyKey?: string) {
+    return this.logistics.completeDelivery({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey }, request.user?.id);
   }
 
   @Post("deliveries/fail")
   @RequirePermissions("delivery.fail")
-  failDelivery(@Body() body: Parameters<LogisticsService["failDelivery"]>[0], @Headers("idempotency-key") idempotencyKey?: string) {
-    return this.logistics.failDelivery({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
+  failDelivery(@Req() request: { user?: { id?: string } }, @Body() body: Parameters<LogisticsService["failDelivery"]>[0], @Headers("idempotency-key") idempotencyKey?: string) {
+    return this.logistics.failDelivery({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey }, request.user?.id);
   }
 
   @Get("returns")
@@ -668,10 +675,11 @@ export class LogisticsController {
   @Post("returns")
   @RequirePermissions("delivery.complete")
   createReturnRecord(
+    @Req() request: { user?: { id?: string } },
     @Body() body: Parameters<LogisticsService["createReturnRecord"]>[0],
     @Headers("idempotency-key") idempotencyKey?: string
   ) {
-    return this.logistics.createReturnRecord({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
+    return this.logistics.createReturnRecord({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey }, request.user?.id);
   }
 
   @Get("payments")
@@ -685,8 +693,8 @@ export class LogisticsController {
 
   @Post("payments")
   @RequirePermissions("payments.record")
-  recordPayment(@Body() body: Parameters<LogisticsService["recordPayment"]>[0], @Headers("idempotency-key") idempotencyKey?: string) {
-    return this.logistics.recordPayment({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
+  recordPayment(@Req() request: { user?: { id?: string } }, @Body() body: Parameters<LogisticsService["recordPayment"]>[0], @Headers("idempotency-key") idempotencyKey?: string) {
+    return this.logistics.recordPayment({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey }, request.user?.id);
   }
 
   @Get("billing/invoices")
@@ -697,8 +705,8 @@ export class LogisticsController {
 
   @Post("billing/invoices")
   @RequirePermissions("customers.manage")
-  createBillingInvoice(@Body() body: Parameters<LogisticsService["createBillingInvoice"]>[0]) {
-    return this.logistics.createBillingInvoice(body);
+  createBillingInvoice(@Req() request: { user?: { id?: string } }, @Body() body: Parameters<LogisticsService["createBillingInvoice"]>[0]) {
+    return this.logistics.createBillingInvoice(body, request.user?.id);
   }
 
   // Phase 6 P6-1: invoice detail read (branch-scoped, existence-hiding —
@@ -754,8 +762,8 @@ export class LogisticsController {
 
   @Post("billing/due-reminders/scan")
   @RequirePermissions("customers.manage")
-  runDueReminderScan() {
-    return this.logistics.runDueReminderScan();
+  runDueReminderScan(@Req() request: { user?: { id?: string } }) {
+    return this.logistics.runDueReminderScan(new Date(), request.user?.id);
   }
 
   // Phase 6 P6-2: server-side customer balances + aging. This is the
@@ -838,13 +846,13 @@ export class LogisticsController {
 
   @Post("expenses")
   @RequirePermissions("expenses.create")
-  createExpense(@Body() body: Parameters<LogisticsService["createExpense"]>[0], @Headers("idempotency-key") idempotencyKey?: string) {
-    return this.logistics.createExpense({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey });
+  createExpense(@Req() request: { user?: { id?: string } }, @Body() body: Parameters<LogisticsService["createExpense"]>[0], @Headers("idempotency-key") idempotencyKey?: string) {
+    return this.logistics.createExpense({ ...body, idempotencyKey: body.idempotencyKey ?? idempotencyKey }, request.user?.id);
   }
 
   @Post("expenses/:id/approve")
   @RequirePermissions("expenses.approve")
-  approveExpense(@Param("id") id: string) {
-    return this.logistics.approveExpense(id);
+  approveExpense(@Req() request: { user?: { id?: string } }, @Param("id") id: string) {
+    return this.logistics.approveExpense(id, request.user?.id);
   }
 }

@@ -538,6 +538,9 @@ function groupBy<T>(items: T[], keyFor: (item: T) => string | null | undefined):
 
 export function stateToRows(state: ServiceState): PrismaStateRows {
   const receivingIdByNumber = new Map(state.receivingRecords.map((record) => [record.recordNumber, record.id]));
+  // Round 1 PR-6 (C-M7): only persisted users can be named by the
+  // AuditLog.actorId foreign key (see the auditLogs map below).
+  const persistedUserIds = new Set(state.customUsers.map((user) => user.id));
   const productIds = new Set(state.productMasters.map((product) => product.id));
   const packageNumberById = new Map(state.packages.map((pkg) => [pkg.id, pkg.packageNumber]));
 
@@ -973,12 +976,18 @@ export function stateToRows(state: ServiceState): PrismaStateRows {
     messages,
     auditLogs: state.auditLogs.map((log) => ({
       id: log.id,
-      actorId: null,
+      // Round 1 PR-6 (C-M7): the actor id is written only when it names
+      // a persisted user — actorId is an FK to User, and the reserved
+      // system/anonymous markers (and any non-persisted account) have
+      // no row to point at. Those entries read back actor-less, exactly
+      // like pre-C-M7 entries; the before/after values always persist
+      // through the Json columns.
+      actorId: log.actor && persistedUserIds.has(log.actor.id) ? log.actor.id : null,
       action: log.action,
       entityType: log.entityType,
       entityId: log.entityId,
-      beforeJson: null,
-      afterJson: null,
+      beforeJson: log.before ?? null,
+      afterJson: log.after ?? null,
       reason: log.reason ?? null,
       ipAddress: null,
       userAgent: null,
@@ -1298,14 +1307,32 @@ export function rowsToState(rows: PrismaStateRows): LoadedServiceState {
       priority: notification.priority,
       createdAt: toIso(notification.createdAt)
     })),
-    auditLogs: rows.auditLogs.map((log) => ({
-      id: log.id,
-      action: log.action,
-      entityType: log.entityType,
-      entityId: log.entityId,
-      reason: log.reason ?? undefined,
-      createdAt: toIso(log.createdAt)
-    })),
+    auditLogs: rows.auditLogs.map((log) => {
+      // Round 1 PR-6 (C-M7): rebuild the actor snapshot from the user
+      // row the FK names (role resolved through the roles table, the
+      // same lookup customUsers uses above). A row whose actorId names
+      // no surviving user keeps the id with an honest role label.
+      const actorUser = log.actorId ? rows.users.find((user) => user.id === log.actorId) : undefined;
+      return {
+        id: log.id,
+        action: log.action,
+        entityType: log.entityType,
+        entityId: log.entityId,
+        reason: log.reason ?? undefined,
+        ...(log.actorId
+          ? {
+              actor: {
+                id: log.actorId,
+                role: (actorUser?.roleId ? roleNameById.get(actorUser.roleId) : undefined) ?? "Unknown Role",
+                name: actorUser?.name
+              }
+            }
+          : {}),
+        ...(log.beforeJson ? { before: log.beforeJson as Record<string, unknown> } : {}),
+        ...(log.afterJson ? { after: log.afterJson as Record<string, unknown> } : {}),
+        createdAt: toIso(log.createdAt)
+      };
+    }),
     idempotencyRecords: (rows.idempotencyKeys ?? []).map((record) => ({
       id: record.id,
       key: record.key,
