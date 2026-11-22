@@ -4294,6 +4294,7 @@ interface ReceivingLineDraft {
 interface ReceivingSaveResponse {
   id: string;
   recordNumber: string;
+  editVersion?: number;
   customerDrNumber?: string;
   sender?: string;
   consignee?: string;
@@ -5147,6 +5148,7 @@ function Receiving({
       consignee: editingReceivingRecord.consignee,
       destination: editingReceivingRecord.destination,
       reason: recordEditReason,
+      baseEditVersion: editingReceivingRecord.editVersion ?? 0,
       packages: editingReceivingRecord.packages.map((pkg) => ({
         id: pkg.id,
         description: pkg.description,

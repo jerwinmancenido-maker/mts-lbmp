@@ -167,6 +167,19 @@ export interface ReceivingRecord {
   sender?: string;
   consignee?: string;
   destination: string;
+  /**
+   * Round 1 PR-7b (L21-F2): optimistic-concurrency counter for the
+   * record as a whole — the receiving-record analogue of
+   * CargoPackage.priceVersion (PR-7). Bumped on every actual change
+   * to the record: a receiving edit, a DR photo attach, a queued
+   * intake photo resolving onto the record, and any change to a
+   * package field the receiving editor writes (price via the price
+   * endpoint or a chat approval, condition via arrival verification).
+   * A receiving-edit save that names a stale base version is refused
+   * with 409 instead of silently overwriting. Absent on pre-PR-7b
+   * records — treated as 0.
+   */
+  editVersion?: number;
   drPhotoUrl?: string;
   drPhotoAttachedAt?: string;
   drPhotoAttachReason?: string;

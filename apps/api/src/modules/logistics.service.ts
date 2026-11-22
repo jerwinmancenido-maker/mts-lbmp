@@ -3018,7 +3018,13 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     // Round 1 PR-7 (C-M8): an approval is a price writer — bump the
     // version so a price-endpoint save based on a pre-approval read is
     // refused as stale instead of silently overwriting this decision.
-    if (priceBefore.price !== approvedPrice) cargo.priceVersion = (cargo.priceVersion ?? 0) + 1;
+    // Round 1 PR-7b (L21-F2): the same approval changes a field the
+    // receiving editor writes, so it also moves the owning record's
+    // edit version.
+    if (priceBefore.price !== approvedPrice) {
+      cargo.priceVersion = (cargo.priceVersion ?? 0) + 1;
+      this.bumpOwningReceivingRecordEditVersion(cargo);
+    }
     cargo.unitPrice = approvedPrice;
     cargo.priceChangeReason = note || `Approved in chat by ${actor.name}`;
     if (cargo.status === "Waiting for Price") cargo.status = "Waiting for Loading";
@@ -3627,7 +3633,12 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         touched = true;
         if (task.convertedReceivingId) {
           const receiving = this.receivingRecords.find((entry) => entry.id === task.convertedReceivingId);
-          if (receiving && !receiving.drPhotoUrl) receiving.drPhotoUrl = fileUrl;
+          if (receiving && !receiving.drPhotoUrl) {
+            receiving.drPhotoUrl = fileUrl;
+            // Round 1 PR-7b (L21-F2): filling the record's DR photo
+            // is a change to the record — move its edit version.
+            this.bumpReceivingEditVersion(receiving);
+          }
         }
       }
       for (const note of task.duplicateNotes) {
@@ -4089,6 +4100,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     receiving.drPhotoUrl = input.drPhotoUrl.trim();
     receiving.drPhotoAttachedAt = new Date().toISOString();
     receiving.drPhotoAttachReason = input.reason?.trim() || "Late DR attachment";
+    // Round 1 PR-7b (L21-F2): attaching a DR photo changes the
+    // record, so it moves the edit version — a receiving editor
+    // holding a pre-attach base is told to reload, not overwritten.
+    this.bumpReceivingEditVersion(receiving);
     this.audit("receiving.dr_photo_attached", "ReceivingRecord", receiving.id, receiving.drPhotoAttachReason, {
       actor: this.auditActorForId(actorUserId),
       after: { drPhotoAttachedAt: receiving.drPhotoAttachedAt }
@@ -4103,6 +4118,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     consignee?: string;
     destination?: string;
     reason?: string;
+    baseEditVersion?: number;
     packages?: Array<{
       id: string;
       description?: string;
@@ -4123,6 +4139,25 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     }>;
   }, actorUserId?: string) {
     const receiving = this.findReceivingRecord(receivingRecordId);
+    // Round 1 PR-7b (L21-F2): optimistic concurrency on the record as
+    // a whole — the receiving-record analogue of PR-7's price guard
+    // (C-M8). A save that names the editVersion it was based on is
+    // refused with 409 when the record has moved since that read: the
+    // L21 interleave (two sessions patch the same receiving record,
+    // the later save silently wins) previously destroyed the first
+    // saver's edit with no signal to either. The refusal carries the
+    // current version so the caller can reload and re-apply. A save
+    // that names NO base keeps the pre-PR-7b behaviour (older clients
+    // send none); the shipped web shell always sends the base. Every
+    // actual change bumps the version, whichever writer made it — see
+    // bumpReceivingEditVersion.
+    const currentEditVersion = receiving.editVersion ?? 0;
+    if (input.baseEditVersion !== undefined && input.baseEditVersion !== currentEditVersion) {
+      throw new ConflictException({
+        message: `Receiving record ${receiving.recordNumber} was changed by someone else (edit version now ${currentEditVersion}). Reload the record and re-apply your changes.`,
+        currentEditVersion
+      });
+    }
     const reason = input.reason?.trim();
     if (!reason) throw new BadRequestException("Edit reason is required");
     const changes: string[] = [];
@@ -4209,6 +4244,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       this.audit("receiving.edit_no_change", "ReceivingRecord", receiving.id, reason, { actor: this.auditActorForId(actorUserId) });
       return this.syncReceivingRecordPackages(receiving);
     }
+    // An actual change moves the record's edit version (a no-change
+    // re-save above does not), so any other editor still holding the
+    // pre-edit base is refused as stale on its next save.
+    receiving.editVersion = currentEditVersion + 1;
     this.audit("receiving.edit", "ReceivingRecord", receiving.id, `${reason} | ${changes.join("; ")}`, {
       actor: this.auditActorForId(actorUserId),
       before: Object.fromEntries(Object.entries(structuredChanges).map(([label, delta]) => [label, delta.from])),
@@ -4261,7 +4300,15 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     const priceBefore = { price: cargo.price, status: cargo.status };
     const priceChanged = cargo.price !== input.price;
     cargo.price = input.price;
-    if (priceChanged) cargo.priceVersion = currentPriceVersion + 1;
+    if (priceChanged) {
+      cargo.priceVersion = currentPriceVersion + 1;
+      // Round 1 PR-7b (L21-F2): the price is a field the receiving
+      // editor writes, so a price change also moves the owning
+      // record's edit version — a receiving save based on a
+      // pre-change read of the record refuses as stale instead of
+      // silently restoring the old price.
+      this.bumpOwningReceivingRecordEditVersion(cargo);
+    }
     cargo.priceChangeReason = input.reason;
     if (cargo.status === "Waiting for Price") cargo.status = "Waiting for Loading";
     this.audit("pricing.update", "CargoPackage", cargo.id, input.reason, {
@@ -4645,11 +4692,18 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException("Only arrived cargo can be verified at the branch");
     }
     const statusBefore = cargo.status;
+    const conditionBefore = cargo.condition;
     cargo.status = nextStatus === "Ready for Delivery" ? "Ready for Delivery" : "Exception";
     if (input.condition?.trim()) {
       const allowedConditions: PackageCondition[] = ["Good", "Damaged", "Wet", "Incomplete", "For Checking", "Other"];
       cargo.condition = (allowedConditions.includes(input.condition.trim() as PackageCondition) ? input.condition.trim() : "Other") as typeof cargo.condition;
     }
+    // Round 1 PR-7b (L21-F2): condition is a field the receiving
+    // editor writes, so an actual condition change here moves the
+    // owning record's edit version. The status transition alone does
+    // not bump — status is not an editor-writable field, and arrival
+    // verification must not false-conflict an open receiving editor.
+    if (cargo.condition !== conditionBefore) this.bumpOwningReceivingRecordEditVersion(cargo);
     if (nextStatus !== "Ready for Delivery") {
       this.notify("Cargo verification issue", `${cargo.packageNumber}: ${nextStatus}${input.notes ? ` - ${input.notes}` : ""}`, "High");
     }
@@ -5607,6 +5661,29 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
   private syncReceivingRecordPackages(receiving: ReceivingRecord) {
     receiving.packages = receiving.packages.map((pkg) => this.packages.find((cargo) => cargo.id === pkg.id) ?? pkg);
     return receiving;
+  }
+
+  /**
+   * Round 1 PR-7b (L21-F2): every actual change to a receiving record
+   * bumps its editVersion, whichever writer made it — the receiving
+   * edit itself, a DR photo attach, a queued intake photo resolving
+   * onto the record, and any change to a package field the receiving
+   * editor writes (price via the price endpoint or a chat approval,
+   * condition via arrival verification). That is what makes the
+   * base-version guard in updateReceivingRecord unbypassable through
+   * another door, the same discipline PR-7 applied to priceVersion.
+   * Writers of fields the receiving editor never writes (package
+   * status flows, measurements) deliberately do not bump: routine
+   * cargo activity must not false-conflict an open receiving editor.
+   */
+  private bumpReceivingEditVersion(receiving: ReceivingRecord) {
+    receiving.editVersion = (receiving.editVersion ?? 0) + 1;
+  }
+
+  private bumpOwningReceivingRecordEditVersion(cargo: CargoPackage) {
+    if (!cargo.receivingRecordNumber) return;
+    const receiving = this.receivingRecords.find((entry) => entry.recordNumber === cargo.receivingRecordNumber);
+    if (receiving) this.bumpReceivingEditVersion(receiving);
   }
 
   private findReceivingRecord(receivingRecordId: string) {
