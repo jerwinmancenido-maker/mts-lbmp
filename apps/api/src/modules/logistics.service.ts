@@ -3816,6 +3816,16 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
 
   departTrip(tripId: string) {
     const trip = this.findTrip(tripId);
+    // B3-style transition guard (Round 1 C-M5): the web screen flow only
+    // enables departure for a Planned/Loading trip with cargo aboard
+    // (canDepartTrip); the service enforces the same rule so a direct API
+    // call cannot depart an empty trip or depart a trip twice.
+    if (!["Planned", "Loading"].includes(trip.status)) {
+      throw new BadRequestException(`Trip ${trip.tripNumber} cannot depart from status "${trip.status}".`);
+    }
+    if (!trip.cargoPackageIds.length) {
+      throw new BadRequestException("This trip has no cargo loaded. Load cargo before departing.");
+    }
     trip.status = "Departed";
     for (const packageId of trip.cargoPackageIds) this.findPackage(packageId).status = "In Transit";
     this.audit("trips.depart", "Trip", trip.id);
@@ -3825,6 +3835,12 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
 
   arriveTrip(tripId: string) {
     const trip = this.findTrip(tripId);
+    // B3-style transition guard (Round 1 C-M5): arrival is only meaningful
+    // after departure — a trip that never departed (or has already
+    // arrived) cannot be marked arrived.
+    if (trip.status !== "Departed") {
+      throw new BadRequestException("Only a departed trip can be marked arrived.");
+    }
     trip.status = "Arrived";
     for (const packageId of trip.cargoPackageIds) this.findPackage(packageId).status = "Arrived";
     this.audit("arrival.mark", "Trip", trip.id);
@@ -3938,6 +3954,18 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
         .reverse()
         .find((delivery) => delivery.cargoPackageId === cargo.id && delivery.status === "Delivered");
       if (existing) return existing;
+    }
+    // B3-style transition guard (Round 1 C-M4): delivery can only be
+    // completed once the cargo has reached the destination branch —
+    // "Arrived" (trip arrived; the delivery worklist's pool), "Ready for
+    // Delivery" (verified at the branch), or "Failed Delivery"
+    // (redelivery, L2 W14). Completing from any earlier state (Waiting
+    // for Loading, Loaded, In Transit, …) would mint proof-of-delivery
+    // for cargo that never arrived.
+    if (!["Arrived", "Ready for Delivery", "Failed Delivery"].includes(cargo.status)) {
+      throw new BadRequestException(
+        `Package ${cargo.packageNumber} cannot be delivered from status "${cargo.status}". It must arrive at the destination branch first.`
+      );
     }
     if (!input.deliveredTo) throw new BadRequestException("Recipient name is required");
     this.assertNoLocalPhotoReference(input.signatureUrl, "Signature");

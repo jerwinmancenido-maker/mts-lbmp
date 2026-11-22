@@ -62,7 +62,7 @@ const cargo: CargoPackage = {
   handlingBranchName: "Daet",
   deliveryType: "Door-to-door delivery",
   condition: "Good",
-  status: "Out for Delivery",
+  status: "Ready for Delivery",
   price: 350,
   qrValue: "MTS:PKG:PKG-2026-11-000202",
   photoUrls: [],
