@@ -1,6 +1,6 @@
        MANCENIDO TRUCKING SERVICES
              DELIVERY RECEIPT
-DR-PREVIEW-PKG-2026-11-000001
+DR-PKG-2026-11-000001
 ------------------------------------------
 Package: PKG-2026-11-000001
 Customer: Fixture Customer

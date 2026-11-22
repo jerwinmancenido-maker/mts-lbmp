@@ -197,6 +197,40 @@ export interface ReceivingDocumentInput {
   copyLine: string;
 }
 
+/**
+ * Item-line price for the receiving document (Round 1 PR-8, C-M10):
+ * the recorded amount to the centavo — whole pesos print as before
+ * ("P1500"), centavos are never rounded away ("P2750.50"), so the
+ * printed lines always sum to the document's own printed total.
+ * Formatted from integer centavos so float rendering can't drift.
+ */
+function formatReceivingItemPrice(price: number) {
+  const centavos = Math.round(price * 100);
+  const pesos = Math.floor(centavos / 100);
+  const remainder = centavos - pesos * 100;
+  return remainder === 0 ? `P${pesos}` : `P${pesos}.${String(remainder).padStart(2, "0")}`;
+}
+
+/**
+ * Fits an item description into the width a receiving-document item
+ * line leaves for it (Round 1 PR-8, L4-F3): the ellipsis replaces
+ * whole words when a word boundary is available — the cut lands on a
+ * boundary, or backs off to the last space in the back half of the
+ * slice — instead of slicing mid-word ("sewing machi..."). A single
+ * over-long word is still hard-cut; there is no boundary to keep.
+ */
+function truncateItemDescription(description: string, maxLength: number) {
+  if (description.length <= maxLength) return description;
+  const limit = Math.max(0, maxLength - 3);
+  const slice = description.slice(0, limit);
+  if (description.charAt(limit) === " " || slice.endsWith(" ")) {
+    return `${slice.trimEnd()}...`;
+  }
+  const lastSpace = slice.lastIndexOf(" ");
+  const cut = lastSpace >= Math.ceil(slice.length / 2) ? slice.slice(0, lastSpace) : slice;
+  return `${cut}...`;
+}
+
 export function renderReceivingDocument(input: ReceivingDocumentInput) {
   const totalQuantity = input.packages.reduce((sum, cargo) => sum + (cargo.quantity ?? 1), 0);
   const totalPrice = input.packages.reduce((sum, cargo) => sum + (cargo.price ?? 0), 0);
@@ -205,10 +239,15 @@ export function renderReceivingDocument(input: ReceivingDocumentInput) {
   const itemLines = input.packages.map((cargo, index) => {
     const quantity = `${cargo.quantity ?? 1} ${cargo.unit ?? "pcs"}`;
     const branch = cargo.handlingBranchName ?? cargo.destination;
-    const price = cargo.price == null ? "NP" : `P${Math.round(cargo.price)}`;
-    const compactDescription = cargo.description.length > 22 ? `${cargo.description.slice(0, 21)}...` : cargo.description;
+    const price = cargo.price == null ? "NP" : formatReceivingItemPrice(cargo.price);
+    const label = `${index + 1}`;
+    // The composed line is `${label}: ${quantity} ${description} / ${branch} / ${price}`;
+    // the description gets whatever width that leaves inside WIDTH_80MM,
+    // so the line fits the 42-column render budget by construction.
+    const fixedWidth = `${label}: `.length + quantity.length + 1 + 3 + branch.length + 3 + price.length;
+    const compactDescription = truncateItemDescription(cargo.description, Math.max(WIDTH_80MM - fixedWidth, 4));
     return {
-      label: `${index + 1}`,
+      label,
       value: `${quantity} ${compactDescription} / ${branch} / ${price}`
     };
   });
