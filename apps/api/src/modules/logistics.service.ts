@@ -181,6 +181,27 @@ const LOGIN_LOCKOUT_MS = Number(process.env.LOGIN_LOCKOUT_MS ?? 15 * 60 * 1000);
 
 const STAFF_CODE_LOGIN_ROLES = ["System Admin", "Daet Owner", "Naga Owner", "Receiving Staff", "Delivery Staff", "Delivery Admin"];
 
+/** Roles the settings user lifecycle has always been able to create. */
+const STAFF_CREATABLE_ROLES = ["Receiving Staff", "Delivery Staff", "Delivery Admin"];
+
+/**
+ * Round 1 fix loop PR-5 (C-M6): the branch owner presets from CR-006,
+ * each mapped to the single branch it owns. Owner accounts hold
+ * users.manage for their own branch's staff, but ASSIGNING an owner
+ * preset — handing someone a whole branch — is reserved to a System
+ * Admin actor (see createStaffUser / updateStaffUser). An owner's
+ * branchAccess is likewise not free text: it is the preset's branch,
+ * written from this map, so an owner can never be minted holding the
+ * other branch's scope (or both).
+ */
+const OWNER_ROLE_BRANCH: Record<string, string> = {
+  "Daet Owner": "Daet",
+  "Naga Owner": "Naga"
+};
+
+/** The full-admin role names (bootstrap mints "System Admin"; "Administrator" is the legacy alias the codebase already treats as equivalent). */
+const SYSTEM_ADMIN_ROLES = ["System Admin", "Administrator"];
+
 /**
  * Phase 5 P5-2: minimum length for any password an admin or user sets
  * (initial provisioning, admin reset, self-service change, bootstrap).
@@ -1985,23 +2006,57 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  createStaffUser(input: {
-    name: string;
-    phone?: string;
-    email?: string;
-    role: string;
-    branchAccess: string;
-    /** Optional since P5-2 — a password-only account is valid. Hashed on set. */
-    staffCode?: string;
-    /**
-     * Phase 5 P5-2: optional initial password, hashed at creation into
-     * passwordHash. Because an admin chose it, the account is flagged
-     * mustChangePassword: the first sign-in is gated to the
-     * change-password endpoint until the user sets their own.
-     */
-    password?: string;
-    status?: "Active" | "Inactive";
-  }) {
+  /**
+   * Whether the acting user (the controller passes the authenticated
+   * user's id, the same pattern resetUserPassword uses) is a System
+   * Admin. No actor — a direct internal call — is never an admin.
+   */
+  private isSystemAdminActor(actorUserId?: string): boolean {
+    if (!actorUserId) return false;
+    const actor = this.getAllUsers().find((entry) => entry.id === actorUserId);
+    return Boolean(actor) && SYSTEM_ADMIN_ROLES.includes((actor as StaffUserRecord).role);
+  }
+
+  /**
+   * Validates a requested branchAccess for an owner preset: the grant
+   * must name exactly the preset's own branch. Returns the canonical
+   * branchAccess to store (the preset branch, whether the caller
+   * supplied it or omitted it) or throws.
+   */
+  private ownerBranchAccess(role: string, branchAccess?: string): string {
+    const ownerBranch = OWNER_ROLE_BRANCH[role];
+    // Callers only invoke this for owner presets (they check the same
+    // map first); the guard keeps the invariant explicit.
+    if (!ownerBranch) throw new BadRequestException(`${role} is not a branch owner role`);
+    if (branchAccess?.trim()) {
+      const requested = this.accessibleBranchNames({ branchAccess });
+      if (!requested || requested.size !== 1 || !requested.has(ownerBranch.toLowerCase())) {
+        throw new BadRequestException(`${role} accounts are scoped to the ${ownerBranch} branch`);
+      }
+    }
+    return ownerBranch;
+  }
+
+  createStaffUser(
+    input: {
+      name: string;
+      phone?: string;
+      email?: string;
+      role: string;
+      branchAccess: string;
+      /** Optional since P5-2 — a password-only account is valid. Hashed on set. */
+      staffCode?: string;
+      /**
+       * Phase 5 P5-2: optional initial password, hashed at creation into
+       * passwordHash. Because an admin chose it, the account is flagged
+       * mustChangePassword: the first sign-in is gated to the
+       * change-password endpoint until the user sets their own.
+       */
+      password?: string;
+      status?: "Active" | "Inactive";
+    },
+    actorUserId?: string
+  ) {
     const name = input.name?.trim();
     const staffCode = input.staffCode?.trim();
     const initialPassword = input.password ?? "";
@@ -2015,8 +2070,21 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     if (staffCode && this.staffCodeInUse(staffCode)) {
       throw new BadRequestException("Staff code is already used");
     }
-    const allowedRoles = ["Receiving Staff", "Delivery Staff", "Delivery Admin"];
-    if (!allowedRoles.includes(input.role)) {
+    // Round 1 PR-5 (C-M6): the lifecycle now also provisions the branch
+    // owner presets — but only for a System Admin actor. Owner presets
+    // carry users.manage for their own branch's staff under CR-006;
+    // minting an owner hands over a whole branch, so that stays an
+    // admin act. Every other caller keeps the staff-only restriction
+    // exactly as before, and an owner's branchAccess comes from its
+    // preset (ownerBranchAccess), never from the request's free text.
+    const ownerBranch = OWNER_ROLE_BRANCH[input.role];
+    let branchAccess = input.branchAccess?.trim() || "Daet / Naga";
+    if (ownerBranch) {
+      if (!this.isSystemAdminActor(actorUserId)) {
+        throw new BadRequestException("Only a System Admin can add branch owner accounts");
+      }
+      branchAccess = this.ownerBranchAccess(input.role, input.branchAccess);
+    } else if (!STAFF_CREATABLE_ROLES.includes(input.role)) {
       throw new BadRequestException("Only receiving and delivery staff can be added here");
     }
     const user: StaffUserRecord = {
@@ -2032,7 +2100,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       passwordHash: initialPassword ? hashSecret(initialPassword) : undefined,
       mustChangePassword: initialPassword ? true : undefined,
       sessionVersion: 0,
-      branchAccess: input.branchAccess?.trim() || "Daet / Naga",
+      branchAccess,
       permissionPreset: input.role,
       canApprove: [],
       status: input.status ?? "Active",
@@ -2049,7 +2117,8 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     input: Partial<Pick<StaffUserRecord, "name" | "phone" | "email" | "role" | "branchAccess" | "status">> & {
       /** Plaintext on input only — hashed before it is stored (P5-1). */
       staffCode?: string;
-    }
+    },
+    actorUserId?: string
   ) {
     // Phase 5 P5-2: every account is a stored record now (the demo users
     // this method used to special-case are deleted), so lifecycle edits
@@ -2066,10 +2135,32 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException("Staff code is already used");
     }
 
+    // Round 1 PR-5 (C-M6): assigning an owner preset is the create rule
+    // applied to edits — System Admin actor only, and the account's
+    // branchAccess narrowed to the preset's branch (validated here,
+    // before anything mutates; applied with the role below). Staff-role
+    // changes behave exactly as before; any other role string is still
+    // not applied.
+    let ownerBranchAssigned: string | undefined;
+    if (input.role && input.role !== user.role && OWNER_ROLE_BRANCH[input.role]) {
+      if (!this.isSystemAdminActor(actorUserId)) {
+        throw new BadRequestException("Only a System Admin can assign branch owner roles");
+      }
+      ownerBranchAssigned = this.ownerBranchAccess(input.role, input.branchAccess);
+    }
+
     if (input.name?.trim()) user.name = input.name.trim();
     if (input.phone !== undefined) user.phone = input.phone.trim() || undefined;
     if (input.email !== undefined) user.email = input.email.trim() || undefined;
-    if (input.role && ["Receiving Staff", "Delivery Staff", "Delivery Admin"].includes(input.role)) {
+    if (ownerBranchAssigned) {
+      user.role = input.role as string;
+      user.permissionPreset = input.role as string;
+      user.branchAccess = ownerBranchAssigned;
+      // Privilege-class change: revoke outstanding sessions, the same
+      // treatment credential and status changes already get, so a token
+      // issued under the old role cannot ride into the new one.
+      user.sessionVersion = (user.sessionVersion ?? 0) + 1;
+    } else if (input.role && STAFF_CREATABLE_ROLES.includes(input.role)) {
       user.role = input.role;
       user.permissionPreset = input.role;
     }
@@ -2088,7 +2179,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       user.sessionVersion = (user.sessionVersion ?? 0) + 1;
     }
 
-    if (input.branchAccess?.trim()) {
+    if (input.branchAccess?.trim() && !ownerBranchAssigned) {
       user.branchAccess = input.branchAccess.trim();
     }
 
