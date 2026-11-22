@@ -1163,6 +1163,16 @@ nav,
   max-width: none;
 }
 
+/* Round 1 L1 re-capture OBS-L1R-02: cargo rows carry a status pill
+   and a price pill, and the shared 132px cap ellipsises long status
+   labels ("Waiting for Loading", "Ready for Delivery") even at
+   desktop widths. Cargo badges keep their full width at every screen
+   width — the meta wraps instead — the same rule the invoice badges
+   hold above. The phone-width restack lives in the ≤640px query. */
+.compactDataRow.cargoListRow .compactRowMeta .badge {
+  max-width: none;
+}
+
 .cargoListMeta {
   display: flex;
   flex-wrap: wrap;
@@ -4665,6 +4675,24 @@ textarea {
   /* (Invoice badges keep their full width at phone widths too —
      the general .invoiceRow rule above the media queries covers
      every width; the meta row wraps them onto a second line.) */
+
+  /* OBS-L1R-02: cargo rows at phone widths — the shared compactDataRow
+     treatment holds .compactRowMeta at min-width: max-content in the
+     second grid column, so the status pill and the price pill collide
+     and long status labels clip under the price pill. Same restack as
+     the worklist and invoice rows above: info full width on top, the
+     pills on their own line below, where the general cargo rule gives
+     them their full width. */
+  .compactDataRow.cargoListRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .compactDataRow.cargoListRow .cargoListMeta {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-width: 0;
+    justify-content: flex-start;
+  }
 
   .paymentEntryGrid {
     grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
