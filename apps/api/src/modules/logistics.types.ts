@@ -121,6 +121,14 @@ export interface CargoPackage {
   unitPrice?: number | null;
   price: number | null;
   priceChangeReason?: string;
+  /**
+   * Round 1 PR-7 (C-M8): optimistic-concurrency counter for the price
+   * field only. Bumped on every actual price change, by any writer
+   * (price endpoint, chat price approval, receiving edit); a price save
+   * that names a stale base version is refused with 409 instead of
+   * silently overwriting. Absent on pre-PR-7 records — treated as 0.
+   */
+  priceVersion?: number;
   weight?: number | null;
   weightUnit?: string;
   length?: number | null;

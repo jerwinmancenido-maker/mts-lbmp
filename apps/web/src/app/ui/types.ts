@@ -145,6 +145,8 @@ export interface CargoPackage {
   unitPrice?: number | null;
   status: string;
   price: number | null;
+  /** PR-7 (C-M8): price optimistic-concurrency counter; absent = 0. */
+  priceVersion?: number;
   weight?: number | null;
   weightUnit?: string;
   length?: number | null;
