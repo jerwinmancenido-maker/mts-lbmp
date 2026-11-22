@@ -3354,7 +3354,10 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
    * the finalize unit. Mirrors the web client's recordReceivingPayments
    * distribution exactly — packages in order, each capped at its amount
    * due; an Advance Payment larger than the total due puts the excess on
-   * the first package — and records each collection through recordPayment
+   * the first package — and records each collection through
+   * recordReceivingPayment (the internal entry that carries the Advance
+   * Payment excess exception to the C-M1 cap; the public recordPayment
+   * path refuses any payment past the amount due)
    * with the same deterministic per-package key the client derives
    * (`receiving-payment:<receivingId>:<packageId>`), so a replayed
    * finalize can never double-collect. The collector identity fields the
@@ -3380,7 +3383,7 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       if (amountPaid <= 0 && !isLastPackage) return;
       if (amountPaid <= 0) return;
       remaining -= amountPaid;
-      this.recordPayment({
+      this.recordReceivingPayment({
         cargoPackageId: pkg.id,
         amountDue,
         amountPaid,
@@ -4010,12 +4013,37 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
     notes?: string;
     idempotencyKey?: string;
   }) {
-    return this.runIdempotent("POST /payments", input.idempotencyKey, () => this.recordPaymentOnce(input));
+    return this.runIdempotent("POST /payments", input.idempotencyKey, () => this.recordPaymentOnce(input, false));
   }
 
-  private recordPaymentOnce(input: Parameters<LogisticsService["recordPayment"]>[0]) {
+  /**
+   * Internal entry for the receiving-counter distribution (B4) only.
+   * Identical to recordPayment except the C-M1 per-payment cap is not
+   * applied: an "Advance Payment" larger than the total due deliberately
+   * parks its excess on the first package (see
+   * applyReceivingCollectPayment), and that distribution is pinned by
+   * test. This entry is NOT reachable from any controller — the public
+   * POST /payments path always goes through recordPayment and is always
+   * capped. The amount-must-be-positive check applies here too (the
+   * distribution never passes a non-positive amount).
+   */
+  private recordReceivingPayment(input: Parameters<LogisticsService["recordPayment"]>[0]) {
+    return this.runIdempotent("POST /payments", input.idempotencyKey, () => this.recordPaymentOnce(input, true));
+  }
+
+  private recordPaymentOnce(input: Parameters<LogisticsService["recordPayment"]>[0], allowAdvanceExcess: boolean) {
     const cargo = this.findPackage(input.cargoPackageId);
     this.assertNoLocalPhotoReference(input.proofUrl, "Payment proof");
+    // C-M1: a payment must be a real, positive amount. Zero and negative
+    // "payments" were recorded verbatim before this check (a −₱100
+    // payment inflated the package's stored balance), and NaN is not an
+    // amount. Refused here, at the single choke point every payment
+    // recording funnels through, so no record is created.
+    if (!Number.isFinite(input.amountPaid) || input.amountPaid <= 0) {
+      throw new BadRequestException(
+        `Payment amount for ${cargo.packageNumber} must be greater than zero (received ${input.amountPaid}). Refusing to record the payment.`
+      );
+    }
     const amountDue = input.amountDue ?? cargo.price ?? 0;
     // B3 transition guard: once the full amount due has been collected, any
     // further collection against the package is a duplicate (double-tapped
@@ -4030,6 +4058,21 @@ export class LogisticsService implements OnModuleInit, OnModuleDestroy {
       if (alreadyCollected >= amountDue) {
         throw new BadRequestException(
           `Payment for ${cargo.packageNumber} is already fully collected (PHP ${alreadyCollected.toLocaleString()} of PHP ${amountDue.toLocaleString()}). Refusing to record a duplicate collection.`
+        );
+      }
+      // C-M1 cap: a payment may not take the collected total past the
+      // amount due. The check reads the live payments list and the record
+      // is pushed in the same synchronous turn (this method never awaits),
+      // so two payments dispatched together cannot both pass — the second
+      // sees the first's collection and is refused at the cap. The 1e-6
+      // tolerance only absorbs binary float dust on centavo sums; a real
+      // overpayment is at least ₱0.01. The receiving-counter Advance
+      // Payment distribution is the one deliberate exception
+      // (allowAdvanceExcess — see recordReceivingPayment).
+      if (!allowAdvanceExcess && alreadyCollected + input.amountPaid > amountDue + 0.000001) {
+        const remaining = Math.max(amountDue - alreadyCollected, 0);
+        throw new BadRequestException(
+          `Payment of PHP ${input.amountPaid.toLocaleString()} for ${cargo.packageNumber} exceeds the remaining balance (PHP ${remaining.toLocaleString()} of PHP ${amountDue.toLocaleString()} still due). Refusing to record more than the amount due.`
         );
       }
     }
