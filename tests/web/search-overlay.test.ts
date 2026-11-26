@@ -210,6 +210,83 @@ describe("searchOverlayPanelState — loading / error / empty are distinct faces
   });
 });
 
+describe("buildSearchOverlayResults — every result carries its PR-12 tone (R2-11)", () => {
+  // The defect: the overlay rendered every status in the role accent
+  // colour, bypassing status-tone.ts — "Failed Delivery" read the
+  // same blue as "Arrived". The derivation now carries the tone on
+  // each result item and the shell paints the status text with it.
+  test("a failed delivery is a problem; delivered and arrived are successes", () => {
+    const data = collections({
+      packages: [
+        pkg({ id: "failed", status: "Failed Delivery", packageNumber: "PKG-FAILED-1" }),
+        pkg({ id: "delivered", status: "Delivered", packageNumber: "PKG-DELIVERED-1" }),
+        pkg({ id: "arrived", status: "Arrived", packageNumber: "PKG-ARRIVED-1" })
+      ]
+    });
+    const results = buildSearchOverlayResults(data, undefined, "PKG", ALL_TABS);
+    const toneById = new Map(results.map((item) => [item.id, item.statusTone]));
+    expect(toneById.get("package-failed")).toBe("problem");
+    expect(toneById.get("package-delivered")).toBe("success");
+    expect(toneById.get("package-arrived")).toBe("success");
+    expect(toneById.get("package-failed")).not.toBe(toneById.get("package-arrived"));
+  });
+
+  test("in-flight work is progress; an unstarted or unlisted status is neutral", () => {
+    const data = collections({
+      packages: [
+        pkg({ id: "transit", status: "In Transit", packageNumber: "PKG-TRANSIT-1" }),
+        pkg({ id: "draft", status: "Draft", packageNumber: "PKG-DRAFT-1" }),
+        pkg({ id: "unlisted", status: "Being Weighed", packageNumber: "PKG-WEIGHED-1" })
+      ]
+    });
+    const results = buildSearchOverlayResults(data, undefined, "PKG", ALL_TABS);
+    const toneById = new Map(results.map((item) => [item.id, item.statusTone]));
+    expect(toneById.get("package-transit")).toBe("progress");
+    expect(toneById.get("package-draft")).toBe("neutral");
+    // The map's fallback: a status the tone table does not list
+    // borrows no meaning.
+    expect(toneById.get("package-unlisted")).toBe("neutral");
+  });
+
+  test("trips, payments, customers and audit rows carry the tone of their own status", () => {
+    const trip: Trip = {
+      id: "trip-1",
+      tripNumber: "TRIP-T1",
+      origin: "Daet",
+      destination: "Naga",
+      status: "Departed",
+      isMixedTrip: false,
+      cargoPackageIds: [],
+      createdAt: "2026-11-22T01:00:00.000Z"
+    };
+    const payment: PaymentRecord = {
+      id: "pay-1",
+      cargoPackageId: "000001",
+      amountDue: 350,
+      amountPaid: 350,
+      balance: 0,
+      method: "Cash",
+      branchName: "Daet",
+      status: "Paid",
+      createdAt: "2026-11-22T02:00:00.000Z"
+    };
+    const data = collections({
+      packages: [pkg({ id: "000001" })],
+      trips: [trip],
+      payments: [payment],
+      customers: [{ id: "cust1", businessName: "Findability Motors Inc", contactPerson: "Ana", phone: "0917", billingTerm: "Net 30", status: "Active" } as Customer],
+      auditLogs: [{ id: "log1", action: "package.created", entityType: "Package", entityId: "000001", createdAt: "2026-11-22T01:00:00.000Z" }]
+    });
+    const results = buildSearchOverlayResults(data, undefined, "", ALL_TABS);
+    const toneById = new Map(results.map((item) => [item.id, item.statusTone]));
+    expect(toneById.get("trip-trip-1")).toBe("progress");
+    expect(toneById.get("payment-pay-1")).toBe("success");
+    expect(toneById.get("customer-cust1")).toBe("success");
+    // Audit actions are free-form strings, not statuses — neutral.
+    expect(toneById.get("audit-log1")).toBe("neutral");
+  });
+});
+
 describe("isSearchPermissionError — a 403 is absence, not failure", () => {
   test("an error carrying HTTP 403 is permission-shaped", () => {
     const error = new Error("Forbidden") as Error & { status?: number };

@@ -1,6 +1,7 @@
 import { formatMoney } from "./money-format";
 import { paymentSearchDetails, remainingBalanceForPackage } from "./payment-display";
 import { tieredSearchScores } from "./search-ranking";
+import { statusTone as toneOfStatus, type StatusTone } from "./status-tone";
 import type { AuditLog, CargoPackage, Customer, ExpenseRecord, HardwareTestRecord, PaymentRecord, Trip } from "./types";
 
 /**
@@ -59,6 +60,14 @@ export interface SearchResultItem {
   documentNumber: string;
   date: string;
   status: string;
+  /**
+   * The PR-12 tone for `status`, carried on the result so the overlay
+   * renders its status text under the same semantic map as every list
+   * (Round 2 R2-11 — before this, the overlay painted every status in
+   * the role accent colour). Audit actions and any unlisted status
+   * resolve to "neutral" by the map's own fallback.
+   */
+  statusTone: StatusTone;
   details: string;
   amount?: string;
   priority: number;
@@ -203,6 +212,7 @@ export function buildSearchOverlayResults(
       documentNumber: pkg.receivingRecordNumber || pkg.packageNumber,
       date: formatSearchDate(pkg.createdAt),
       status: pkg.status,
+      statusTone: toneOfStatus(pkg.status),
       details: `${pkg.packageNumber} - ${pkg.description} - ${pkg.destination}`,
       amount: pkg.price == null ? "No price" : formatMoney(pkg.price),
       priority
@@ -238,6 +248,7 @@ export function buildSearchOverlayResults(
       documentNumber: trip.tripNumber,
       date: "Trip date pending",
       status: trip.status,
+      statusTone: toneOfStatus(trip.status),
       details: `${trip.origin} to ${trip.destination} - ${trip.cargoPackageIds.length} package(s)`,
       priority
     });
@@ -272,6 +283,7 @@ export function buildSearchOverlayResults(
       documentNumber: pkg?.receivingRecordNumber ?? pkg?.packageNumber ?? "Payment record",
       date: formatSearchDate(payment.createdAt),
       status: payment.status,
+      statusTone: toneOfStatus(payment.status),
       // P6-2 §2.3.1: show the package's cumulative remaining balance;
       // the stored Payment.balance is a per-call historical value and
       // is never presented as a remaining balance.
@@ -296,6 +308,7 @@ export function buildSearchOverlayResults(
       documentNumber: expense.tripId ?? "General expense",
       date: formatSearchDate(expense.createdAt),
       status: expense.status,
+      statusTone: toneOfStatus(expense.status),
       details: `${expense.category} - ${expense.description ?? "No description"}`,
       amount: formatMoney(expense.amount),
       priority
@@ -318,6 +331,7 @@ export function buildSearchOverlayResults(
       documentNumber: customer.phone ?? "No phone",
       date: customer.billingTerm ?? "No billing term",
       status: customer.status,
+      statusTone: toneOfStatus(customer.status),
       details: customer.contactPerson ?? "Customer profile",
       priority
     });
@@ -338,6 +352,7 @@ export function buildSearchOverlayResults(
       documentNumber: log.entityId,
       date: formatSearchDate(log.createdAt),
       status: log.action,
+      statusTone: toneOfStatus(log.action),
       details: `${log.entityType}${log.reason ? ` - ${log.reason}` : ""}`,
       priority
     });
@@ -358,6 +373,7 @@ export function buildSearchOverlayResults(
       documentNumber: test.deviceName,
       date: formatSearchDate(test.createdAt),
       status: test.pwaResult,
+      statusTone: toneOfStatus(test.pwaResult),
       details: `Scanner ${test.scannerResult} - Printer ${test.printerResult}`,
       priority
     });

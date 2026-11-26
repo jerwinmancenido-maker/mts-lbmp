@@ -99,3 +99,16 @@ export function toneBadgeClass(tone: StatusTone): string {
 export function statusBadgeClass(status: string | null | undefined): string {
   return toneBadgeClass(statusTone(status));
 }
+
+/**
+ * Text class for an explicit tone — for surfaces that render a status
+ * as coloured text rather than a pill. Added in Round 2 (R2-11): the
+ * global search overlay rendered every result's status in the role
+ * accent colour, bypassing this map entirely, so "Failed Delivery"
+ * read the same blue as "Arrived". The `.toneText.tone-*` rules in
+ * styles.css carry the same foreground colours as the badge tones
+ * above (pinned by tests/web/status-tone.test.ts).
+ */
+export function toneTextClass(tone: StatusTone): string {
+  return `toneText tone-${tone}`;
+}
