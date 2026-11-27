@@ -2699,7 +2699,7 @@ function HardwarePrototype({
         />
         <div className="buttonGrid">
           <StatusSelect label="Scanner" value={scannerResult} setValue={setScannerResult} />
-          <div>
+          <div className="settingTile">
             <span>Printer</span>
             <strong>{printerResult}</strong>
             <p className="muted">Set by the printer diagnostic run above — measured, not manual.</p>
