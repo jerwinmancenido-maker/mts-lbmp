@@ -10748,7 +10748,11 @@ function Payments({
             <div className="row compactDataRow" key={payment.id}>
               <div>
                 <strong>{formatMoney(payment.amountPaid)} - {payment.method}</strong>
-                <p>{isOwner ? `Balance: ${formatMoney(displayBalance)}` : `${payment.collectionPoint ?? collectionPoint} - ${payment.collectedByName ?? activeUser.name}`}</p>
+                {isOwner ? (
+                  <div className="statBox"><span>Balance</span><strong>{formatMoney(displayBalance)}</strong></div>
+                ) : (
+                  <p>{payment.collectionPoint ?? collectionPoint} - {payment.collectedByName ?? activeUser.name}</p>
+                )}
               </div>
               <div className="compactRowMeta">
                 <span className={statusBadgeClass(payment.status)}>{payment.status}</span>

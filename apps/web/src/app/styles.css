@@ -1176,6 +1176,13 @@ nav,
   font-size: 12px;
 }
 
+/* R2-04: in a compact row the stat box hugs its figure instead of
+   stretching the row's full text column. */
+.compactDataRow .statBox {
+  justify-self: start;
+  max-width: 100%;
+}
+
 .compactRowMeta {
   display: flex;
   flex-wrap: wrap;
@@ -1237,7 +1244,8 @@ nav,
   gap: 7px;
 }
 
-.detailGrid div {
+.detailGrid div,
+.statBox {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel);
@@ -1249,13 +1257,15 @@ nav,
   min-width: 0;
 }
 
-.detailGrid span {
+.detailGrid span,
+.statBox span {
   color: var(--muted);
   font-size: var(--font-caption);
   font-weight: 850;
 }
 
-.detailGrid strong {
+.detailGrid strong,
+.statBox strong {
   font-size: var(--font-label);
   line-height: 1.18;
   overflow-wrap: anywhere;
@@ -1266,16 +1276,19 @@ nav,
   gap: 6px;
 }
 
-.compactDetailGrid div {
+.compactDetailGrid div,
+.statBox {
   min-height: 44px;
   padding: 7px 8px;
 }
 
-.compactDetailGrid span {
+.compactDetailGrid span,
+.statBox span {
   font-size: 11px;
 }
 
-.compactDetailGrid strong {
+.compactDetailGrid strong,
+.statBox strong {
   font-size: 13px;
 }
 
@@ -4266,16 +4279,19 @@ textarea {
     gap: var(--space-field);
   }
 
-  .detailGrid div {
+  .detailGrid div,
+  .statBox {
     min-height: 42px;
     padding: 6px 8px;
   }
 
-  .detailGrid span {
+  .detailGrid span,
+  .statBox span {
     font-size: var(--font-caption);
   }
 
-  .detailGrid strong {
+  .detailGrid strong,
+  .statBox strong {
     font-size: var(--font-label);
   }
 
