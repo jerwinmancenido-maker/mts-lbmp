@@ -1327,6 +1327,45 @@ nav,
   overflow-wrap: anywhere;
 }
 
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 6px;
+}
+
+.metricCard {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  min-height: 44px;
+  padding: 7px 8px;
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  text-align: left;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.metricCard span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.metricCard strong {
+  font-size: 13px;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+.metricCard small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.15;
+}
+
 .statusFilterStrip {
   display: flex;
   gap: 7px;
@@ -1942,6 +1981,7 @@ nav,
 
 .settingTile {
   display: grid;
+  align-content: start;
   gap: 4px;
 }
 
