@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   paidTotalForPackage,
   paymentSearchDetails,
@@ -69,5 +70,24 @@ describe("payment display helpers", () => {
 
   test("unknown package falls back to the stored per-call value (nothing honest to compute)", () => {
     expect(paymentSearchDetails(secondPayment, undefined, payments)).toBe("Cash - paid PHP 300.00 - balance PHP 700.00");
+  });
+});
+
+describe("payment history row wiring (R2-04)", () => {
+  const shell = readFileSync(new URL("../../apps/web/src/app/ui/app-shell.tsx", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../../apps/web/src/app/styles.css", import.meta.url), "utf8");
+
+  test("the history-row balance renders in the shared stat box, not as a quiet paragraph", () => {
+    expect(shell).toContain('<div className="statBox"><span>Balance</span><strong>{formatMoney(displayBalance)}</strong></div>');
+    // The pre-fix line — the operative balance as plain paragraph text,
+    // the quietest figure in the row — is gone.
+    expect(shell).not.toContain("`Balance: ${formatMoney(displayBalance)}`");
+  });
+
+  test("the stat box shares the POD form's detail-grid treatment in styles.css", () => {
+    expect(css).toContain(".detailGrid div,\n.statBox {");
+    expect(css).toContain(".compactDetailGrid div,\n.statBox {");
+    expect(css).toContain(".compactDetailGrid strong,\n.statBox strong {");
+    expect(css).toContain(".compactDataRow .statBox {");
   });
 });
